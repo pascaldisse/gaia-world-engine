@@ -169,6 +169,8 @@ export class View {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
       // preset parts (water, flame, glow, hologram) are visual, not walkable
       mesh.userData.solid = !part.preset && part.solid !== false;
+      // invisible parts still collide — walkway/box colliders
+      if (part.visible === false) mesh.visible = false;
       mesh.position.set(...(part.position ?? [0, 0, 0]));
       mesh.rotation.set(...(part.rotation ?? [0, 0, 0]));
       if (part.scale) {

@@ -98,6 +98,11 @@ export class Editor {
 
     document.addEventListener('keydown', (e) => {
       if (isTyping()) return;
+      if (e.code === 'KeyG' && !e.metaKey && !e.ctrlKey) {
+        this.toggleGameMode();
+        return;
+      }
+      if (this.player.gameMode) return; // game mode: all editing/debug locked
       if (e.code === 'Tab') {
         e.preventDefault();
         this.toggle();
@@ -150,8 +155,26 @@ export class Editor {
   }
 
   toggle() {
+    if (this.player.gameMode) return;
     if (this.mode === 'play') this.enterCreate();
     else this.enterPlay();
+  }
+
+  // G: pure play — no creator mode, no grab, no noclip, no HUD
+  toggleGameMode() {
+    if (this.mode === 'create') this.enterPlay();
+    const on = !this.player.gameMode;
+    this.player.gameMode = on;
+    if (on) this.player.noclip = false;
+    document.getElementById('hud').style.display = on ? 'none' : '';
+    const hint = document.getElementById('hint');
+    hint.textContent = on ? 'game mode — G to exit' : 'creation enabled';
+    clearTimeout(this.gameToast);
+    this.gameToast = setTimeout(() => {
+      if (hint.textContent === 'game mode — G to exit' || hint.textContent === 'creation enabled') {
+        hint.textContent = '';
+      }
+    }, 2600);
   }
 
   enterCreate() {

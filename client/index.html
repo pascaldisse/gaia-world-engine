@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GAIA World Engine</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #0a0e14;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      }
+      canvas {
+        display: block;
+      }
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 14px;
+        color: #cfe3ff;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+        pointer-events: none;
+        z-index: 10;
+      }
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: #e8f0ff;
+        background: rgba(6, 10, 18, 0.72);
+        cursor: pointer;
+        z-index: 20;
+        user-select: none;
+      }
+      #overlay h1 {
+        margin: 0;
+        font-size: 44px;
+        font-weight: 600;
+        letter-spacing: 0.5em;
+        text-indent: 0.5em;
+      }
+      #overlay p {
+        margin: 0;
+        font-size: 13px;
+        opacity: 0.75;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">GAIA &middot; <span id="status">connecting&hellip;</span> &middot; <span id="count">0</span> entities</div>
+    <div id="overlay">
+      <h1>GAIA</h1>
+      <p>click to enter the world</p>
+      <p>WASD move &middot; mouse look &middot; shift run &middot; esc release</p>
+    </div>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

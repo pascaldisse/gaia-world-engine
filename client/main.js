@@ -26,7 +26,7 @@ const audio = new AudioEngine(camera);
 const effects = new Effects({ scene, audio });
 const environment = new Environment({ renderer, scene, hemi, sun, post, audio });
 const view = new View({ scene, store, audio, effects, environment });
-const player = new Player({ camera, dom: renderer.domElement, overlay });
+const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 
 // world clock: synced from the server so motion agrees across all observers
 const clock = { offset: 0, now: () => clock.offset + performance.now() / 1000 };

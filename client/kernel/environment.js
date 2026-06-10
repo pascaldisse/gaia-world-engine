@@ -11,7 +11,13 @@ export class Environment {
     this.post = post;
     this.audio = audio;
     this.flashLevel = 0;
-    this.current = { sunIntensity: sun.intensity, hemiIntensity: hemi.intensity };
+    this.flashColor = new THREE.Color('#b9c4ee');
+    this.current = {
+      sunIntensity: sun.intensity,
+      hemiIntensity: hemi.intensity,
+      background: scene.background.clone(),
+      fogColor: scene.fog.color.clone(),
+    };
     this.defaults = {
       background: `#${scene.background.getHexString()}`,
       fog: { color: `#${scene.fog.color.getHexString()}`, near: scene.fog.near, far: scene.fog.far },
@@ -47,7 +53,12 @@ export class Environment {
     this.sun.position.set(...sun.position);
     this.post?.setBloom({ ...this.defaults.bloom, ...(p.bloom ?? {}) });
     if (p.audio) this.audio?.applyBus(p.audio);
-    this.current = { sunIntensity: sun.intensity, hemiIntensity: hemi.intensity };
+    this.current = {
+      sunIntensity: sun.intensity,
+      hemiIntensity: hemi.intensity,
+      background: new THREE.Color(p.background),
+      fogColor: new THREE.Color(fog.color),
+    };
   }
 
   flash(intensity = 0.8) {
@@ -56,9 +67,13 @@ export class Environment {
 
   update(dt) {
     if (this.flashLevel <= 0) return;
-    this.flashLevel *= Math.exp(-dt * 5);
+    this.flashLevel *= Math.exp(-dt * 4.5);
     if (this.flashLevel < 0.01) this.flashLevel = 0;
-    this.sun.intensity = this.current.sunIntensity + this.flashLevel * 4;
-    this.hemi.intensity = this.current.hemiIntensity + this.flashLevel * 0.8;
+    const k = Math.min(1, this.flashLevel);
+    // lightning lifts the whole frame: sun, sky light, background, fog
+    this.sun.intensity = this.current.sunIntensity + this.flashLevel * 6;
+    this.hemi.intensity = this.current.hemiIntensity + this.flashLevel * 1.4;
+    this.scene.background.copy(this.current.background).lerp(this.flashColor, k * 0.55);
+    this.scene.fog.color.copy(this.current.fogColor).lerp(this.flashColor, k * 0.5);
   }
 }

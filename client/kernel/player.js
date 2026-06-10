@@ -2,8 +2,9 @@ import * as THREE from 'three/webgpu';
 import { heightAt } from './terrain.js';
 
 export class Player {
-  constructor({ camera, dom, overlay }) {
+  constructor({ camera, dom, overlay, view }) {
     this.camera = camera;
+    this.view = view;
     this.yaw = 0;
     this.pitch = 0;
     this.position = new THREE.Vector3(0, 2, 22);
@@ -66,8 +67,14 @@ export class Player {
     this.position.addScaledVector(this.velocity, dt);
 
     if (!this.editorMode && !this.noclip) {
-      const groundY = heightAt(this.position.x, this.position.z) + this.eyeHeight;
-      this.position.y += (groundY - this.position.y) * Math.min(1, dt * 12);
+      let groundY = heightAt(this.position.x, this.position.z);
+      // walkable meshes (docks, platforms) override terrain within step height
+      const feetY = this.position.y - this.eyeHeight;
+      const surface = this.view?.surfaceAt(this.position.x, this.position.z, this.position.y + 0.5);
+      if (surface !== null && surface !== undefined && surface > groundY && surface <= feetY + 0.65) {
+        groundY = surface;
+      }
+      this.position.y += (groundY + this.eyeHeight - this.position.y) * Math.min(1, dt * 12);
     }
 
     this.camera.position.copy(this.position);

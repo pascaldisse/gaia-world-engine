@@ -167,6 +167,8 @@ export class View {
     const parts = recipe.parts ?? [recipe];
     for (const part of parts) {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
+      // preset parts (water, flame, glow, hologram) are visual, not walkable
+      mesh.userData.solid = !part.preset && part.solid !== false;
       mesh.position.set(...(part.position ?? [0, 0, 0]));
       mesh.rotation.set(...(part.rotation ?? [0, 0, 0]));
       if (part.scale) {
@@ -246,6 +248,29 @@ export class View {
     disposeObject(group);
     this.scene.remove(group);
     this.groups.delete(id);
+  }
+
+  // highest solid mesh surface under (x, z), cast from fromY downward —
+  // walkable docks, bridges, platforms without a physics engine
+  surfaceAt(x, z, fromY) {
+    this._down ??= new THREE.Vector3(0, -1, 0);
+    this._rayOrigin ??= new THREE.Vector3();
+    this._surfaceRay ??= new THREE.Raycaster();
+    const candidates = [];
+    for (const [id, group] of this.groups) {
+      const comps = this.store.get(id);
+      if (!comps?.mesh || comps.terrain) continue;
+      if (Math.hypot(group.position.x - x, group.position.z - z) > 60) continue;
+      group.traverse((node) => {
+        if (node.isMesh && !node.isInstancedMesh && node.userData.solid) candidates.push(node);
+      });
+    }
+    if (!candidates.length) return null;
+    this._rayOrigin.set(x, fromY, z);
+    this._surfaceRay.set(this._rayOrigin, this._down);
+    this._surfaceRay.far = 80;
+    const hits = this._surfaceRay.intersectObjects(candidates, false);
+    return hits.length ? hits[0].point.y : null;
   }
 
   getGroup(id) {

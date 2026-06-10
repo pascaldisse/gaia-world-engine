@@ -69,6 +69,10 @@ export function buildScatter(spec) {
       mesh.setMatrixAt(i, m);
     }
     mesh.instanceMatrix.needsUpdate = true;
+    // recompute culling bounds from instance matrices — the default bounding
+    // sphere is the geometry's own, which culls the whole scatter when the
+    // camera looks away from the world origin
+    mesh.computeBoundingSphere();
     mesh.castShadow = part.castShadow ?? true;
     mesh.receiveShadow = true;
     group.add(mesh);

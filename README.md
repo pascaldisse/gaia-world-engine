@@ -221,7 +221,9 @@ No manifest = one implicit zone, exactly as before.
   body back to its last safe ground, or the spawn point if it never had one
 - `scatter` — `{seed, count, area, instance:{parts}, scale, tilt, density, minHeight, maxHeight}` — instanced copies, terrain-following, noise-clustered
 - `particles` — `{seed, count, size, color, area, motion:{type: drift|rain, ...}}` — animated instanced motes
-- `environment` — `{background, fog, exposure, hemisphere, sun, bloom, audio}` — world mood as one patchable entity
+- `environment` — `{background, fog, exposure, hemisphere, sun, ambient, bloom, audio}` —
+  world mood as one patchable entity (`ambient: {color, intensity}` is the
+  skylight: a true global light, the thing to raise when "more light" is the note)
 - `weather` — `{lightning, minGap, maxGap, rainCycle, rainAmount}` — server-simulated events
 - `spawn` — `{position, yaw}` — where players enter the world
 - `zone` — `{name}` — stamped by the server in zoned worlds

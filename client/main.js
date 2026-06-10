@@ -124,16 +124,18 @@ document.addEventListener('keydown', (e) => {
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
   debugEl.style.display = debugEl.style.display === 'flex' ? 'none' : 'flex';
 });
-function debugKnob(name, onChange) {
+function debugKnob(name, onChange, format = (v) => `${v.toFixed(2)}×`) {
   const input = document.getElementById(`debug-${name}`);
   const label = document.getElementById(`debug-${name}-value`);
   input.addEventListener('input', () => {
-    label.textContent = `${Number(input.value).toFixed(2)}×`;
+    label.textContent = format(Number(input.value));
     onChange(Number(input.value));
   });
 }
 debugKnob('exposure', (v) => (environment.debugMul = v));
-debugKnob('skylight', (v) => (environment.debugHemi = v));
+// skylight ADDS a global ambient — zone hemispheres are often near-black on
+// purpose, so a multiplier would do nothing
+debugKnob('skylight', (v) => (environment.debugAmbient = v), (v) => `+${v.toFixed(2)}`);
 debugKnob('fog', (v) => (environment.debugFog = v));
 // storm writes the world's weather (it is a live world — everyone gets your sky)
 let stormTimer = null;

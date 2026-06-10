@@ -25,7 +25,9 @@ export class Player {
     this.swimLimit = Infinity;
     this.platform = null;
     this.spawnPose = null;
-    this.onEvent = null; // (name, data) => {} — splash/sinking/drown hooks
+    this.voidY = -120;
+    this.lastSafe = null; // last static ground pose — void falls return here
+    this.onEvent = null; // (name, data) => {} — splash/sinking/drown/void hooks
 
     overlay.addEventListener('click', () => dom.requestPointerLock());
     document.addEventListener('pointerlockchange', () => {
@@ -114,6 +116,19 @@ export class Player {
     this.position.addScaledVector(this.velocity, dt);
 
     if (!this.editorMode && !this.noclip) {
+      // fell out of the world: return to the last safe ground
+      if (this.position.y < this.voidY) {
+        this.onEvent?.('void', {});
+        if (this.lastSafe) {
+          this.position.set(this.lastSafe.x, this.lastSafe.y, this.lastSafe.z);
+          this.velocity.set(0, 0, 0);
+          this.vy = 0;
+        } else {
+          this.respawn();
+        }
+        return;
+      }
+
       this.view?.resolveBlockers?.(this.position, this.eyeHeight);
 
       const x = this.position.x;
@@ -183,6 +198,8 @@ export class Player {
             }
           } else {
             this.platform = null;
+            // static ground is safe ground (platforms move out from under you)
+            this.lastSafe = { x: this.position.x, y: groundY + this.eyeHeight, z: this.position.z };
           }
         } else {
           // airborne: gravity (the Fall is just a very long version of this)

@@ -7,12 +7,15 @@
 export function normalizeManifest(raw) {
   if (!raw?.zones?.length) return null;
   return {
+    // falling past voidY teleports a body back to its last safe ground
+    voidY: raw.voidY ?? -120,
     zones: raw.zones.map((zone) => ({
       name: zone.name,
       origin: zone.origin ?? [0, 0, 0],
       yaw: zone.yaw ?? 0,
       neighbors: zone.neighbors ?? [],
       always: zone.always ?? false,
+      voidY: zone.voidY,
       // world-space disc the zone claims; zones without bounds (backdrops)
       // are never "current", only always-loaded scenery
       bounds: zone.bounds ?? null,

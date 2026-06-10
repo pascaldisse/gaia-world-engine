@@ -29,25 +29,54 @@ try {
   manifest = null;
 }
 
+// zone seeds are read at boot and again by the `reset` op — placed into
+// world-space and stamped with their zone every time
+function loadZoneSeedOps(zone) {
+  const zoneSeed = path.join(worldDir, 'zones', zone.name, 'seed.json');
+  if (!fs.existsSync(zoneSeed)) return [];
+  return JSON.parse(fs.readFileSync(zoneSeed, 'utf8')).map((op) =>
+    op.op === 'spawn'
+      ? { ...op, components: { ...placeEntity(op.components ?? {}, zone), zone: { name: zone.name } } }
+      : op,
+  );
+}
+
+function loadLegacySeedOps() {
+  return fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) : [];
+}
+
 const world = new World(worldFile);
 if (!world.load()) {
   if (manifest) {
-    for (const zone of manifest.zones) {
-      const zoneSeed = path.join(worldDir, 'zones', zone.name, 'seed.json');
-      if (!fs.existsSync(zoneSeed)) continue;
-      const ops = JSON.parse(fs.readFileSync(zoneSeed, 'utf8')).map((op) =>
-        op.op === 'spawn'
-          ? { ...op, components: { ...placeEntity(op.components ?? {}, zone), zone: { name: zone.name } } }
-          : op,
-      );
-      world.applyOps(ops);
-    }
+    for (const zone of manifest.zones) world.applyOps(loadZoneSeedOps(zone));
     console.log(`[gaia] seeded ${world.entities.size} entities from ${manifest.zones.length} zones`);
-  } else if (fs.existsSync(seedFile)) {
-    const seedOps = JSON.parse(fs.readFileSync(seedFile, 'utf8'));
-    world.applyOps(seedOps);
+  } else {
+    world.applyOps(loadLegacySeedOps());
     console.log(`[gaia] seeded world with ${world.entities.size} entities`);
   }
+}
+
+// the Braid rule as a primitive: `reset` re-seeds a zone (or the world), but
+// `persist`-tagged entities, presences, and unzoned entities (world state)
+// keep their current truth
+function expandReset(op) {
+  const zones = op.zone
+    ? manifest?.zones.filter((z) => z.name === op.zone) ?? []
+    : manifest?.zones ?? [null];
+  const ops = [{ op: 'event', name: 'reset', data: { zone: op.zone ?? null } }];
+  for (const zone of zones) {
+    for (const [id, comps] of world.entities) {
+      if (comps.persist || comps.presence) continue;
+      if (zone && comps.zone?.name !== zone.name) continue;
+      ops.push({ op: 'despawn', id });
+    }
+    const seedOps = zone ? loadZoneSeedOps(zone) : loadLegacySeedOps();
+    for (const sop of seedOps) {
+      if (sop.op === 'spawn' && world.entities.get(sop.id)?.persist) continue;
+      ops.push(sop);
+    }
+  }
+  return ops;
 }
 
 // world clock — one time base for every observer
@@ -80,6 +109,9 @@ function record(applied, from) {
 }
 
 function applyAndBroadcast(ops, from) {
+  if (ops.some((op) => op.op === 'reset')) {
+    ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
+  }
   // runtime spawns inherit the zone their position lands in (presences,
   // editor stamps, agent avatars) so streaming clients know what to build
   if (manifest) {

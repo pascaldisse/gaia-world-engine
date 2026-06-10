@@ -111,17 +111,21 @@ seen or reached; no gates, no loading, ever. Driven by
 - [x] `path` behavior: waypoint-following motion on the world clock,
       deterministic like orbit — ferry routes, patrols; triggers stamp `$now`
       as the start time
-- [ ] Interior safety: no-terrain zones get a void floor / respawn-at-last-ground
-      (dodged so far — the cavern brought its own sunken terrain)
+- [x] Interior safety: falling past `voidY` (manifest default −120, per-zone
+      override) returns the body to its last safe static ground (or the spawn
+      point), with a `void` event and a screen dip
 
 ### M9 — World logic (forced by: doors, shortcuts, story beats)
 
-- [x] `trigger` component v1 (pulled early — the boatman rescue forced it):
-      server-evaluated areas vs presences, enter edge + cooldown, fires ops
-      with `$now`/`$id` substitution and/or events; exit/conditions later
-- [ ] `state` convention: world flags entity + helpers (shortcut doors, lit lanterns)
-- [ ] `persist` component + `reset` op: re-seed a zone except persist-tagged
-      entities (the Braid rule as an engine primitive)
+- [x] `trigger` component: server-evaluated areas vs presences, enter AND exit
+      edges, cooldown, `when` conditions against world state, fires ops with
+      `$now`/`$id` substitution and/or events
+- [x] `state` convention: `merge` materializes missing entities, so world
+      flags appear on first write (`patch.mjs state gate open` →
+      `world-state`); triggers condition on them via `when`
+- [x] `persist` component + `reset` op: re-seed a zone (or the world) from its
+      seed files — persist-tagged entities, presences, and unzoned entities
+      (world state) keep their current truth (the Braid rule as a primitive)
 
 ## Later
 

@@ -133,6 +133,7 @@ player.onEvent = (name, data) => {
     environment.dip(2.2);
     audio.thunder(0.35, 0.1);
   }
+  if (name === 'void') environment.dip(1.4);
 };
 
 const history = new History(net.send);
@@ -214,6 +215,7 @@ renderer.setAnimationLoop(() => {
   for (const state of view.particleSystems.values()) updateParticles(state, t);
   player.update(dt);
   zones.update(player.position);
+  player.voidY = zones.currentVoidY;
   view.update();
   interact.update(dt, now);
   // drowning overrides the interaction hint — the water is the message

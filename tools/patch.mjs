@@ -37,6 +37,20 @@ switch (cmd) {
   case 'clear':
     await post([{ op: 'clear' }]);
     break;
+  case 'state': {
+    // world flags: merge auto-creates the world-state entity on first write
+    let value;
+    try {
+      value = JSON.parse(rest[1]);
+    } catch {
+      value = rest[1];
+    }
+    await post([{ op: 'merge', id: 'world-state', component: 'state', value: { [rest[0]]: value } }]);
+    break;
+  }
+  case 'reset':
+    await post([{ op: 'reset', ...(rest[0] ? { zone: rest[0] } : {}) }]);
+    break;
   case 'load': {
     const fs = await import('node:fs');
     await post(JSON.parse(fs.readFileSync(rest[0], 'utf8')));
@@ -62,5 +76,5 @@ switch (cmd) {
     break;
   }
   default:
-    console.log('usage: patch.mjs spawn <components-json> [id] | set <id> <component> <json|null> | merge <id> <component> <json> | despawn <id> | clear | load <ops-file> | snapshot | prefabs | prefab <name> <components-json>');
+    console.log('usage: patch.mjs spawn <components-json> [id] | set <id> <component> <json|null> | merge <id> <component> <json> | despawn <id> | clear | state <key> <value> | reset [zone] | load <ops-file> | snapshot | prefabs | prefab <name> <components-json>');
 }

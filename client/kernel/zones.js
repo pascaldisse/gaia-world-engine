@@ -11,6 +11,7 @@ export class Zones {
     this.environment = environment;
     this.manifest = null;
     this.current = null;
+    this.currentVoidY = -120;
   }
 
   setManifest(raw) {
@@ -31,6 +32,7 @@ export class Zones {
       null;
     if (zone === this.current) return;
     const first = this.current === null;
+    this.currentVoidY = this.manifest.zones.find((z) => z.name === zone)?.voidY ?? this.manifest.voidY;
     this.current = zone;
     this.view.currentZone = zone;
     this.view.setActiveZones(activeZones(this.manifest, zone));

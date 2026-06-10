@@ -51,7 +51,13 @@ export class World {
       }
       case 'merge': {
         const entity = this.entities.get(op.id);
-        if (!entity) return null;
+        if (!entity) {
+          // merge materializes missing entities — `state` flags entities can
+          // appear on first write (broadcast as a spawn so clients learn it)
+          const components = { [op.component]: structuredClone(op.value ?? {}) };
+          this.entities.set(op.id, components);
+          return { op: 'spawn', id: op.id, components };
+        }
         entity[op.component] = { ...(entity[op.component] ?? {}), ...structuredClone(op.value ?? {}) };
         return { op: 'set', id: op.id, component: op.component, value: entity[op.component] };
       }

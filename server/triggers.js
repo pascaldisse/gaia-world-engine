@@ -5,7 +5,9 @@
 // forced by the opening's boatman rescue.
 //
 // trigger: { area: {center:[x,z], radius | size:[sx,sz]}, yMin?, yMax?,
+//            on?: 'enter'|'exit', when?: {"entity.component.path": value},
 //            cooldown?: seconds, event?: {name, data}, ops?: [...] }
+// `when` gates firing on world state — shortcut doors, quest flags.
 export class Triggers {
   constructor({ world, sense, apply, now }) {
     this.world = world;
@@ -42,12 +44,26 @@ export class Triggers {
         const inside = this.contains(trig, comps, px, py, pz);
         const was = this.inside.get(key) ?? false;
         this.inside.set(key, inside);
-        if (!inside || was) continue;
+        const edge = (trig.on ?? 'enter') === 'exit' ? was && !inside : inside && !was;
+        if (!edge) continue;
+        if (trig.when && !this.matches(trig.when)) continue;
         const last = this.lastFired.get(tid) ?? -Infinity;
         if (this.now() - last < (trig.cooldown ?? 0)) continue;
         this.fire(tid, trig, pid);
       }
     }
+  }
+
+  // "world-state.state.gate": "open" → entity world-state, component state,
+  // key gate must equal "open"
+  matches(when) {
+    for (const [path, expected] of Object.entries(when)) {
+      const [id, ...keys] = path.split('.');
+      let value = this.world.entities.get(id);
+      for (const key of keys) value = value?.[key];
+      if (value !== expected) return false;
+    }
+    return true;
   }
 
   fire(tid, trig, pid) {

@@ -80,6 +80,15 @@ despawn remove an entity
 event   transient broadcast (journaled, never persisted)
 ```
 
+```
+reset   re-seed a zone (or the world) — entities with a `persist` component,
+        presences, and unzoned entities (world state) keep their current truth
+```
+
+`merge` on a missing entity materializes it — world flags appear on first
+write (`node tools/patch.mjs state gate open` merges into a `world-state`
+entity that triggers can condition on).
+
 Every applied op is broadcast to all clients and recorded in a journal
 (`GET /events?since=`), which is the world's nervous system: tools and
 agents tail it to react to lightning strikes, prefab changes, chat, anything.
@@ -198,9 +207,16 @@ No manifest = one implicit zone, exactly as before.
 - `water` — `{level, area:{center,size|radius}, drownAfter?}` — swimmable water;
   with `drownAfter`, swimming exhausts the soul in seconds: sink, `drown` event,
   respawn at the spawn point
-- `trigger` — `{area, yMin?, yMax?, cooldown?, event?, ops?}` — server-side
-  volume watching every presence; on enter it emits the event and applies the
-  ops (`$now` → world time, `$id` → who entered). World logic as data.
+- `trigger` — `{area, yMin?, yMax?, on: enter|exit, when?, cooldown?, event?, ops?}` —
+  server-side volume watching every presence; on the enter/exit edge it emits
+  the event and applies the ops (`$now` → world time, `$id` → who entered).
+  `when: {"world-state.state.gate": "open"}` gates firing on world flags.
+  World logic as data.
+- `persist` — survives the `reset` op: the world re-seeds around it while it
+  keeps its current state (the *Braid* rule — death resets all but the woven)
+- `spawn` also doubles as the void return: falling past the manifest's
+  `voidY` (default −120, per-zone overridable) teleports a body back to its
+  last safe ground, or the spawn point if it never had one
 - `scatter` — `{seed, count, area, instance:{parts}, scale, tilt, density, minHeight, maxHeight}` — instanced copies, terrain-following, noise-clustered
 - `particles` — `{seed, count, size, color, area, motion:{type: drift|rain, ...}}` — animated instanced motes
 - `environment` — `{background, fog, exposure, hemisphere, sun, bloom, audio}` — world mood as one patchable entity

@@ -119,6 +119,13 @@ export class Sense {
     const behaviors = comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
     if (behaviors.length) bits.push(behaviors.map((b) => b.type).join('+'));
     if (comps.terrain) bits.push(`terrain seed ${comps.terrain.seed}`);
+    if (comps.scatter) {
+      bits.push(`scatter of ~${comps.scatter.count ?? 100} across ${comps.scatter.area?.radius ?? 60}m`);
+    }
+    if (comps.particles) {
+      bits.push(`${comps.particles.count ?? 100} ${comps.particles.motion?.type ?? 'drift'} particles`);
+    }
+    if (comps.environment) bits.push('environment settings (fog, sky, sun, bloom)');
     return bits.join(' · ') || 'empty entity';
   }
 

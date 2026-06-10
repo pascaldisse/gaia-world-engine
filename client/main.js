@@ -10,6 +10,8 @@ import { History } from './kernel/history.js';
 import { Panel } from './kernel/panel.js';
 import { Palette } from './kernel/palette.js';
 import { Editor } from './kernel/editor.js';
+import { Environment } from './kernel/environment.js';
+import { updateParticles } from './kernel/particles.js';
 import { connect } from './kernel/net.js';
 
 const statusEl = document.getElementById('status');
@@ -18,11 +20,12 @@ const overlay = document.getElementById('overlay');
 const crosshairEl = document.getElementById('crosshair');
 const hintEl = document.getElementById('hint');
 
-const { renderer, scene, camera } = await createRenderer();
+const { renderer, scene, camera, hemi, sun, post } = await createRenderer();
 const store = new WorldStore();
 const audio = new AudioEngine(camera);
 const effects = new Effects({ scene, audio });
-const view = new View({ scene, store, audio, effects });
+const environment = new Environment({ renderer, scene, hemi, sun, post });
+const view = new View({ scene, store, audio, effects, environment });
 const player = new Player({ camera, dom: renderer.domElement, overlay });
 const behaviors = new Behaviors({ store, view });
 
@@ -83,14 +86,18 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 let last = performance.now();
+let elapsed = 0;
 renderer.setAnimationLoop(() => {
   const now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  elapsed += dt;
   behaviors.update(dt);
   effects.update(dt);
+  for (const state of view.particleSystems.values()) updateParticles(state, elapsed);
   player.update(dt);
   interact.update(dt, now);
   editor.update();
-  renderer.render(scene, camera);
+  if (post) post.render();
+  else renderer.render(scene, camera);
 });

@@ -55,9 +55,9 @@ agents build together, in-world, while it runs. 3D only.
 - [x] Prefab palette + ghost stamping; AI-addable library
 
 ### M4 — Tomb vocabulary (visual power)
-- [ ] `scatter`/`particles` components → InstancedMesh (candle-lake class scenes)
+- [x] `scatter`/`particles` components → InstancedMesh (candle-lake class scenes)
 - [ ] Shader preset library as data (water, flame, glow, dome, wet-rock; TSL)
-- [ ] `environment` entity: fog, sky, exposure, bloom/grade post chain
+- [x] `environment` entity: fog, sky, exposure, bloom post chain (grade later)
 - [ ] Weather-style behaviors emitting transient events
 
 ### M5 — Sound (procedural + samples)

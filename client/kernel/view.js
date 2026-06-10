@@ -1,17 +1,22 @@
 import * as THREE from 'three/webgpu';
 import { buildTerrainMesh, heightAt, setActiveTerrain } from './terrain.js';
+import { makeGeometry, makePartMaterial } from './geometry.js';
+import { buildScatter } from './scatter.js';
+import { buildParticles } from './particles.js';
 
 // Reconciles world store documents into three.js objects. Each entity gets a
 // Group; components map onto children/properties of that group.
 export class View {
-  constructor({ scene, store, audio, effects }) {
+  constructor({ scene, store, audio, effects, environment }) {
     this.scene = scene;
     this.store = store;
     this.audio = audio;
     this.effects = effects;
+    this.environment = environment;
     this.groups = new Map();
     this.lights = new Map();
     this.sounds = new Map();
+    this.particleSystems = new Map();
     this.suppressed = new Set();
     store.onChange((event) => this.handle(event));
   }
@@ -96,7 +101,43 @@ export class View {
         this.applyTerrain(group, value);
         this.resnapGrounded();
         break;
+      case 'scatter':
+        this.applyScatter(group, value);
+        break;
+      case 'particles':
+        this.applyParticles(id, group, value);
+        break;
+      case 'environment':
+        this.environment?.apply(value);
+        break;
     }
+  }
+
+  applyScatter(group, value) {
+    for (const child of [...group.children]) {
+      if (child.userData.kind === 'scatter') {
+        disposeObject(child);
+        group.remove(child);
+      }
+    }
+    if (!value) return;
+    const scatter = buildScatter(value);
+    scatter.userData.kind = 'scatter';
+    group.add(scatter);
+  }
+
+  applyParticles(id, group, value) {
+    const prev = this.particleSystems.get(id);
+    if (prev) {
+      group.remove(prev.mesh);
+      prev.mesh.geometry.dispose();
+      prev.mesh.material.dispose();
+      this.particleSystems.delete(id);
+    }
+    if (!value) return;
+    const state = buildParticles(value);
+    group.add(state.mesh);
+    this.particleSystems.set(id, state);
   }
 
   applyTransform(id) {
@@ -124,21 +165,7 @@ export class View {
     if (!recipe) return;
     const parts = recipe.parts ?? [recipe];
     for (const part of parts) {
-      const material = new THREE.MeshStandardMaterial({
-        color: part.color ?? '#9aa0a6',
-        roughness: part.roughness ?? 0.8,
-        metalness: part.metalness ?? 0,
-        flatShading: part.flatShading ?? false,
-      });
-      if (part.emissive) {
-        material.emissive = new THREE.Color(part.emissive);
-        material.emissiveIntensity = part.emissiveIntensity ?? 1;
-      }
-      if (part.opacity !== undefined && part.opacity < 1) {
-        material.transparent = true;
-        material.opacity = part.opacity;
-      }
-      const mesh = new THREE.Mesh(makeGeometry(part), material);
+      const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
       mesh.position.set(...(part.position ?? [0, 0, 0]));
       mesh.rotation.set(...(part.rotation ?? [0, 0, 0]));
       if (part.scale) {
@@ -204,6 +231,7 @@ export class View {
   resnapGrounded() {
     for (const [id, components] of this.store.entities) {
       if (components.ground && this.groups.has(id)) this.applyTransform(id);
+      if (components.scatter && this.groups.has(id)) this.applyScatter(this.groups.get(id), components.scatter);
     }
   }
 
@@ -213,6 +241,7 @@ export class View {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
     this.lights.delete(id);
+    this.particleSystems.delete(id);
     disposeObject(group);
     this.scene.remove(group);
     this.groups.delete(id);
@@ -224,32 +253,6 @@ export class View {
 
   getLight(id) {
     return this.lights.get(id);
-  }
-}
-
-export function makeGeometry(part) {
-  switch (part.shape) {
-    case 'sphere':
-      return new THREE.SphereGeometry(part.radius ?? 0.5, 24, 16);
-    case 'cylinder':
-      return new THREE.CylinderGeometry(
-        part.radiusTop ?? part.radius ?? 0.5,
-        part.radiusBottom ?? part.radius ?? 0.5,
-        part.height ?? 1,
-        16,
-      );
-    case 'cone':
-      return new THREE.ConeGeometry(part.radius ?? 0.5, part.height ?? 1, 16);
-    case 'torus':
-      return new THREE.TorusGeometry(part.radius ?? 1, part.tube ?? 0.3, 12, 32);
-    case 'octahedron':
-      return new THREE.OctahedronGeometry(part.radius ?? 0.5, 0);
-    case 'icosahedron':
-      return new THREE.IcosahedronGeometry(part.radius ?? 0.5, 0);
-    case 'plane':
-      return new THREE.PlaneGeometry(part.size?.[0] ?? 1, part.size?.[1] ?? 1);
-    default:
-      return new THREE.BoxGeometry(...(part.size ?? [1, 1, 1]));
   }
 }
 

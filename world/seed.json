@@ -60,6 +60,20 @@
   { "op": "spawn", "id": "firefly-6", "components": { "mesh": { "parts": [{ "shape": "sphere", "radius": 0.07, "color": "#fff2b0", "emissive": "#ffe066", "emissiveIntensity": 3, "castShadow": false }] }, "behavior": { "type": "orbit", "center": [0, 0, 5], "radius": 2.6, "speed": 0.65, "height": 2.0, "ground": true, "phase": 0.7 } } },
   {
     "op": "spawn",
+    "id": "env",
+    "components": {
+      "environment": {
+        "background": "#101c30",
+        "fog": { "color": "#101c30", "near": 60, "far": 280 },
+        "exposure": 1.0,
+        "hemisphere": { "sky": "#8fb3ff", "ground": "#2c241a", "intensity": 0.6 },
+        "sun": { "color": "#ffe2b0", "intensity": 1.2, "position": [60, 90, 30] },
+        "bloom": { "strength": 0.35, "radius": 0.4, "threshold": 0.85 }
+      }
+    }
+  },
+  {
+    "op": "spawn",
     "id": "windchime",
     "components": {
       "transform": { "position": [17, 0, -10] },

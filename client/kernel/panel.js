@@ -8,6 +8,8 @@ const ENUMS = {
   'behavior.type': ['spin', 'bob', 'orbit', 'pulse', 'flicker'],
   'sound.kind': ['hum', 'chime'],
   'sound.wave': ['sine', 'square', 'sawtooth', 'triangle'],
+  'scatter.shape': ['circle', 'rect'],
+  'particles.type': ['drift', 'rain'],
 };
 
 const RANGES = {
@@ -19,6 +21,9 @@ const RANGES = {
   freq: [20, 1200], level: [0, 1], interval: [0.1, 10], refDistance: [1, 30],
   speed: [-5, 5], amplitude: [0, 20], amount: [0, 1], phase: [0, 6.283],
   frequency: [0.001, 0.08], seed: [1, 99], fov: [10, 170], range: [1, 200], yaw: [-3.1416, 3.1416],
+  count: [1, 2000], offsetY: [-5, 10], tilt: [0, 1], noise: [0.001, 0.1], bias: [0, 1],
+  strength: [0, 2], threshold: [0, 1], near: [1, 200], far: [10, 800], exposure: [0.2, 3],
+  density: [0.001, 0.05], bob: [0, 5], y: [-10, 60],
 };
 
 const COMPONENT_DEFAULTS = {

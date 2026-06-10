@@ -57,6 +57,9 @@ Or POST raw ops to `http://localhost:8420/op`:
 - `light` — `{type: point|spot|directional, color, intensity, distance, offset, castShadow}`
 - `sound` — `{kind: hum|chime, freq|notes, interval, level, refDistance}` (synthesized, positional)
 - `terrain` — `{seed, size, segments, amplitude, frequency, color}` (one per world)
+- `scatter` — `{seed, count, area:{shape:circle|rect, center, radius|size}, instance:{parts:[...]}, scale:[min,max], tilt, rotateY, offsetY, density:{noise, bias}}` — hundreds of instanced copies in a few draw calls, terrain-following, fbm-clustered
+- `particles` — `{seed, count, size, color, area, motion:{type:drift|rain, speed, radius, height, bob}}` — animated instanced motes (fireflies, souls, rain)
+- `environment` — `{background, fog:{color, near, far | density}, exposure, hemisphere:{sky, ground, intensity}, sun:{color, intensity, position}, bloom:{strength, radius, threshold}}` — world mood as one patchable entity
 - `behavior` — one or array of:
   - `{type:"spin", speed}`
   - `{type:"bob", amplitude, speed, phase}`

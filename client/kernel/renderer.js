@@ -1,4 +1,6 @@
 import * as THREE from 'three/webgpu';
+import { pass } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 
 export async function createRenderer() {
   const renderer = new THREE.WebGPURenderer({ antialias: true });
@@ -36,5 +38,25 @@ export async function createRenderer() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  return { renderer, scene, camera };
+  // bloom post chain (TSL) — falls back to a plain render if unavailable
+  let post = null;
+  try {
+    const postProcessing = new THREE.PostProcessing(renderer);
+    const scenePass = pass(scene, camera);
+    const color = scenePass.getTextureNode('output');
+    const bloomPass = bloom(color, 0.35, 0.4, 0.85);
+    postProcessing.outputNode = color.add(bloomPass);
+    post = {
+      render: () => postProcessing.render(),
+      setBloom: ({ strength, radius, threshold } = {}) => {
+        if (strength !== undefined) bloomPass.strength.value = strength;
+        if (radius !== undefined) bloomPass.radius.value = radius;
+        if (threshold !== undefined) bloomPass.threshold.value = threshold;
+      },
+    };
+  } catch (err) {
+    console.warn('[gaia] post chain unavailable, rendering plain:', err);
+  }
+
+  return { renderer, scene, camera, hemi, sun, post };
 }

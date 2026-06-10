@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { makeGeometry } from './view.js';
+import { makeGeometry } from './geometry.js';
 
 const BASE = `http://${location.hostname}:8420`;
 

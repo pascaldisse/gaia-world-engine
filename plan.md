@@ -98,13 +98,17 @@ seen or reached; no gates, no loading, ever. Driven by
       today; fade lands with the first real seam, G2)
 - [x] Senses zone-scoped by observer position — agents stream like players do
 
-### M8 — Bodies in space (forced by: the boat crossing, the tunnels)
+### M8 — Bodies in space (forced by: the opening, the boat crossing, the tunnels)
 
 - [ ] Blocking colliders: collider boxes with `blocker: true` push the player out
-      horizontally — cave walls, railings, the original's deep-water lockout
-- [ ] Water volumes: surface swim mode (buoyancy at waterY, slow strokes)
+      horizontally — cave walls, railings
+- [ ] Water volumes: surface swim mode (buoyancy at waterY, slow strokes), and
+      optional peril as data — `{drownAfter: seconds}` exhausts the swimmer:
+      sink, `drown` event, respawn at the spawn point (worlds tune or script it)
 - [ ] Ride platforms: standing on a moving entity's collider carries you with its
       frame delta (the skiff, the gondolas)
+- [ ] `path` behavior: waypoint-following motion on the world clock, deterministic
+      like orbit — ferry routes, patrols
 - [ ] Interior safety: no-terrain zones get a void floor / respawn-at-last-ground
 
 ### M9 — World logic (forced by: doors, shortcuts, story beats)

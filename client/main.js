@@ -116,19 +116,37 @@ function handleEvents(ops) {
   }
 }
 
-// ~ toggles the debug panel (brightness, more knobs later)
+// ~ toggles the debug panel: live look-dev knobs
 const debugEl = document.getElementById('debug');
-const debugExposure = document.getElementById('debug-exposure');
-const debugExposureValue = document.getElementById('debug-exposure-value');
 document.addEventListener('keydown', (e) => {
   if (e.code !== 'Backquote') return;
   const el = document.activeElement;
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
   debugEl.style.display = debugEl.style.display === 'flex' ? 'none' : 'flex';
 });
-debugExposure.addEventListener('input', () => {
-  environment.debugMul = Number(debugExposure.value);
-  debugExposureValue.textContent = `${Number(debugExposure.value).toFixed(2)}×`;
+function debugKnob(name, onChange) {
+  const input = document.getElementById(`debug-${name}`);
+  const label = document.getElementById(`debug-${name}-value`);
+  input.addEventListener('input', () => {
+    label.textContent = `${Number(input.value).toFixed(2)}×`;
+    onChange(Number(input.value));
+  });
+}
+debugKnob('exposure', (v) => (environment.debugMul = v));
+debugKnob('skylight', (v) => (environment.debugHemi = v));
+debugKnob('fog', (v) => (environment.debugFog = v));
+// storm writes the world's weather (it is a live world — everyone gets your sky)
+let stormTimer = null;
+debugKnob('storm', (v) => {
+  clearTimeout(stormTimer);
+  stormTimer = setTimeout(() => {
+    for (const [id, comps] of store.entities) {
+      if (comps.weather) {
+        net.send([{ op: 'merge', id, component: 'weather', value: { frequency: v } }]);
+        break;
+      }
+    }
+  }, 250);
 });
 
 const titleEl = document.getElementById('title');

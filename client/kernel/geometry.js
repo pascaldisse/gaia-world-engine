@@ -13,6 +13,8 @@ export function makeGeometry(part) {
         part.radiusBottom ?? part.radius ?? 0.5,
         part.height ?? 1,
         16,
+        1,
+        part.open ?? false,
       );
     case 'cone':
       return new THREE.ConeGeometry(part.radius ?? 0.5, part.height ?? 1, 16);

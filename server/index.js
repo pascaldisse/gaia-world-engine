@@ -138,7 +138,9 @@ setInterval(() => triggers.tick(), 250);
 
 // ---- weather sim: lightning events + rain cycles for entities with `weather` ----
 const weatherState = new Map();
-const gap = (w) => ((w.minGap ?? 8) + Math.random() * ((w.maxGap ?? 30) - (w.minGap ?? 8))) * 1000;
+// frequency is a live multiplier (the debug panel's storm knob merges it)
+const gap = (w) =>
+  (((w.minGap ?? 8) + Math.random() * ((w.maxGap ?? 30) - (w.minGap ?? 8))) / Math.max(0.05, w.frequency ?? 1)) * 1000;
 setInterval(() => {
   const now = Date.now();
   for (const [id, comps] of world.entities) {
@@ -154,16 +156,34 @@ setInterval(() => {
     }
     if (w.lightning !== false && now >= st.nextStrike) {
       st.nextStrike = now + gap(w);
+      const intensity = Math.round((0.5 + Math.random() * 0.7) * 100) / 100;
       applyAndBroadcast(
         [
           {
             op: 'event',
             name: 'lightning',
-            data: { intensity: Math.round((0.5 + Math.random() * 0.7) * 100) / 100, delay: Math.round((0.8 + Math.random() * 2) * 10) / 10 },
+            data: { intensity, delay: Math.round((0.8 + Math.random() * 2) * 10) / 10 },
           },
         ],
         'weather',
       );
+      // sometimes the sky stutters — a second strike right on the first's heels
+      if (Math.random() < (w.double ?? 0.3)) {
+        setTimeout(
+          () =>
+            applyAndBroadcast(
+              [
+                {
+                  op: 'event',
+                  name: 'lightning',
+                  data: { intensity: Math.round(intensity * (0.5 + Math.random() * 0.4) * 100) / 100, delay: 0.4 },
+                },
+              ],
+              'weather',
+            ),
+          120 + Math.random() * 280,
+        );
+      }
     }
     if (w.rainCycle) {
       const rain =

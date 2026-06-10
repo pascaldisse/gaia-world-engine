@@ -13,7 +13,11 @@ export class Environment {
     this.flashLevel = 0;
     this.flashColor = new THREE.Color('#b9c4ee');
     this.exposure = renderer.toneMappingExposure;
-    this.debugMul = 1; // the ~ debug panel's brightness multiplier
+    this.fogDensity = scene.fog.isFogExp2 ? scene.fog.density : null;
+    // the ~ debug panel's live knobs
+    this.debugMul = 1;
+    this.debugHemi = 1;
+    this.debugFog = 1;
     this.current = {
       sunIntensity: sun.intensity,
       hemiIntensity: hemi.intensity,
@@ -44,6 +48,7 @@ export class Environment {
     const fog = { ...this.defaults.fog, ...(p.fog ?? {}) };
     if (fog.density) this.scene.fog = new THREE.FogExp2(fog.color, fog.density);
     else this.scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
+    this.fogDensity = fog.density ?? null;
     this.exposure = p.exposure;
     const hemi = { ...this.defaults.hemisphere, ...(p.hemisphere ?? {}) };
     this.hemi.color.set(hemi.sky);
@@ -110,7 +115,7 @@ export class Environment {
       this.scene.background.copy(fade.from.background).lerp(fade.to.background, k);
       this.scene.fog.color.copy(fade.from.fogColor).lerp(fade.to.fogColor, k);
       if (fade.from.fogDensity !== null && fade.to.fogDensity !== null && this.scene.fog.isFogExp2) {
-        this.scene.fog.density = fade.from.fogDensity + (fade.to.fogDensity - fade.from.fogDensity) * k;
+        this.fogDensity = fade.from.fogDensity + (fade.to.fogDensity - fade.from.fogDensity) * k;
       }
       this.exposure = fade.from.exposure + (fade.to.exposure - fade.from.exposure) * k;
       this.hemi.color.copy(fade.from.hemiSky).lerp(fade.to.hemiSky, k);
@@ -126,7 +131,7 @@ export class Environment {
       if (fade.t >= 1) this.fadeState = null;
     }
 
-    // exposure pipeline: logical value × dip × debug brightness
+    // final pipeline: logical values × dip × the ~ debug knobs
     let exposure = this.exposure;
     if (this.dipDur) {
       this.dipT += dt;
@@ -135,6 +140,10 @@ export class Environment {
       if (p >= 1) this.dipDur = 0;
     }
     this.renderer.toneMappingExposure = exposure * this.debugMul;
+    this.hemi.intensity = this.current.hemiIntensity * this.debugHemi;
+    if (this.scene.fog.isFogExp2 && this.fogDensity !== null) {
+      this.scene.fog.density = this.fogDensity * this.debugFog;
+    }
 
     if (this.flashLevel <= 0) return;
     this.flashLevel *= Math.exp(-dt * 4.5);
@@ -142,7 +151,7 @@ export class Environment {
     const k = Math.min(1, this.flashLevel);
     // lightning lifts the whole frame: sun, sky light, background, fog
     this.sun.intensity = this.current.sunIntensity + this.flashLevel * 6;
-    this.hemi.intensity = this.current.hemiIntensity + this.flashLevel * 1.4;
+    this.hemi.intensity = this.current.hemiIntensity * this.debugHemi + this.flashLevel * 1.4;
     this.scene.background.copy(this.current.background).lerp(this.flashColor, k * 0.55);
     this.scene.fog.color.copy(this.current.fogColor).lerp(this.flashColor, k * 0.5);
   }

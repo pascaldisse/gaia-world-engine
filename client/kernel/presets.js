@@ -54,6 +54,22 @@ export function makePresetMaterial(part) {
         material.side = THREE.DoubleSide;
         return material;
       }
+      case 'beam': {
+        // fake-volumetric light shaft: brightest through its core, soft at
+        // the silhouette and both ends; additive, never writes depth.
+        // Use on open-ended cylinders/cones ({open: true}).
+        const material = new THREE.MeshBasicNodeMaterial();
+        const core = dot(normalize(cameraPosition.sub(positionWorld)), normalWorld).abs();
+        const vert = smoothstep(0.0, 0.3, uv().y).mul(smoothstep(1.0, 0.7, uv().y));
+        const g = core.mul(core).mul(vert).mul(part.beamStrength ?? 0.5);
+        material.colorNode = color(part.color ?? '#9db8d9').mul(g);
+        material.opacityNode = g;
+        material.transparent = true;
+        material.blending = THREE.AdditiveBlending;
+        material.depthWrite = false;
+        material.side = THREE.DoubleSide;
+        return material;
+      }
       case 'water': {
         const material = new THREE.MeshStandardNodeMaterial({
           roughness: 0.15,
@@ -63,7 +79,8 @@ export function makePresetMaterial(part) {
         });
         const wp = positionWorld;
         const band = sin(wp.x.mul(0.18).add(time.mul(0.5))).mul(sin(wp.z.mul(0.22).sub(time.mul(0.4))));
-        const sparkle = smoothstep(0.86, 1.0, band).mul(0.6);
+        // sparkle: roaming glint patches; 0 = still black water
+        const sparkle = smoothstep(0.86, 1.0, band).mul(part.sparkle ?? 0.6);
         const viewDir = normalize(cameraPosition.sub(wp));
         const fresnel = dot(viewDir, normalWorld).abs().oneMinus().pow(3);
         material.colorNode = mix(color(part.color ?? '#0a1420'), color(part.sky ?? '#27405e'), fresnel.mul(0.8));

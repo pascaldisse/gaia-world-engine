@@ -72,6 +72,41 @@ agents build together, in-world, while it runs. 3D only.
 - [x] Player presence entity (published ~3Hz, despawned on disconnect)
 - [x] Semantic lint expansion (light coverage, walkability)
 
+### M7 — Zones & streaming (forced by: any second level)
+
+One coherent world-space, Dark Souls style: levels stream in and out, but
+every vista is the real level (or its backdrop impostor) at its true world
+position. Driven by `../Tomb-of-the-Gods-GAIA/plan.md`.
+
+- [ ] `world/manifest.json` — zones: `{name, origin, yaw, neighbors, visible, always}`;
+      no manifest = one implicit zone (current worlds keep working)
+- [ ] Per-zone `zones/<name>/seed.json` + per-zone runtime state file; server
+      loads all zones, stamps each entity's zone, routes ops by entity id
+- [ ] Client zone subscription: current + neighbors + always-zones; build/unbuild
+      groups on set change; portal/bounds crossing switches the current zone
+- [ ] Backdrop zones: always-loaded low-detail far scenery (the unreachable mountains)
+- [ ] Multi-terrain: terrain registry with world-space bounds; `heightAt` routes by
+      containment; zones may have no terrain at all (interiors)
+- [ ] Per-zone `environment` + ambience, crossfaded on zone switch
+- [ ] Senses zone-scoped by avatar position — agents stream the same way players do
+
+### M8 — Bodies in space (forced by: the boat crossing, the tunnels)
+
+- [ ] Blocking colliders: collider boxes with `blocker: true` push the player out
+      horizontally — cave walls, railings, the original's deep-water lockout
+- [ ] Water volumes: surface swim mode (buoyancy at waterY, slow strokes)
+- [ ] Ride platforms: standing on a moving entity's collider carries you with its
+      frame delta (the skiff, the gondolas)
+- [ ] Interior safety: no-terrain zones get a void floor / respawn-at-last-ground
+
+### M9 — World logic (forced by: doors, shortcuts, story beats)
+
+- [ ] `trigger` component: server-evaluated volumes vs presences →
+      `{on: enter|exit, emit/merge ...}` events
+- [ ] `state` convention: world flags entity + helpers (shortcut doors, lit lanterns)
+- [ ] `persist` component + `reset` op: re-seed a zone except persist-tagged
+      entities (the Braid rule as an engine primitive)
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

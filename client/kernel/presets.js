@@ -57,11 +57,13 @@ export function makePresetMaterial(part) {
       case 'beam': {
         // fake-volumetric light shaft: brightest through its core, soft at
         // the silhouette and both ends; additive, never writes depth.
-        // Use on open-ended cylinders/cones ({open: true}).
+        // Fades out near the camera so standing (or falling) INSIDE one is a
+        // faint halo, not a wall of fog. Use on open-ended cylinders ({open: true}).
         const material = new THREE.MeshBasicNodeMaterial();
         const core = dot(normalize(cameraPosition.sub(positionWorld)), normalWorld).abs();
         const vert = smoothstep(0.0, 0.3, uv().y).mul(smoothstep(1.0, 0.7, uv().y));
-        const g = core.mul(core).mul(vert).mul(part.beamStrength ?? 0.5);
+        const near = smoothstep(2.0, 18.0, length(positionWorld.sub(cameraPosition)));
+        const g = core.mul(core).mul(vert).mul(near).mul(part.beamStrength ?? 0.5);
         material.colorNode = color(part.color ?? '#9db8d9').mul(g);
         material.opacityNode = g;
         material.transparent = true;

@@ -35,9 +35,19 @@ Screenshot discipline:
   — creator mode opens by itself, the entity is selected, the listed gizmo
   categories switch on, and the camera goes exactly where you said (editor
   mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so
-  `shot` captures them; the DOM panels (outliner/inspector) do NOT appear in
-  canvas screenshots — verify those with a headless Chromium screenshot
-  (e.g. Brave: `--headless --screenshot=out.png --user-data-dir=/tmp/x <url>`).
+  `shot` captures them; the DOM panels (outliner/inspector/log) do NOT
+  appear in canvas screenshots. For those, launch a dedicated visible
+  browser instance with the DevTools protocol and use `tools/cdp.mjs`:
+  ```sh
+  "Brave Browser" --user-data-dir=/tmp/gaia-profile --remote-debugging-port=9222 "<url>" &
+  node tools/cdp.mjs shot ui.png      # full page: DOM + canvas
+  node tools/cdp.mjs eval 'gaia.gizmos.root.children.length'   # poke the kernel
+  ```
+  Do NOT use `--headless` — it hangs on WebGPU init. The dedicated
+  `--user-data-dir` instance keeps your work out of the player's browser
+  (their instance can also wedge on localhost after heavy tab churn — a
+  blank tab with an empty title means restart THEIR browser, not the
+  server). `window.gaia` exposes store/view/gizmos/editor/audio in the page.
 
 ## Other ground rules
 

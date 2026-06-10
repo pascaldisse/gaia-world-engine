@@ -115,8 +115,9 @@ agents tail it to react to lightning strikes, prefab changes, chat, anything.
 On the client, a reconciler turns documents into three.js objects and keeps
 them in sync as ops arrive. Visual and audio richness is data too:
 
-- mesh parts take **shader presets** (`glow`, `flame`, `water`, `hologram`)
-  — TSL node materials with a safe fallback;
+- mesh parts take **shader presets** (`glow`, `flame`, `water`, `hologram`,
+  `beam` for volumetric light shafts) — TSL node materials with a safe
+  fallback;
 - `scatter` and `particles` become instanced draw calls (hundreds of trees
   or motes per entity);
 - `sound` patches describe layered synths (noise/osc → filter → LFO →
@@ -207,13 +208,16 @@ No manifest = one implicit zone, exactly as before.
 
 ## Component vocabulary
 
+The canonical, always-current version of this list — with field docs,
+ranges, and enums — is `shared/schema.js`, served live at `GET /schema`.
+
 - `transform` — `{position:[x,y,z], rotation:[rx,ry,rz], scale: n|[x,y,z]}`
 - `ground` — `{offset: n}` snap y to terrain height (re-snaps when terrain changes)
 - `mesh` — `{parts:[{shape, color, emissive, roughness, opacity, preset, position, rotation, scale, ...shape params}]}`
   - shapes: `box(size)`, `sphere(radius)`, `cylinder(radiusTop,radiusBottom,height)`,
     `cone(radius,height)`, `torus(radius,tube)`, `octahedron(radius)`,
     `icosahedron(radius)`, `plane(size)`
-  - `preset: glow|flame|water|hologram` — TSL shader materials as data;
+  - `preset: glow|flame|water|hologram|beam` — TSL shader materials as data;
     `visible:false` parts collide without rendering; `solid:false` opts out of collision
 - `light` — `{type: point|spot|directional, color, intensity, distance, offset, castShadow}`
 - `sound` — `{kind: hum|chime|patch|sample, ambient?, level, refDistance}`
@@ -246,7 +250,6 @@ No manifest = one implicit zone, exactly as before.
   world mood as one patchable entity (`ambient: {color, intensity}` is the
   skylight: a true global light, the thing to raise when "more light" is the note)
 - `weather` — `{lightning, minGap, maxGap, rainCycle, rainAmount}` — server-simulated events
-- `spawn` — `{position, yaw}` — where players enter the world
 - `zone` — `{name}` — stamped by the server in zoned worlds
 
 ## Architecture
@@ -258,7 +261,8 @@ client/kernel/   renderer, store mirror, view reconciler, terrain, player,
                  editor, audio synth, behaviors, zones
 shared/          pure functions every observer must agree on:
                  terrain math, motion, zone placement
-tools/           patch.mjs (raw ops), agent.mjs (sense + act CLI)
+tools/           patch.mjs (raw ops), agent.mjs (sense + act CLI),
+                 cdp.mjs (DevTools protocol: eval + DOM screenshots)
 world/           the default hub world (seed, prefabs, assets)
 ```
 
@@ -266,9 +270,10 @@ State lives on the server; the vite client hot-reloads freely around it.
 
 ## Roadmap
 
-See [plan.md](plan.md) — M1–M10 are done: in-world editing, agent senses
+See [plan.md](plan.md) — M1–M11 are done: in-world editing, agent senses
 and intents, inspector, instancing and shader presets, procedural audio,
 observability, zones & streaming (M7), bodies in space — gravity, swim,
 rideable platforms, blockers (M8), world logic — triggers, state,
-persistence rules (M9), and the outliner + gizmo layer (M10). The Later
-list holds scripting, full TSL authoring, and multiplayer attribution.
+persistence rules (M9), the outliner + gizmo layer (M10), and the schema-
+driven inspector + world log (M11). The Later list holds scripting, full
+TSL authoring, and multiplayer attribution.

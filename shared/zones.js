@@ -86,6 +86,16 @@ export function placeEntity(comps, zone) {
   const behaviors = out.behavior ? (Array.isArray(out.behavior) ? out.behavior : [out.behavior]) : [];
   for (const b of behaviors) {
     if (b.type === 'orbit') b.center = place3(b.center);
+    if (b.type === 'path' && b.points) b.points = b.points.map(place3);
+  }
+  if (out.water) {
+    if (out.water.area?.center) out.water.area.center = place2(out.water.area.center);
+    if (out.water.level !== undefined) out.water.level += oy;
+  }
+  if (out.trigger) {
+    if (out.trigger.area?.center) out.trigger.area.center = place2(out.trigger.area.center);
+    if (out.trigger.yMin !== undefined) out.trigger.yMin += oy;
+    if (out.trigger.yMax !== undefined) out.trigger.yMax += oy;
   }
   for (const field of ['scatter', 'particles']) {
     const area = out[field]?.area;

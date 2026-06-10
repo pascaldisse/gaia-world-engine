@@ -94,27 +94,31 @@ seen or reached; no gates, no loading, ever. Driven by
 - [x] Multi-terrain: registry routes `heightAt` by containment, nearest terrain
       extrapolates outside all bounds (single-terrain worlds unchanged); true
       no-ground interiors are M8 (void floor + blockers)
-- [ ] Crossfade environment/ambience on zone switch (snap-applies per zone
-      today; fade lands with the first real seam, G2)
+- [x] Crossfade environment/ambience on zone switch (mood lerps over ~3s,
+      ambient sounds fade with the current zone)
 - [x] Senses zone-scoped by observer position — agents stream like players do
 
 ### M8 — Bodies in space (forced by: the opening, the boat crossing, the tunnels)
 
-- [ ] Blocking colliders: collider boxes with `blocker: true` push the player out
+- [x] Blocking colliders: collider boxes with `blocker: true` push the player out
       horizontally — cave walls, railings
-- [ ] Water volumes: surface swim mode (buoyancy at waterY, slow strokes), and
-      optional peril as data — `{drownAfter: seconds}` exhausts the swimmer:
-      sink, `drown` event, respawn at the spawn point (worlds tune or script it)
-- [ ] Ride platforms: standing on a moving entity's collider carries you with its
-      frame delta (the skiff, the gondolas)
-- [ ] `path` behavior: waypoint-following motion on the world clock, deterministic
-      like orbit — ferry routes, patrols
+- [x] Water volumes: surface swim mode (buoyancy, slow strokes), and peril as
+      data — `{drownAfter: seconds}` exhausts the swimmer: sink, `drown` event,
+      respawn at the spawn point. Plus real gravity: airborne bodies fall.
+- [x] Ride platforms: standing on a moving entity's collider carries you with
+      its frame delta (the ferry barge today, the gondolas later); a swimmer
+      can haul onto a low deck (boarding reach)
+- [x] `path` behavior: waypoint-following motion on the world clock,
+      deterministic like orbit — ferry routes, patrols; triggers stamp `$now`
+      as the start time
 - [ ] Interior safety: no-terrain zones get a void floor / respawn-at-last-ground
+      (dodged so far — the cavern brought its own sunken terrain)
 
 ### M9 — World logic (forced by: doors, shortcuts, story beats)
 
-- [ ] `trigger` component: server-evaluated volumes vs presences →
-      `{on: enter|exit, emit/merge ...}` events
+- [x] `trigger` component v1 (pulled early — the boatman rescue forced it):
+      server-evaluated areas vs presences, enter edge + cooldown, fires ops
+      with `$now`/`$id` substitution and/or events; exit/conditions later
 - [ ] `state` convention: world flags entity + helpers (shortcut doors, lit lanterns)
 - [ ] `persist` component + `reset` op: re-seed a zone except persist-tagged
       entities (the Braid rule as an engine primitive)

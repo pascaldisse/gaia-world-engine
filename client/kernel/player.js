@@ -17,6 +17,15 @@ export class Player {
     this.noclip = false;
     this.eyeHeight = 1.7;
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
+    // bodies in space: vertical velocity (gravity), swim state, ridden platform
+    this.vy = 0;
+    this.swimming = false;
+    this.sinking = false;
+    this.swimTime = 0;
+    this.swimLimit = Infinity;
+    this.platform = null;
+    this.spawnPose = null;
+    this.onEvent = null; // (name, data) => {} — splash/sinking/drown hooks
 
     overlay.addEventListener('click', () => dom.requestPointerLock());
     document.addEventListener('pointerlockchange', () => {
@@ -32,9 +41,47 @@ export class Player {
     document.addEventListener('keyup', (e) => this.keys.delete(e.code));
   }
 
+  respawn() {
+    const pose = this.spawnPose ?? { position: [0, 2, 22], yaw: 0 };
+    this.position.set(...(pose.position ?? [0, 2, 22]));
+    this.yaw = pose.yaw ?? 0;
+    this.pitch = 0;
+    this.velocity.set(0, 0, 0);
+    this.vy = 0;
+    this.swimming = false;
+    this.sinking = false;
+    this.swimTime = 0;
+    this.platform = null;
+  }
+
   update(dt) {
     const flying = this.editorMode ? this.flyActive || this.flyLatched : this.noclip;
-    const speed = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 14 : 6;
+
+    // riding: a moving platform carries the body with its frame delta
+    if (this.platform && !flying) {
+      const group = this.view?.getGroup(this.platform.id);
+      if (group) {
+        this.position.x += group.position.x - this.platform.x;
+        this.position.y += group.position.y - this.platform.y;
+        this.position.z += group.position.z - this.platform.z;
+        const dyaw = group.rotation.y - this.platform.yaw;
+        if (dyaw) {
+          const px = this.position.x - group.position.x;
+          const pz = this.position.z - group.position.z;
+          const cos = Math.cos(dyaw);
+          const sin = Math.sin(dyaw);
+          this.position.x = group.position.x + px * cos + pz * sin;
+          this.position.z = group.position.z - px * sin + pz * cos;
+          this.yaw += dyaw;
+        }
+        this.platform = { id: this.platform.id, x: group.position.x, y: group.position.y, z: group.position.z, yaw: group.rotation.y };
+      } else {
+        this.platform = null;
+      }
+    }
+
+    const speedBase = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 14 : 6;
+    const speed = this.swimming && !flying ? speedBase * 0.4 : speedBase;
     // Unity-style flythrough moves along the view direction (pitch included)
     const forward = flying
       ? new THREE.Vector3(
@@ -63,23 +110,99 @@ export class Player {
     }
     if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed);
 
-    this.velocity.lerp(move, Math.min(1, dt * 10));
+    this.velocity.lerp(move, Math.min(1, dt * (this.swimming && !flying ? 4 : 10)));
     this.position.addScaledVector(this.velocity, dt);
 
     if (!this.editorMode && !this.noclip) {
-      let groundY = heightAt(this.position.x, this.position.z);
-      const feetY = this.position.y - this.eyeHeight;
-      const step = feetY + 0.65;
-      // analytic collider boxes first (decks, floors), mesh raycast as fallback
-      const walkable = this.view?.walkableAt(this.position.x, this.position.z);
-      if (walkable !== null && walkable !== undefined && walkable > groundY && walkable <= step) {
-        groundY = walkable;
+      this.view?.resolveBlockers?.(this.position, this.eyeHeight);
+
+      const x = this.position.x;
+      const z = this.position.z;
+      const feet = this.position.y - this.eyeHeight;
+      let groundY = heightAt(x, z);
+      let platformId = null;
+      // analytic collider boxes first (decks, floors), mesh raycast as fallback;
+      // a swimmer can haul up onto a low deck (the hand that pulls you out)
+      const reach = this.swimming ? 2.0 : 0.65;
+      const walk = this.view?.walkableAt(x, z);
+      if (walk && walk.top > groundY && walk.top <= feet + reach) {
+        groundY = walk.top;
+        platformId = walk.id;
       }
-      const surface = this.view?.surfaceAt(this.position.x, this.position.z, this.position.y + 0.5);
-      if (surface !== null && surface !== undefined && surface > groundY && surface <= step) {
+      const surface = this.view?.surfaceAt(x, z, this.position.y + 0.5);
+      if (surface !== null && surface !== undefined && surface > groundY && surface <= feet + 0.65) {
         groundY = surface;
+        platformId = null;
       }
-      this.position.y += (groundY + this.eyeHeight - this.position.y) * Math.min(1, dt * 12);
+
+      const water = this.view?.waterAt?.(x, z);
+      const inDeepWater = water && water.level - groundY > 1.15 && feet < water.level - 0.2;
+
+      if (inDeepWater) {
+        if (!this.swimming) {
+          this.swimming = true;
+          this.sinking = false;
+          this.swimTime = 0;
+          this.swimLimit = water.drownAfter ?? Infinity;
+          this.vy = 0;
+          this.platform = null;
+          this.onEvent?.('splash', { x: r2(x), z: r2(z) });
+        }
+        this.swimTime += dt;
+        if (!this.sinking && this.swimTime > this.swimLimit) {
+          this.sinking = true;
+          this.onEvent?.('sinking', {});
+        }
+        if (this.sinking) {
+          // the soul has run dry — the water takes you
+          this.position.y -= dt * 1.1;
+          if (this.position.y < water.level - 7 || this.swimTime > this.swimLimit + 5) {
+            this.onEvent?.('drown', { x: r2(x), z: r2(z) });
+            this.respawn();
+          }
+        } else {
+          // buoyancy holds the head just above the surface
+          this.position.y += (water.level + 0.35 - this.position.y) * Math.min(1, dt * 6);
+        }
+      } else {
+        if (this.swimming) {
+          this.swimming = false;
+          this.sinking = false;
+          this.swimTime = 0;
+        }
+        if (feet <= groundY + 0.35) {
+          // grounded: follow the ground (and remember a platform under us)
+          this.vy = 0;
+          this.position.y += (groundY + this.eyeHeight - this.position.y) * Math.min(1, dt * 12);
+          if (platformId) {
+            if (this.platform?.id !== platformId) {
+              const group = this.view?.getGroup(platformId);
+              this.platform = group
+                ? { id: platformId, x: group.position.x, y: group.position.y, z: group.position.z, yaw: group.rotation.y }
+                : null;
+            }
+          } else {
+            this.platform = null;
+          }
+        } else {
+          // airborne: gravity (the Fall is just a very long version of this)
+          this.platform = null;
+          this.vy = Math.max(this.vy - 24 * dt, -26);
+          this.position.y += this.vy * dt;
+          if (this.position.y - this.eyeHeight <= groundY) {
+            this.position.y = groundY + this.eyeHeight;
+            this.vy = 0;
+          }
+        }
+      }
+    } else {
+      this.vy = 0;
+      this.platform = null;
+      if (this.swimming) {
+        this.swimming = false;
+        this.sinking = false;
+        this.swimTime = 0;
+      }
     }
 
     this.camera.position.copy(this.position);
@@ -91,4 +214,8 @@ export class Player {
 function isTyping() {
   const el = document.activeElement;
   return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+}
+
+function r2(v) {
+  return Math.round(v * 100) / 100;
 }

@@ -263,7 +263,11 @@ export class View {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
     if (!value) return;
-    this.sounds.set(id, this.audio.attach(group, value));
+    const handle = this.audio.attach(group, value);
+    this.sounds.set(id, handle);
+    // an ambient sound built for a non-current zone starts silent
+    const zone = this.store.get(id)?.zone?.name;
+    if (handle.ambient && this.activeZones && zone && zone !== this.currentZone) handle.fade?.(0, 0.01);
   }
 
   applyTerrain(group, value) {
@@ -302,8 +306,9 @@ export class View {
   }
 
   // analytic walkable boxes from `collider` components — the reliable path
-  // for decks, bridges, floors (no raycast, no gaps). Returns highest top
-  // under (x, z) or null. Boxes are entity-relative and yaw-aware.
+  // for decks, bridges, floors (no raycast, no gaps). Returns the highest
+  // {top, id} under (x, z) or null — the id lets the player ride a moving
+  // platform. Boxes are entity-relative and yaw-aware.
   walkableAt(x, z) {
     let best = null;
     for (const [id, comps] of this.store.entities) {
@@ -320,14 +325,85 @@ export class View {
       const lx = wx * cos - wz * sin;
       const lz = wx * sin + wz * cos;
       for (const box of boxes) {
+        if (box.blocker) continue;
         const [bx, by, bz] = box.position ?? [0, 0, 0];
         const [sx, sy, sz] = box.size ?? [1, 0.2, 1];
         if (Math.abs(lx - bx) > sx / 2 || Math.abs(lz - bz) > sz / 2) continue;
         const top = group.position.y + by + sy / 2;
-        if (best === null || top > best) best = top;
+        if (best === null || top > best.top) best = { top, id };
       }
     }
     return best;
+  }
+
+  // water lookup: the first active `water` component whose area contains
+  // (x, z) — {level, drownAfter} or null
+  waterAt(x, z) {
+    for (const comps of this.store.entities.values()) {
+      const water = comps.water;
+      if (!water || !this.isActive(comps)) continue;
+      const area = water.area;
+      if (area) {
+        const [cx, cz] = area.center ?? [0, 0];
+        if (area.radius) {
+          if (Math.hypot(x - cx, z - cz) > area.radius) continue;
+        } else {
+          const [sx, sz] = area.size ?? [100, 100];
+          if (Math.abs(x - cx) > sx / 2 || Math.abs(z - cz) > sz / 2) continue;
+        }
+      }
+      return { level: water.level ?? 0, drownAfter: water.drownAfter };
+    }
+    return null;
+  }
+
+  // blocker boxes (`blocker: true` in a collider) push a body out
+  // horizontally — cave walls, railings. Mutates `position` in place.
+  resolveBlockers(position, eyeHeight) {
+    const feet = position.y - eyeHeight;
+    const head = position.y + 0.2;
+    const r = 0.35;
+    for (const [id, comps] of this.store.entities) {
+      const boxes = comps.collider?.boxes;
+      if (!boxes) continue;
+      const group = this.groups.get(id);
+      if (!group) continue;
+      const yaw = group.rotation.y;
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      for (const box of boxes) {
+        if (!box.blocker) continue;
+        const [bx, by, bz] = box.position ?? [0, 0, 0];
+        const [sx, sy, sz] = box.size ?? [1, 1, 1];
+        const top = group.position.y + by + sy / 2;
+        const bottom = group.position.y + by - sy / 2;
+        if (feet >= top - 0.05 || head <= bottom) continue;
+        const wx = position.x - group.position.x;
+        const wz = position.z - group.position.z;
+        const lx = wx * cos - wz * sin;
+        const lz = wx * sin + wz * cos;
+        const px = sx / 2 + r - Math.abs(lx - bx);
+        const pz = sz / 2 + r - Math.abs(lz - bz);
+        if (px <= 0 || pz <= 0) continue;
+        let ox = 0;
+        let oz = 0;
+        if (px < pz) ox = lx > bx ? px : -px;
+        else oz = lz > bz ? pz : -pz;
+        position.x += ox * cos + oz * sin;
+        position.z += -ox * sin + oz * cos;
+      }
+    }
+  }
+
+  // ambient sounds belong to their zone's mood: fade them with the player's
+  // current zone (positional sounds attenuate by distance on their own)
+  updateAmbience() {
+    for (const [id, handle] of this.sounds) {
+      if (!handle.ambient || !handle.fade) continue;
+      const zone = this.store.get(id)?.zone?.name;
+      if (!this.activeZones || !zone) continue;
+      handle.fade(zone === this.currentZone ? 1 : 0, 1.8);
+    }
   }
 
   // highest solid mesh surface under (x, z), cast from fromY downward —

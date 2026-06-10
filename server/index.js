@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { World } from './world.js';
 import { Sense } from './sense.js';
 import { Intents } from './intents.js';
+import { Triggers } from './triggers.js';
 import { normalizeManifest, placeEntity, zoneAt } from '../shared/zones.js';
 
 const PORT = 8420;
@@ -99,6 +100,9 @@ function applyAndBroadcast(ops, from) {
 
 const intents = new Intents({ world, apply: applyAndBroadcast });
 setInterval(() => intents.tick(0.1), 100);
+
+const triggers = new Triggers({ world, sense, apply: applyAndBroadcast, now: worldTime });
+setInterval(() => triggers.tick(), 250);
 
 // ---- weather sim: lightning events + rain cycles for entities with `weather` ----
 const weatherState = new Map();

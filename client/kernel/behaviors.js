@@ -21,6 +21,14 @@ export class Behaviors {
       if (hasMotion(components)) {
         const [x, y, z] = animatedPosition(components, t, heightAt);
         group.position.set(x, y, z);
+        // path followers face their direction of travel (+z leads)
+        const list0 = Array.isArray(spec) ? spec : [spec];
+        if (list0.some((b) => b.type === 'path')) {
+          const [nx, , nz] = animatedPosition(components, t + 0.4, heightAt);
+          const dx = nx - x;
+          const dz = nz - z;
+          if (dx * dx + dz * dz > 0.0004) group.rotation.y = Math.atan2(dx, dz);
+        }
       }
       const list = Array.isArray(spec) ? spec : [spec];
       for (const b of list) this.run(b, id, group, dt, t);

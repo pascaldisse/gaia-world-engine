@@ -261,10 +261,28 @@
         background: rgba(125, 249, 255, 0.25);
         color: #ffffff;
       }
+      #title {
+        position: fixed;
+        top: 38%;
+        left: 0;
+        right: 0;
+        text-align: center;
+        color: #e8f0ff;
+        font-size: 54px;
+        font-weight: 600;
+        letter-spacing: 0.42em;
+        text-indent: 0.42em;
+        text-shadow: 0 2px 24px rgba(0, 0, 0, 0.9);
+        opacity: 0;
+        transition: opacity 2.4s ease;
+        pointer-events: none;
+        z-index: 15;
+      }
     </style>
   </head>
   <body>
     <div id="hud">GAIA &middot; <span id="status">connecting&hellip;</span> &middot; <span id="count">0</span> entities</div>
+    <div id="title"></div>
     <div id="crosshair"></div>
     <div id="hint"></div>
     <div id="mode">CREATE &middot; Q view W move E rotate R scale &middot; F frame &middot; RMB/V fly &middot; &#8997;drag orbit &middot; &#8984;D dup &middot; &#9003; delete &middot; &#8984;Z undo &middot; Tab to play</div>

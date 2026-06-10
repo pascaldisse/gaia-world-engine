@@ -43,14 +43,14 @@ const net = connect({
   presence: presenceId,
   onSnapshot: (entities, time, manifest) => {
     clock.offset = time - performance.now() / 1000;
-    if (!player.spawned) {
-      for (const comps of Object.values(entities)) {
-        if (comps.spawn) {
-          player.position.set(...(comps.spawn.position ?? [0, 2, 22]));
-          player.yaw = comps.spawn.yaw ?? 0;
-          break;
-        }
+    for (const comps of Object.values(entities)) {
+      if (comps.spawn) {
+        player.spawnPose = { position: comps.spawn.position ?? [0, 2, 22], yaw: comps.spawn.yaw ?? 0 };
+        break;
       }
+    }
+    if (!player.spawned) {
+      player.respawn();
       player.spawned = true;
     }
     // zone set must be known before the snapshot builds, so only the
@@ -105,11 +105,35 @@ function handleEvents(ops) {
       environment.flash(op.data?.intensity ?? 0.8);
       audio.thunder(op.data?.intensity ?? 0.8, op.data?.delay ?? 1.4);
     }
+    if (op.name === 'title') showTitle(op.data?.text ?? '');
     for (const [id, comps] of store.entities) {
       if (comps.sfx?.on === op.name) audio.oneShot(comps.sfx, view.getGroup(id));
     }
   }
 }
+
+const titleEl = document.getElementById('title');
+let titleTimer = null;
+function showTitle(text) {
+  if (!titleEl || !text) return;
+  titleEl.textContent = text;
+  titleEl.style.opacity = '1';
+  clearTimeout(titleTimer);
+  titleTimer = setTimeout(() => {
+    titleEl.style.opacity = '0';
+  }, 5200);
+}
+
+// the body speaks: splash/sinking/drown from the player controller become
+// world events (journaled — agents hear them too) and local presentation
+player.onEvent = (name, data) => {
+  net.send([{ op: 'event', name, data: { ...data, by: presenceId } }]);
+  if (name === 'splash') audio.splash();
+  if (name === 'drown') {
+    environment.dip(2.2);
+    audio.thunder(0.35, 0.1);
+  }
+};
 
 const history = new History(net.send);
 const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl, history });
@@ -192,6 +216,11 @@ renderer.setAnimationLoop(() => {
   zones.update(player.position);
   view.update();
   interact.update(dt, now);
+  // drowning overrides the interaction hint — the water is the message
+  if (player.sinking) hintEl.textContent = 'the water takes you…';
+  else if (player.swimming && player.swimTime > player.swimLimit * 0.5) {
+    hintEl.textContent = 'your strength fades — reach for the boat';
+  }
   editor.update();
   publishPresence(now);
   if (post) post.render();

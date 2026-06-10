@@ -80,6 +80,15 @@ export class AudioEngine {
     this.ensureGraph();
     const ctx = this.listener.context;
 
+    // ambient sounds get a zone gain so the current zone's mood can fade
+    // them in and out (positional sounds attenuate by distance on their own)
+    const makeFade = (gainNode) => (mul, seconds = 1.5) => {
+      const g = gainNode.gain;
+      g.cancelScheduledValues(ctx.currentTime);
+      g.setValueAtTime(g.value, ctx.currentTime);
+      g.linearRampToValueAtTime(mul, ctx.currentTime + Math.max(0.01, seconds));
+    };
+
     if (spec.kind === 'sample') {
       const audio = spec.ambient ? new THREE.Audio(this.listener) : new THREE.PositionalAudio(this.listener);
       if (!spec.ambient) {
@@ -96,6 +105,8 @@ export class AudioEngine {
         audio.play();
       });
       return {
+        ambient: !!spec.ambient,
+        fade: spec.ambient ? (mul, seconds = 1.5) => audio.gain && makeFade(audio.gain)(mul, seconds) : null,
         dispose: () => {
           disposed = true;
           try {
@@ -112,10 +123,13 @@ export class AudioEngine {
     const timers = [];
     let sink;
     let audio = null;
+    let zoneGain = null;
     if (spec.ambient) {
       sink = ctx.createGain();
-      sink.connect(this.master);
-      nodes.push(sink);
+      zoneGain = ctx.createGain();
+      sink.connect(zoneGain);
+      zoneGain.connect(this.master);
+      nodes.push(sink, zoneGain);
     } else {
       audio = new THREE.PositionalAudio(this.listener);
       audio.setRefDistance(spec.refDistance ?? 4);
@@ -152,6 +166,8 @@ export class AudioEngine {
     }
 
     return {
+      ambient: !!spec.ambient,
+      fade: zoneGain ? makeFade(zoneGain) : null,
       dispose: () => {
         timers.forEach(clearInterval);
         for (const node of nodes) {
@@ -276,6 +292,11 @@ export class AudioEngine {
 
   blip(freq = 740, level = 0.16) {
     this.oneShot({ freq, level, attack: 0.015, decay: 0.5, reverb: 0.15 });
+  }
+
+  splash(level = 1) {
+    this.oneShot({ wave: 'noise', lowpass: 1400, sweep: 220, attack: 0.02, decay: 0.9, level: 0.4 * level, reverb: 0.4 });
+    this.oneShot({ freq: 180, freqEnd: 60, attack: 0.01, decay: 0.35, level: 0.18 * level, reverb: 0.2 });
   }
 
   thunder(intensity = 0.7, delay = 1.6) {

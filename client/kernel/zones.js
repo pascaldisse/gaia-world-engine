@@ -30,18 +30,21 @@ export class Zones {
       this.manifest.zones.find((z) => z.bounds)?.name ??
       null;
     if (zone === this.current) return;
+    const first = this.current === null;
     this.current = zone;
     this.view.currentZone = zone;
     this.view.setActiveZones(activeZones(this.manifest, zone));
-    this.applyEnvironment();
+    this.applyEnvironment(first);
+    this.view.updateAmbience();
   }
 
-  // crossing into a zone adopts its mood; a zone without an environment
-  // keeps the previous one (crossfade comes with the first real seam)
-  applyEnvironment() {
+  // crossing into a zone adopts its mood — crossfaded, so a seam is a slow
+  // change of air, never a cut; a zone without an environment keeps the old
+  applyEnvironment(snap = false) {
     for (const comps of this.store.entities.values()) {
       if (comps.environment && comps.zone?.name === this.current) {
-        this.environment.apply(comps.environment);
+        if (snap) this.environment.apply(comps.environment);
+        else this.environment.applyFaded(comps.environment, 3);
         return;
       }
     }

@@ -189,10 +189,18 @@ No manifest = one implicit zone, exactly as before.
   - `patch`: `{layers:[{source: noise|sine|square|sawtooth|triangle, freq, filter, gain, lfo, reverb}]}` — layered ambience as data
   - `sample`: `{url: "assets/file.ogg", loop, rate}` — files served from `world/assets/`
 - `sfx` — `{on: <event>, wave, freq, freqEnd, attack, decay, level, lowpass, sweep, reverb}` — one-shot synth triggered by events, positional at its entity
-- `behavior` — one or an array of `{type: spin|bob|orbit|pulse|flicker, ...}`
+- `behavior` — one or an array of `{type: spin|bob|orbit|path|pulse|flicker, ...}`
+  (`path` follows waypoints at constant speed on the world clock — ferries, patrols)
 - `terrain` — `{seed, size, segments, amplitude, frequency, color}` (per zone)
-- `collider` — `{boxes:[{size, position}]}` — analytic walkable surfaces
-  (entity-relative, yaw-aware); the reliable way to make decks and bridges standable
+- `collider` — `{boxes:[{size, position, blocker?}]}` — analytic surfaces
+  (entity-relative, yaw-aware): walkable tops make decks and bridges standable
+  (and rideable when the entity moves); `blocker: true` boxes push bodies out — walls
+- `water` — `{level, area:{center,size|radius}, drownAfter?}` — swimmable water;
+  with `drownAfter`, swimming exhausts the soul in seconds: sink, `drown` event,
+  respawn at the spawn point
+- `trigger` — `{area, yMin?, yMax?, cooldown?, event?, ops?}` — server-side
+  volume watching every presence; on enter it emits the event and applies the
+  ops (`$now` → world time, `$id` → who entered). World logic as data.
 - `scatter` — `{seed, count, area, instance:{parts}, scale, tilt, density, minHeight, maxHeight}` — instanced copies, terrain-following, noise-clustered
 - `particles` — `{seed, count, size, color, area, motion:{type: drift|rain, ...}}` — animated instanced motes
 - `environment` — `{background, fog, exposure, hemisphere, sun, bloom, audio}` — world mood as one patchable entity

@@ -61,11 +61,81 @@ export class Environment {
     };
   }
 
+  // crossfade into another mood — zone seams use this so a boundary is a
+  // slow change of air, never a cut. Snaps anything that can't interpolate.
+  applyFaded(params, seconds = 2.5) {
+    const from = {
+      background: this.scene.background.clone(),
+      fogColor: this.scene.fog.color.clone(),
+      fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
+      exposure: this.renderer.toneMappingExposure,
+      hemiSky: this.hemi.color.clone(),
+      hemiGround: this.hemi.groundColor.clone(),
+      hemiIntensity: this.hemi.intensity,
+      sunColor: this.sun.color.clone(),
+      sunIntensity: this.sun.intensity,
+    };
+    this.apply(params); // snap to target (sets bloom, buses, fog type)
+    const to = {
+      background: this.scene.background.clone(),
+      fogColor: this.scene.fog.color.clone(),
+      fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
+      exposure: this.renderer.toneMappingExposure,
+      hemiSky: this.hemi.color.clone(),
+      hemiGround: this.hemi.groundColor.clone(),
+      hemiIntensity: this.hemi.intensity,
+      sunColor: this.sun.color.clone(),
+      sunIntensity: this.sun.intensity,
+    };
+    this.fadeState = { from, to, t: 0, seconds };
+  }
+
   flash(intensity = 0.8) {
     this.flashLevel = Math.max(this.flashLevel, intensity * 1.6);
   }
 
+  // dip to dark and back — drowning, dying, hard transitions
+  dip(seconds = 1.6) {
+    this.dipT = 0;
+    this.dipDur = seconds;
+    this.dipBase = this.renderer.toneMappingExposure;
+  }
+
   update(dt) {
+    const fade = this.fadeState;
+    if (fade) {
+      fade.t = Math.min(1, fade.t + dt / fade.seconds);
+      const k = fade.t * fade.t * (3 - 2 * fade.t);
+      this.scene.background.copy(fade.from.background).lerp(fade.to.background, k);
+      this.scene.fog.color.copy(fade.from.fogColor).lerp(fade.to.fogColor, k);
+      if (fade.from.fogDensity !== null && fade.to.fogDensity !== null && this.scene.fog.isFogExp2) {
+        this.scene.fog.density = fade.from.fogDensity + (fade.to.fogDensity - fade.from.fogDensity) * k;
+      }
+      this.renderer.toneMappingExposure = fade.from.exposure + (fade.to.exposure - fade.from.exposure) * k;
+      this.hemi.color.copy(fade.from.hemiSky).lerp(fade.to.hemiSky, k);
+      this.hemi.groundColor.copy(fade.from.hemiGround).lerp(fade.to.hemiGround, k);
+      this.hemi.intensity = fade.from.hemiIntensity + (fade.to.hemiIntensity - fade.from.hemiIntensity) * k;
+      this.sun.color.copy(fade.from.sunColor).lerp(fade.to.sunColor, k);
+      this.sun.intensity = fade.from.sunIntensity + (fade.to.sunIntensity - fade.from.sunIntensity) * k;
+      // keep the flash baseline tracking the fade
+      this.current.background.copy(this.scene.background);
+      this.current.fogColor.copy(this.scene.fog.color);
+      this.current.sunIntensity = this.sun.intensity;
+      this.current.hemiIntensity = this.hemi.intensity;
+      if (fade.t >= 1) this.fadeState = null;
+    }
+
+    if (this.dipDur) {
+      this.dipT += dt;
+      const p = Math.min(1, this.dipT / this.dipDur);
+      const k = Math.sin(p * Math.PI);
+      this.renderer.toneMappingExposure = (this.fadeState ? this.renderer.toneMappingExposure : this.dipBase) * (1 - 0.96 * k);
+      if (p >= 1) {
+        this.renderer.toneMappingExposure = this.dipBase;
+        this.dipDur = 0;
+      }
+    }
+
     if (this.flashLevel <= 0) return;
     this.flashLevel *= Math.exp(-dt * 4.5);
     if (this.flashLevel < 0.01) this.flashLevel = 0;

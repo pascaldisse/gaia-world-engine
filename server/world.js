@@ -23,11 +23,15 @@ export class World {
 
   applyOps(ops) {
     const applied = [];
+    let dirty = false;
     for (const op of ops) {
       const result = this.applyOp(op);
-      if (result) applied.push(result);
+      if (result) {
+        applied.push(result);
+        if (result.op !== 'event') dirty = true;
+      }
     }
-    if (applied.length) this.scheduleSave();
+    if (dirty) this.scheduleSave();
     return applied;
   }
 
@@ -58,6 +62,10 @@ export class World {
       case 'clear': {
         this.entities.clear();
         return { op: 'clear' };
+      }
+      case 'event': {
+        // transient: broadcast + journal, never persisted into entities
+        return { op: 'event', name: op.name ?? 'event', data: op.data ?? null };
       }
       default:
         return null;

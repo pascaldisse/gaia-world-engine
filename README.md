@@ -13,8 +13,10 @@ npm run dev       # world server on :8420 + vite client on :5173
 ```
 
 Open http://localhost:5173, click to enter. WASD move, mouse look, shift run,
-esc to release the pointer. World state persists in `world/world.json`
-(delete it to re-seed from `world/seed.json`).
+esc to release the pointer. **E** grabs the entity under the crosshair (scroll
+to push/pull, E again to drop) — carries stream live to every client. World
+state persists in `world/world.json` (delete it to re-seed from
+`world/seed.json`).
 
 ## Patch the world while it runs
 
@@ -49,6 +51,24 @@ Or POST raw ops to `http://localhost:8420/op`:
   - `{type:"orbit", center, radius, speed, height, phase, ground}` (`ground:true` follows terrain)
   - `{type:"pulse", speed, amount}`
   - `{type:"flicker", amount}` (needs a `light`)
+
+## Agents sense & act (no eyes needed)
+
+```sh
+node tools/agent.mjs look            # text viewport from the avatar's pose
+node tools/agent.mjs map 0 0 25      # ASCII terrain + entity map
+node tools/agent.mjs describe crystal
+node tools/agent.mjs query --has sound
+node tools/agent.mjs check           # semantic lint: floaters, overlaps
+node tools/agent.mjs events 0        # op journal tail
+node tools/agent.mjs move 0 6        # avatar walks there; returns look frame
+node tools/agent.mjs walk 1 0 3 | face crystal | grab firefly-1 | drop | say "hi"
+```
+
+The first act/look spawns a visible glowing avatar (`agent-claude`) that
+travels at finite speed over the terrain — watch it from the client. HTTP:
+`GET /sense/{look,map,describe,query,check}`, `GET /events?since=`,
+`POST /act {intent, as, ...}`.
 
 ## Architecture
 

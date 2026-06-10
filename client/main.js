@@ -11,6 +11,7 @@ import { Panel } from './kernel/panel.js';
 import { Palette } from './kernel/palette.js';
 import { Outliner } from './kernel/outliner.js';
 import { Gizmos } from './kernel/gizmos.js';
+import { EventConsole } from './kernel/console.js';
 import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
 import { Zones } from './kernel/zones.js';
@@ -105,10 +106,11 @@ const net = connect({
       ]);
     }
   },
-  onOps: (ops) => {
+  onOps: (ops, from) => {
     store.applyOps(ops);
     countEl.textContent = store.entities.size;
     panel.refresh();
+    econsole.add(ops, from);
     handleEvents(ops);
   },
   onStatus: (s) => {
@@ -217,11 +219,16 @@ player.onEvent = (name, data) => {
   if (name === 'void') environment.dip(1.4);
 };
 
+// L toggles the world log: the op stream, live (?log=1 starts it open)
+const econsole = new EventConsole({ el: document.getElementById('console') });
+if (new URLSearchParams(location.search).has('log')) econsole.toggle();
+
 const history = new History(net.send);
 const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl, history });
 const panel = new Panel({
   el: document.getElementById('panel'),
   store,
+  view,
   send: net.send,
   history,
   onDuplicate: (id) => editor.duplicate(id),
@@ -270,7 +277,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = { store, view, zones, gizmos, outliner, editor, panel, environment, player, net };
+window.gaia = { store, view, zones, gizmos, outliner, editor, panel, econsole, environment, player, audio, net };
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };

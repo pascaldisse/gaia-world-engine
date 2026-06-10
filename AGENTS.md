@@ -43,6 +43,10 @@ Screenshot discipline:
 
 - Senses ARE the right tool for spatial/logic verification: positions,
   routes, triggers firing (check `/events`), lint (`check`).
+- `GET /schema` documents every component: field meanings, sane ranges,
+  enums. Read it before inventing values.
+- Deep-link extras: `&log=1` opens the world log drawer (the op stream,
+  visible in screenshots), `&mute=1` keeps your tab silent.
 - Kill the dev server BEFORE deleting `world.json` — its debounced save
   (weather merges dirty it every ~1s) resurrects old state.
 - The op journal caps at 2000 entries and presence updates flood it; query

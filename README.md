@@ -67,6 +67,13 @@ URL starts a tab muted).
   sound ranges, ferry routes with direction arrows, scatter footprints, zone
   bounds. The selected entity always shows its own; the chips at the top of
   the outliner switch whole categories on.
+- The **inspector** is schema-aware: every component shows what it means,
+  every field has a tooltip and a sane slider range, and the add menu
+  covers the whole vocabulary. A runtime strip shows the entity's zone,
+  whether it is streamed in, and where the kernel actually has it.
+- **L** opens the **world log**: the live op stream — watch triggers fire,
+  weather write the sky, agents edit — filterable, with presence noise
+  hidden by default.
 - The inspector panel auto-generates sliders, color pickers, and dropdowns
   from the entity's JSON (raw JSON tab included). **⌘D** duplicates,
   **⌫** deletes, **⌘Z/⌘⇧Z** undo/redo your own edits as inverse ops.
@@ -146,6 +153,9 @@ node tools/agent.mjs query --has sound
 node tools/agent.mjs check           # semantic lint: floaters, overlaps, dark lights
 node tools/agent.mjs events 0        # tail the op journal
 ```
+
+`GET /schema` returns the full component vocabulary with docs, ranges, and
+enums — the same data the inspector builds its UI from.
 
 Acting is embodied. The first intent spawns a visible glowing avatar that
 travels at finite speed over the terrain — watch it walk from the client:

@@ -8,6 +8,7 @@ import { Sense } from './sense.js';
 import { Intents } from './intents.js';
 import { Triggers } from './triggers.js';
 import { normalizeManifest, placeEntity, zoneAt } from '../shared/zones.js';
+import { SCHEMA } from '../shared/schema.js';
 
 const PORT = 8420;
 // GAIA_WORLD points the engine at any world project directory (separate repo);
@@ -237,6 +238,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/sense/check') {
       return text(res, sense.check());
+    }
+    if (req.method === 'GET' && url.pathname === '/schema') {
+      // the component vocabulary, self-documented — agents read this
+      // instead of guessing what a field means or what values are sane
+      return json(res, SCHEMA);
     }
     if (req.method === 'GET' && url.pathname === '/screenshot') {
       if (![...wss.clients].some((c) => c.readyState === WebSocket.OPEN)) {

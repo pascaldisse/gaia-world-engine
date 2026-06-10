@@ -145,6 +145,19 @@ seen or reached; no gates, no loading, ever. Driven by
       opens creator mode without keyboard input — agents can screenshot the
       editor; people can bookmark a debugging vantage.
 
+### M11 — Understand at a glance (forced by: tuning values means knowing what they mean)
+
+- [x] Component schema as data (`shared/schema.js`): docs, per-field ranges,
+      enums, defaults for every component. The inspector reads it (doc lines,
+      tooltips, correct sliders, complete add-component menu); the server
+      serves it (`GET /schema`) so agents stop guessing.
+- [x] Inspector runtime strip: zone, built / building / data-only, live
+      kernel position — what the renderer knows vs what the data says.
+- [x] World log (`L`, or `?log=1`): the op stream live — triggers firing,
+      weather writing, agents editing — with text filter, events-only and
+      presence-noise toggles.
+- [x] Audio mute: `M` (persists per browser), `?mute=1` for agent work tabs.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

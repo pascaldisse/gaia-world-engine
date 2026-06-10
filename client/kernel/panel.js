@@ -1,22 +1,11 @@
+import { SCHEMA, componentDefaults, fieldInfo } from '../../shared/schema.js';
+
 // The inspector is a lens over the entity document: controls are generated
 // from the JSON itself, so every component — present or future — is editable
-// with zero per-component UI code.
+// with zero per-component UI code. The schema (shared/schema.js) supplies
+// meaning: docs, real ranges, enums, and the full add-component menu.
 
-const ENUMS = {
-  'mesh.shape': ['box', 'sphere', 'cylinder', 'cone', 'torus', 'octahedron', 'icosahedron', 'plane'],
-  'light.type': ['point', 'spot', 'directional'],
-  'behavior.type': ['spin', 'bob', 'orbit', 'pulse', 'flicker'],
-  'sound.kind': ['hum', 'chime', 'patch', 'sample'],
-  'sound.wave': ['sine', 'square', 'sawtooth', 'triangle'],
-  'sound.source': ['noise', 'sine', 'square', 'sawtooth', 'triangle'],
-  'sound.target': ['gain', 'freq', 'filter'],
-  'scatter.shape': ['circle', 'rect'],
-  'particles.type': ['drift', 'rain'],
-  preset: ['glow', 'flame', 'water', 'hologram'],
-  'sfx.on': ['lightning', 'grab', 'drop', 'say', 'intent'],
-  'sfx.wave': ['sine', 'square', 'sawtooth', 'triangle', 'noise'],
-};
-
+// fallback ranges for keys the schema doesn't know, by bare field name
 const RANGES = {
   position: [-80, 80], rotation: [-3.1416, 3.1416], scale: [0.05, 8], offset: [-10, 10],
   intensity: [0, 120], distance: [0, 120], emissiveIntensity: [0, 6],
@@ -35,19 +24,13 @@ const RANGES = {
   glowStrength: [0, 4], lines: [2, 120], minHeight: [-20, 20], maxHeight: [-20, 20],
 };
 
-const COMPONENT_DEFAULTS = {
-  transform: { position: [0, 0, 0] },
-  ground: { offset: 0 },
-  mesh: { parts: [{ shape: 'box', size: [1, 1, 1], color: '#9aa0a6' }] },
-  light: { type: 'point', color: '#ffffff', intensity: 20, distance: 30 },
-  sound: { kind: 'hum', freq: 110, level: 0.2 },
-  behavior: { type: 'spin', speed: 1 },
-};
+const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, send, history, onDuplicate, onDelete }) {
+  constructor({ el, store, view, send, history, onDuplicate, onDelete }) {
     this.el = el;
     this.store = store;
+    this.view = view;
     this.send = send;
     this.history = history;
     this.onDuplicate = onDuplicate;
@@ -119,6 +102,20 @@ export class Panel {
     );
     this.el.append(head);
 
+    // runtime: what the kernel KNOWS vs what the data says — streamed-in or
+    // data-only, which zone owns it, where it actually is right now
+    if (this.view) {
+      const group = this.view.getGroup(this.id);
+      const built = group ? 'built' : this.view.isActive(comps) ? 'building…' : 'data-only (zone not streamed)';
+      const pos = group ? group.position.toArray() : comps.transform?.position;
+      const bits = [comps.zone?.name ? `zone ${comps.zone.name}` : 'unzoned', built];
+      // a bodiless entity's group sits at the origin — that's not a position
+      if (pos && (comps.transform?.position || pos.some((v) => v !== 0))) {
+        bits.push(`at ${pos.map((v) => (Math.round(v * 10) / 10).toFixed(1)).join(', ')}`);
+      }
+      this.el.append(div('runtime', bits.join(' · ')));
+    }
+
     const tabs = div('panel-tabs');
     for (const tab of ['fields', 'json']) {
       const b = button(tab, () => {
@@ -140,9 +137,12 @@ export class Panel {
     for (const name of Object.keys(comps)) {
       const section = div('panel-section');
       const head = div('section-head');
-      head.append(span('section-name', name));
+      const title = span('section-name', name);
+      if (SCHEMA[name]?.doc) title.title = SCHEMA[name].doc;
+      head.append(title);
       head.append(button('×', () => this.setComponent(name, null)));
       section.append(head);
+      if (SCHEMA[name]?.doc) section.append(div('section-doc', SCHEMA[name].doc));
       const work = structuredClone(comps[name]);
       const onEdit = () => this.queueCommit(name, work);
       const content = div('section-body');
@@ -170,9 +170,15 @@ export class Panel {
   // renders holder[key] into parent; mutates holder in place and calls onEdit
   renderValue(parent, holder, key, comp, onEdit, onRestructure, label = null) {
     const value = holder[key];
+    const info = fieldInfo(comp, key);
+    const labelEl = () => {
+      const el = span('label', label ?? key);
+      if (info?.doc) el.title = info.doc;
+      return el;
+    };
 
     if (typeof value === 'number') {
-      parent.append(this.numberRow(label ?? key, value, key, (v) => {
+      parent.append(this.numberRow(labelEl(), value, comp, key, (v) => {
         holder[key] = v;
         onEdit();
       }));
@@ -180,7 +186,7 @@ export class Panel {
     }
     if (typeof value === 'boolean') {
       const row = div('row');
-      row.append(span('label', label ?? key));
+      row.append(labelEl());
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = value;
@@ -194,8 +200,8 @@ export class Panel {
     }
     if (typeof value === 'string') {
       const row = div('row');
-      row.append(span('label', label ?? key));
-      const options = ENUMS[`${comp}.${key}`] ?? ENUMS[key];
+      row.append(labelEl());
+      const options = info?.enum;
       if (/^#[0-9a-f]{3,8}$/i.test(value)) {
         const input = document.createElement('input');
         input.type = 'color';
@@ -230,7 +236,7 @@ export class Panel {
     if (Array.isArray(value)) {
       if (value.length && value.length <= 4 && value.every((n) => typeof n === 'number')) {
         const row = div('row');
-        row.append(span('label', label ?? key));
+        row.append(labelEl());
         const wrap = div('vec');
         value.forEach((n, i) => {
           const input = document.createElement('input');
@@ -248,7 +254,7 @@ export class Panel {
         return;
       }
       const block = div('block');
-      block.append(span('label', label ?? key));
+      block.append(labelEl());
       value.forEach((item, i) => {
         const itemHead = div('item-head');
         itemHead.append(span('item-label', `${i}`));
@@ -280,10 +286,13 @@ export class Panel {
     }
   }
 
-  numberRow(label, value, rangeKey, onChange) {
+  numberRow(labelEl, value, comp, rangeKey, onChange) {
     const row = div('row');
-    row.append(span('label', label));
-    const [min, max] = RANGES[rangeKey] ?? (value >= 0 ? [0, Math.max(1, value * 4)] : [-Math.abs(value) * 4, Math.abs(value) * 4]);
+    row.append(labelEl);
+    const [min, max] =
+      fieldInfo(comp, rangeKey)?.range ??
+      RANGES[rangeKey] ??
+      (value >= 0 ? [0, Math.max(1, value * 4)] : [-Math.abs(value) * 4, Math.abs(value) * 4]);
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = min;
@@ -336,9 +345,10 @@ export class Panel {
   }
 }
 
-function div(cls) {
+function div(cls, text) {
   const el = document.createElement('div');
   el.className = cls;
+  if (text !== undefined) el.textContent = text;
   return el;
 }
 

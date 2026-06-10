@@ -27,6 +27,8 @@ Screenshot discipline:
 - Low-alpha standard materials (`opacity` < ~0.15) are effectively invisible
   in dark scenes. For light shafts/halos use the additive presets (`beam`,
   `glow`) — that is what they are for.
+- ALWAYS open your work tabs with `&mute=1` — the player may be sitting at
+  the machine, and your verification session must not make noise.
 - You cannot press keys in the browser. To screenshot the EDITOR (outliner,
   gizmos, selection) open a deep-link instead:
   `?create=1&select=<id>&gizmos=colliders,triggers,water,lights,sounds,paths,areas,zones&pos=x,y,z&yaw=r&pitch=r`

@@ -141,6 +141,23 @@ function handleEvents(ops) {
   }
 }
 
+// M mutes (persists per browser); ?mute=1 starts muted — agents open their
+// work tabs with it so verification never makes noise on the player's machine
+const mutedEl = document.getElementById('muted');
+function applyMuted(on, persist = true) {
+  audio.setMuted(on);
+  mutedEl.style.display = on ? '' : 'none';
+  if (persist) localStorage.setItem('gaia-muted', on ? '1' : '0');
+}
+if (new URLSearchParams(location.search).has('mute')) applyMuted(true, false);
+else if (localStorage.getItem('gaia-muted') === '1') applyMuted(true, false);
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyM' || e.metaKey || e.ctrlKey || e.altKey) return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
+  applyMuted(!audio.muted);
+});
+
 // ~ toggles the debug panel: live look-dev knobs
 const debugEl = document.getElementById('debug');
 document.addEventListener('keydown', (e) => {

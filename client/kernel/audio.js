@@ -12,11 +12,23 @@ export class AudioEngine {
     camera.add(this.listener);
     this.buffers = new Map();
     this.master = null;
+    this.muted = false;
     document.addEventListener('click', () => {
       const ctx = this.listener.context;
       if (ctx.state === 'suspended') ctx.resume();
       this.ensureGraph();
     });
+  }
+
+  // the mute sits AFTER the whole graph (master → compressor → mute → out),
+  // so world data that sets bus levels can't accidentally unmute the player
+  setMuted(on) {
+    this.muted = on;
+    if (!this.muteGain) return; // graph not built yet — applied on build
+    const gain = this.muteGain.gain;
+    const t = this.listener.context.currentTime;
+    gain.cancelScheduledValues(t);
+    gain.setTargetAtTime(on ? 0 : 1, t, 0.03);
   }
 
   ensureGraph() {
@@ -31,7 +43,10 @@ export class AudioEngine {
     this.listener.gain.disconnect();
     this.listener.gain.connect(this.master);
     this.master.connect(this.compressor);
-    this.compressor.connect(ctx.destination);
+    this.muteGain = ctx.createGain();
+    this.muteGain.gain.value = this.muted ? 0 : 1;
+    this.compressor.connect(this.muteGain);
+    this.muteGain.connect(ctx.destination);
 
     const ir = ctx.createBuffer(2, ctx.sampleRate * 3.2, ctx.sampleRate);
     for (let ch = 0; ch < 2; ch++) {

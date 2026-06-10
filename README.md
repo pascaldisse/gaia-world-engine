@@ -48,7 +48,9 @@ Open http://localhost:5173 and click to enter.
 **E** grabs the entity under the crosshair (scroll to push/pull, E again to
 drop) — carries stream live to every client. **V** toggles noclip flight,
 **G** toggles game mode (editing and HUD off — worlds whose `spawn` has
-`gameMode: true` start locked), **~** opens the debug panel (brightness).
+`gameMode: true` start locked), **~** opens the debug panel (brightness),
+**M** mutes the audio (the choice persists per browser; `?mute=1` in the
+URL starts a tab muted).
 
 **Creator mode** — **Tab** toggles it, with Unity-style controls:
 

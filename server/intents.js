@@ -1,4 +1,4 @@
-import { terrainHeight } from '../shared/noise.js';
+import { routeHeight, terrainEntries } from '../shared/terrainmap.js';
 
 const DEFAULT_AGENT = 'agent-claude';
 
@@ -13,11 +13,8 @@ export class Intents {
     this.holding = new Map();
   }
 
-  terrainParams() {
-    for (const comps of this.world.entities.values()) {
-      if (comps.terrain) return comps.terrain;
-    }
-    return null;
+  groundAt(x, z) {
+    return routeHeight(terrainEntries(this.world.entities), x, z);
   }
 
   ensureAvatar(id) {
@@ -55,7 +52,7 @@ export class Intents {
   positionOf(id) {
     const comps = this.world.entities.get(id);
     const [x, y, z] = comps?.transform?.position ?? [0, 0, 0];
-    if (comps?.ground) return [x, terrainHeight(x, z, this.terrainParams()) + (comps.ground.offset ?? 0), z];
+    if (comps?.ground) return [x, this.groundAt(x, z) + (comps.ground.offset ?? 0), z];
     return [x, y, z];
   }
 

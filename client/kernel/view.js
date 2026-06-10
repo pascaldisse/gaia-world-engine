@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { buildTerrainMesh, heightAt, setActiveTerrain } from './terrain.js';
+import { buildTerrainMesh, heightAt, registerTerrain, unregisterTerrain } from './terrain.js';
 import { makeGeometry, makePartMaterial } from './geometry.js';
 import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
@@ -18,7 +18,53 @@ export class View {
     this.sounds = new Map();
     this.particleSystems = new Map();
     this.suppressed = new Set();
+    // zone streaming: null = no manifest, everything builds (single-zone worlds)
+    this.activeZones = null;
+    this.currentZone = null;
+    this.buildQueue = [];
+    this.buildSet = new Set();
+    this.removeQueue = [];
     store.onChange((event) => this.handle(event));
+  }
+
+  // entities outside the active zone set stay data-only — no meshes, no
+  // sounds, no lights; they build when their zone streams in
+  isActive(comps) {
+    if (!this.activeZones) return true;
+    const zone = comps?.zone?.name;
+    return !zone || this.activeZones.has(zone);
+  }
+
+  setActiveZones(set) {
+    this.activeZones = set;
+    for (const [id, comps] of this.store.entities) {
+      const built = this.groups.has(id);
+      const want = this.isActive(comps);
+      if (want && !built) this.queueBuild(id);
+      else if (!want && built) this.removeQueue.push(id);
+    }
+  }
+
+  queueBuild(id) {
+    if (this.buildSet.has(id)) return;
+    this.buildSet.add(id);
+    this.buildQueue.push(id);
+  }
+
+  // time-sliced streaming: a zone coming in never drops a frame — a few
+  // entities build per tick (scatters are the heavy ones)
+  update() {
+    let budget = 4;
+    while (budget > 0 && this.removeQueue.length) {
+      this.remove(this.removeQueue.shift());
+      budget--;
+    }
+    while (budget > 0 && this.buildQueue.length) {
+      const id = this.buildQueue.shift();
+      this.buildSet.delete(id);
+      if (!this.groups.has(id) && this.store.get(id)) this.build(id);
+      budget--;
+    }
   }
 
   handle(event) {
@@ -68,7 +114,7 @@ export class View {
   build(id) {
     this.remove(id);
     const components = this.store.get(id);
-    if (!components) return;
+    if (!components || !this.isActive(components)) return;
     const group = new THREE.Group();
     group.name = id;
     if (id === this.ownPresence) group.visible = false; // don't render your own head
@@ -109,7 +155,10 @@ export class View {
         this.applyParticles(id, group, value);
         break;
       case 'environment':
-        this.environment?.apply(value);
+        // in a zoned world, only the current zone's mood applies
+        if (!this.activeZones || !components.zone || components.zone.name === this.currentZone) {
+          this.environment?.apply(value);
+        }
         break;
     }
   }
@@ -224,13 +273,12 @@ export class View {
         group.remove(child);
       }
     }
-    if (!value) {
-      setActiveTerrain(null);
-      return;
-    }
+    unregisterTerrain(group);
+    if (!value) return;
     const mesh = buildTerrainMesh(value);
     mesh.userData.kind = 'terrain';
     group.add(mesh);
+    registerTerrain(group, value);
   }
 
   resnapGrounded() {
@@ -247,6 +295,7 @@ export class View {
     this.sounds.delete(id);
     this.lights.delete(id);
     this.particleSystems.delete(id);
+    unregisterTerrain(group);
     disposeObject(group);
     this.scene.remove(group);
     this.groups.delete(id);

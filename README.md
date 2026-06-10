@@ -5,6 +5,14 @@ Worlds are separate projects: set `GAIA_WORLD=/path/to/project/world` before
 `prefabs.json`, `assets/`, and persists its `world.json` there. Without it,
 the engine's own `world/` is used.
 
+A world with a `manifest.json` is **zoned**: `{"zones": [{name, origin, yaw,
+bounds: {center, radius}, neighbors, always}]}` assembles per-zone
+`zones/<name>/seed.json` files (authored zone-local) into one coherent
+world-space. Clients stream invisibly — only the current zone, its neighbors,
+and `always` zones (backdrops) are built, a few entities per frame; agents'
+senses scope the same way. Each zone may carry its own `terrain` and
+`environment`. No manifest = one implicit zone, exactly as before.
+
 Half game, half engine. The world is a live database of entity documents; every
 viewer, tool, and agent is a client that patches it over a shared protocol. The
 3D client (three.js, WebGPU with WebGL fallback) renders whatever the world

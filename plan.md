@@ -80,19 +80,23 @@ position. Streaming is invisible — neighbors are resident before they can be
 seen or reached; no gates, no loading, ever. Driven by
 `../Tomb-of-the-Gods-GAIA/plan.md`.
 
-- [ ] `world/manifest.json` — zones: `{name, origin, yaw, neighbors, visible, always}`;
+- [x] `world/manifest.json` — zones: `{name, origin, yaw, neighbors, bounds, always}`;
       no manifest = one implicit zone (current worlds keep working)
-- [ ] Per-zone `zones/<name>/seed.json` + per-zone runtime state file; server
-      loads all zones, stamps each entity's zone, routes ops by entity id
-- [ ] Client zone subscription: current + neighbors + always-zones; build/unbuild
-      groups on set change; seam/bounds crossing switches the current zone
-- [ ] Time-sliced build/unbuild: entity construction spread across frames so a
-      zone coming in never drops a frame
-- [ ] Backdrop zones: always-loaded low-detail far scenery (the unreachable mountains)
-- [ ] Multi-terrain: terrain registry with world-space bounds; `heightAt` routes by
-      containment; zones may have no terrain at all (interiors)
-- [ ] Per-zone `environment` + ambience, crossfaded on zone switch
-- [ ] Senses zone-scoped by avatar position — agents stream the same way players do
+- [x] Per-zone `zones/<name>/seed.json`, authored zone-local; the server places
+      each zone (origin + yaw via `shared/zones.js placeEntity`) and stamps a
+      `zone` component; runtime spawns are stamped by position. Runtime state
+      stays one `world.json` until the M9 `reset` op wants per-zone files.
+- [x] Client zone subscription: current + neighbors + always-zones; entities
+      outside the set stay data-only; bounds crossing switches the current zone
+- [x] Time-sliced build/unbuild: a few entities per frame so a zone coming in
+      never drops a frame
+- [x] Backdrop zones (`always: true`): far scenery at true world positions
+- [x] Multi-terrain: registry routes `heightAt` by containment, nearest terrain
+      extrapolates outside all bounds (single-terrain worlds unchanged); true
+      no-ground interiors are M8 (void floor + blockers)
+- [ ] Crossfade environment/ambience on zone switch (snap-applies per zone
+      today; fade lands with the first real seam, G2)
+- [x] Senses zone-scoped by observer position — agents stream like players do
 
 ### M8 — Bodies in space (forced by: the boat crossing, the tunnels)
 
@@ -122,6 +126,9 @@ seen or reached; no gates, no loading, ever. Driven by
 
 ## Known gaps (accepted for now)
 
+- Zone stamps on moving presences/avatars don't update when they cross zone
+  bounds at runtime — re-stamping lands with seams/triggers (M9). Harmless
+  while content lives in one playable zone.
 - Carried grounded entities appear ground-snapped to other clients mid-carry.
 - Screenshots require a visible (non-backgrounded) browser tab — browsers
   pause the render loop in background tabs.

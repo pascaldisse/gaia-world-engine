@@ -11,6 +11,7 @@ import { Panel } from './kernel/panel.js';
 import { Palette } from './kernel/palette.js';
 import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
+import { Zones } from './kernel/zones.js';
 import { updateParticles } from './kernel/particles.js';
 import { connect, clientId } from './kernel/net.js';
 
@@ -27,6 +28,7 @@ const effects = new Effects({ scene, audio });
 const environment = new Environment({ renderer, scene, hemi, sun, post, audio });
 const view = new View({ scene, store, audio, effects, environment });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
+const zones = new Zones({ store, view, environment });
 
 // world clock: synced from the server so motion agrees across all observers
 const clock = { offset: 0, now: () => clock.offset + performance.now() / 1000 };
@@ -39,12 +41,10 @@ let pendingShot = null;
 const net = connect({
   url: `ws://${location.hostname}:8420`,
   presence: presenceId,
-  onSnapshot: (entities, time) => {
+  onSnapshot: (entities, time, manifest) => {
     clock.offset = time - performance.now() / 1000;
-    store.applySnapshot(entities);
-    countEl.textContent = store.entities.size;
     if (!player.spawned) {
-      for (const comps of store.entities.values()) {
+      for (const comps of Object.values(entities)) {
         if (comps.spawn) {
           player.position.set(...(comps.spawn.position ?? [0, 2, 22]));
           player.yaw = comps.spawn.yaw ?? 0;
@@ -53,6 +53,12 @@ const net = connect({
       }
       player.spawned = true;
     }
+    // zone set must be known before the snapshot builds, so only the
+    // player's surroundings (plus backdrops) turn into meshes
+    zones.setManifest(manifest);
+    zones.update(player.position);
+    store.applySnapshot(entities);
+    countEl.textContent = store.entities.size;
     if (!store.get(presenceId)) {
       net.send([
         {
@@ -183,6 +189,8 @@ renderer.setAnimationLoop(() => {
   environment.update(dt);
   for (const state of view.particleSystems.values()) updateParticles(state, t);
   player.update(dt);
+  zones.update(player.position);
+  view.update();
   interact.update(dt, now);
   editor.update();
   publishPresence(now);

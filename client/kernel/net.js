@@ -14,7 +14,7 @@ export function connect({ url, presence, onSnapshot, onOps, onStatus, onScreensh
     };
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {}, msg.time ?? 0);
+      if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {}, msg.time ?? 0, msg.manifest ?? null);
       else if (msg.type === 'ops') onOps?.(msg.ops ?? [], msg.from);
       else if (msg.type === 'screenshot-request') onScreenshot?.(msg.id);
     };

@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { World } from './world.js';
 import { Sense } from './sense.js';
 import { Intents } from './intents.js';
+import { normalizeManifest, placeEntity, zoneAt } from '../shared/zones.js';
 
 const PORT = 8420;
 // GAIA_WORLD points the engine at any world project directory (separate repo);
@@ -18,18 +19,41 @@ const seedFile = path.join(worldDir, 'seed.json');
 const assetsDir = path.join(worldDir, 'assets');
 console.log(`[gaia] world dir: ${worldDir}`);
 
+// zoned world: manifest.json assembles independently authored zone seeds
+// into one world-space; without it the world is a single implicit zone
+let manifest = null;
+try {
+  manifest = normalizeManifest(JSON.parse(fs.readFileSync(path.join(worldDir, 'manifest.json'), 'utf8')));
+} catch {
+  manifest = null;
+}
+
 const world = new World(worldFile);
-if (!world.load() && fs.existsSync(seedFile)) {
-  const seedOps = JSON.parse(fs.readFileSync(seedFile, 'utf8'));
-  world.applyOps(seedOps);
-  console.log(`[gaia] seeded world with ${world.entities.size} entities`);
+if (!world.load()) {
+  if (manifest) {
+    for (const zone of manifest.zones) {
+      const zoneSeed = path.join(worldDir, 'zones', zone.name, 'seed.json');
+      if (!fs.existsSync(zoneSeed)) continue;
+      const ops = JSON.parse(fs.readFileSync(zoneSeed, 'utf8')).map((op) =>
+        op.op === 'spawn'
+          ? { ...op, components: { ...placeEntity(op.components ?? {}, zone), zone: { name: zone.name } } }
+          : op,
+      );
+      world.applyOps(ops);
+    }
+    console.log(`[gaia] seeded ${world.entities.size} entities from ${manifest.zones.length} zones`);
+  } else if (fs.existsSync(seedFile)) {
+    const seedOps = JSON.parse(fs.readFileSync(seedFile, 'utf8'));
+    world.applyOps(seedOps);
+    console.log(`[gaia] seeded world with ${world.entities.size} entities`);
+  }
 }
 
 // world clock — one time base for every observer
 const bootTime = Date.now();
 const worldTime = () => (Date.now() - bootTime) / 1000;
 
-const sense = new Sense(world, worldTime);
+const sense = new Sense(world, worldTime, manifest);
 
 // ---- prefab library: brushes for the palette, addable by agents at runtime ----
 const prefabsFile = path.join(worldDir, 'prefabs.json');
@@ -55,6 +79,16 @@ function record(applied, from) {
 }
 
 function applyAndBroadcast(ops, from) {
+  // runtime spawns inherit the zone their position lands in (presences,
+  // editor stamps, agent avatars) so streaming clients know what to build
+  if (manifest) {
+    for (const op of ops) {
+      if (op.op !== 'spawn' || !op.components || op.components.zone) continue;
+      const p = op.components.transform?.position;
+      const zone = p ? zoneAt(manifest, p[0], p[2]) : null;
+      if (zone) op.components.zone = { name: zone };
+    }
+  }
   const applied = world.applyOps(ops);
   if (applied.length) {
     record(applied, from);
@@ -122,7 +156,7 @@ const server = http.createServer(async (req, res) => {
   const q = Object.fromEntries(url.searchParams);
   try {
     if (req.method === 'GET' && url.pathname === '/world') {
-      return json(res, world.snapshot());
+      return json(res, { ...world.snapshot(), manifest });
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       const since = Number(q.since ?? 0);
@@ -246,7 +280,7 @@ function nums(q, keys) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (socket) => {
-  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), ...world.snapshot() }));
+  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest, ...world.snapshot() }));
   socket.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);

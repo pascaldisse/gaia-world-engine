@@ -1,23 +1,29 @@
-import { terrainHeight } from '../shared/noise.js';
 import { animatedPosition } from '../shared/motion.js';
+import { routeHeight, terrainEntries } from '../shared/terrainmap.js';
+import { zoneAt, activeZones } from '../shared/zones.js';
 
 // Perception without pixels: the same world documents the renderer draws are
 // summarized into compact text frames, queries, maps, and sanity checks.
 export class Sense {
-  constructor(world, now = () => 0) {
+  constructor(world, now = () => 0, manifest = null) {
     this.world = world;
     this.now = now;
-  }
-
-  terrainParams() {
-    for (const comps of this.world.entities.values()) {
-      if (comps.terrain) return comps.terrain;
-    }
-    return null;
+    this.manifest = manifest;
   }
 
   groundAt(x, z) {
-    return terrainHeight(x, z, this.terrainParams());
+    return routeHeight(terrainEntries(this.world.entities), x, z);
+  }
+
+  // agents stream the same way players do: a zoned world scopes perception
+  // to the active zone set around the observer
+  zoneSetAt(x, z) {
+    if (!this.manifest) return null;
+    return activeZones(this.manifest, zoneAt(this.manifest, x, z));
+  }
+
+  inZoneSet(set, comps) {
+    return !set || !comps.zone || set.has(comps.zone.name);
   }
 
   positionOf(comps) {
@@ -41,9 +47,11 @@ export class Sense {
     const fz = -Math.cos(yaw);
     const seen = [];
     const heard = [];
+    const zset = this.zoneSetAt(x, z);
 
     for (const [id, comps] of this.world.entities) {
       if (id === as || comps.terrain) continue;
+      if (!this.inZoneSet(zset, comps)) continue;
       const [ex, ey, ez] = this.positionOf(comps);
       const dx = ex - x;
       const dy = ey - y;
@@ -174,8 +182,10 @@ export class Sense {
       );
     }
     const legend = {};
+    const zset = this.zoneSetAt(x, z);
     for (const [id, comps] of this.world.entities) {
       if (comps.terrain) continue;
+      if (!this.inZoneSet(zset, comps)) continue;
       const [ex, , ez] = this.positionOf(comps);
       const col = Math.round((ex - (x - radius)) / step);
       const row = Math.round((ez - (z - radius)) / step);
@@ -232,23 +242,22 @@ export class Sense {
       }
       if (!lit) problems.push(`${id}'s light reaches nothing within ${reach}m`);
     }
-    // walkability: how much of the local terrain is too steep
-    const params = this.terrainParams();
-    if (params) {
+    // walkability: how much of each terrain's heart is too steep
+    for (const entry of terrainEntries(this.world.entities)) {
       let steep = 0;
       const samples = 28;
-      const extent = 100;
+      const extent = Math.min(100, (entry.params.size ?? 400) / 2);
       for (let i = 0; i < samples; i++) {
         for (let j = 0; j < samples; j++) {
-          const x = -extent + (i / (samples - 1)) * extent * 2;
-          const z = -extent + (j / (samples - 1)) * extent * 2;
+          const x = entry.cx - extent + (i / (samples - 1)) * extent * 2;
+          const z = entry.cz - extent + (j / (samples - 1)) * extent * 2;
           const h = this.groundAt(x, z);
           const slope = Math.max(Math.abs(this.groundAt(x + 2, z) - h), Math.abs(this.groundAt(x, z + 2) - h)) / 2;
           if (slope > 0.9) steep++;
         }
       }
       const pct = Math.round((steep / (samples * samples)) * 100);
-      if (pct > 25) problems.push(`${pct}% of terrain within ${extent}m is too steep to walk`);
+      if (pct > 25) problems.push(`${pct}% of terrain within ${extent}m of (${entry.cx}, ${entry.cz}) is too steep to walk`);
     }
     return problems.length ? problems.slice(0, 20).join('\n') : 'no problems found';
   }

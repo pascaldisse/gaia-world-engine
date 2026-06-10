@@ -208,7 +208,8 @@ export class Sense {
         radius = Math.max(radius, ...(part.size ?? []).map((s) => s / 2), part.radius ?? 0, (part.height ?? 0) / 2);
       }
       const scale = typeof comps.transform?.scale === 'number' ? comps.transform.scale : 1;
-      if (!orbits) spheres.push({ id, x, y, z, r: radius * scale });
+      // mega-structures (seas, sky features) make bounding-sphere overlap meaningless
+      if (!orbits && radius * scale < 40) spheres.push({ id, x, y, z, r: radius * scale });
     }
     for (let i = 0; i < spheres.length; i++) {
       for (let j = i + 1; j < spheres.length; j++) {

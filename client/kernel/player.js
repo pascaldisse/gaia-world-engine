@@ -12,6 +12,8 @@ export class Player {
     this.locked = false;
     this.editorMode = false;
     this.flyActive = false;
+    this.flyLatched = false;
+    this.noclip = false;
     this.eyeHeight = 1.7;
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -30,10 +32,10 @@ export class Player {
   }
 
   update(dt) {
-    const fly = this.editorMode;
+    const flying = this.editorMode ? this.flyActive || this.flyLatched : this.noclip;
     const speed = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 14 : 6;
     // Unity-style flythrough moves along the view direction (pitch included)
-    const forward = fly
+    const forward = flying
       ? new THREE.Vector3(
           -Math.sin(this.yaw) * Math.cos(this.pitch),
           Math.sin(this.pitch),
@@ -43,15 +45,19 @@ export class Player {
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
     const move = new THREE.Vector3();
-    const canMove = !isTyping() && (fly ? this.flyActive : this.locked);
+    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked);
     if (canMove) {
       if (this.keys.has('KeyW')) move.add(forward);
       if (this.keys.has('KeyS')) move.sub(forward);
       if (this.keys.has('KeyD')) move.add(right);
       if (this.keys.has('KeyA')) move.sub(right);
-      if (fly) {
-        if (this.keys.has('KeyE')) move.y += 1;
-        if (this.keys.has('KeyQ')) move.y -= 1;
+      if (flying) {
+        if (this.keys.has('Space')) move.y += 1;
+        if (this.keys.has('KeyC')) move.y -= 1;
+        if (this.editorMode) {
+          if (this.keys.has('KeyE')) move.y += 1;
+          if (this.keys.has('KeyQ')) move.y -= 1;
+        }
       }
     }
     if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed);
@@ -59,7 +65,7 @@ export class Player {
     this.velocity.lerp(move, Math.min(1, dt * 10));
     this.position.addScaledVector(this.velocity, dt);
 
-    if (!fly) {
+    if (!this.editorMode && !this.noclip) {
       const groundY = heightAt(this.position.x, this.position.z) + this.eyeHeight;
       this.position.y += (groundY - this.position.y) * Math.min(1, dt * 12);
     }

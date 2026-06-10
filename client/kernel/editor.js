@@ -27,6 +27,11 @@ export class Editor {
     this.lastStream = 0;
     this.dragStart = null;
     this.dir = new THREE.Vector3();
+    this.orbiting = false;
+    this.pivot = new THREE.Vector3();
+    this.pivotDist = 10;
+    this.lastX = 0;
+    this.lastY = 0;
 
     this.tc = new TransformControls(camera, renderer.domElement);
     this.tc.enabled = false;
@@ -48,12 +53,24 @@ export class Editor {
         return;
       }
       if (e.button !== 0 || this.player.flyActive) return;
+      if (e.altKey) {
+        this.startOrbit(e);
+        return;
+      }
       if (this.tc.axis) return; // gizmo interaction
       if (this.palette.armed) return; // palette stamps
       this.selectAt(e);
     });
 
+    document.addEventListener('pointermove', (e) => {
+      if (this.orbiting) this.moveOrbit(e);
+    });
+
     document.addEventListener('pointerup', (e) => {
+      if (e.button === 0 && this.orbiting) {
+        this.orbiting = false;
+        this.pivotDist = this.player.position.distanceTo(this.pivot);
+      }
       if (e.button === 2 && this.player.flyActive) {
         this.player.flyActive = false;
         if (this.mode === 'create') document.exitPointerLock();
@@ -92,7 +109,12 @@ export class Editor {
         else this.history.undo();
         return;
       }
-      if (this.mode !== 'create' || this.player.flyActive) return;
+      if (e.code === 'KeyV') {
+        if (this.mode === 'create') this.player.flyLatched = !this.player.flyLatched;
+        else if (this.player.locked) this.player.noclip = !this.player.noclip;
+        return;
+      }
+      if (this.mode !== 'create' || this.player.flyActive || this.player.flyLatched) return;
       if ((e.metaKey || e.ctrlKey) && e.code === 'KeyD') {
         e.preventDefault();
         if (this.selected) this.duplicate(this.selected);
@@ -145,6 +167,7 @@ export class Editor {
     this.mode = 'play';
     this.player.editorMode = false;
     this.player.flyActive = false;
+    this.orbiting = false;
     this.tc.enabled = false;
     this.select(null);
     this.palette.disarm();
@@ -206,6 +229,36 @@ export class Editor {
   setTool(tool) {
     this.tool = tool;
     this.attachGizmo();
+  }
+
+  startOrbit(e) {
+    this.orbiting = true;
+    this.lastX = e.clientX;
+    this.lastY = e.clientY;
+    const group = this.selected && this.view.getGroup(this.selected);
+    if (group) {
+      new THREE.Box3().setFromObject(group).getCenter(this.pivot);
+    } else {
+      this.camera.getWorldDirection(this.dir);
+      this.pivot.copy(this.player.position).addScaledVector(this.dir, this.pivotDist);
+    }
+  }
+
+  moveOrbit(e) {
+    const dx = e.clientX - this.lastX;
+    const dy = e.clientY - this.lastY;
+    this.lastX = e.clientX;
+    this.lastY = e.clientY;
+    const offset = this.player.position.clone().sub(this.pivot);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+    spherical.theta -= dx * 0.008;
+    spherical.phi = Math.min(Math.PI - 0.05, Math.max(0.05, spherical.phi - dy * 0.008));
+    offset.setFromSpherical(spherical);
+    this.player.position.copy(this.pivot).add(offset);
+    const look = this.pivot.clone().sub(this.player.position).normalize();
+    this.player.pitch = Math.asin(THREE.MathUtils.clamp(look.y, -1, 1));
+    this.player.yaw = Math.atan2(-look.x, -look.z);
+    this.player.velocity.set(0, 0, 0);
   }
 
   frameSelected() {

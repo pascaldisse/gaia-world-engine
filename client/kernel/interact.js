@@ -131,7 +131,9 @@ export class Interact {
       ? `holding ${this.holding} — E drop · scroll push/pull`
       : this.hovered
         ? `${this.hovered} — E grab`
-        : '';
+        : this.player.noclip && this.player.locked
+          ? 'flight — space up · C down · V to land'
+          : '';
     if (this.hintEl.textContent !== text) this.hintEl.textContent = text;
   }
 }

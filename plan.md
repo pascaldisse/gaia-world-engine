@@ -76,14 +76,18 @@ agents build together, in-world, while it runs. 3D only.
 
 One coherent world-space, Dark Souls style: levels stream in and out, but
 every vista is the real level (or its backdrop impostor) at its true world
-position. Driven by `../Tomb-of-the-Gods-GAIA/plan.md`.
+position. Streaming is invisible — neighbors are resident before they can be
+seen or reached; no gates, no loading, ever. Driven by
+`../Tomb-of-the-Gods-GAIA/plan.md`.
 
 - [ ] `world/manifest.json` — zones: `{name, origin, yaw, neighbors, visible, always}`;
       no manifest = one implicit zone (current worlds keep working)
 - [ ] Per-zone `zones/<name>/seed.json` + per-zone runtime state file; server
       loads all zones, stamps each entity's zone, routes ops by entity id
 - [ ] Client zone subscription: current + neighbors + always-zones; build/unbuild
-      groups on set change; portal/bounds crossing switches the current zone
+      groups on set change; seam/bounds crossing switches the current zone
+- [ ] Time-sliced build/unbuild: entity construction spread across frames so a
+      zone coming in never drops a frame
 - [ ] Backdrop zones: always-loaded low-detail far scenery (the unreachable mountains)
 - [ ] Multi-terrain: terrain registry with world-space bounds; `heightAt` routes by
       containment; zones may have no terrain at all (interiors)
@@ -112,7 +116,8 @@ position. Driven by `../Tomb-of-the-Gods-GAIA/plan.md`.
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)
 - Full TSL `shader.source` authoring
 - Multiplayer presence/avatars, op attribution UI
-- Embodied agent characters driving the same sense/act API
+- Embodied agent characters driving the same sense/act API (a creation-time
+  tool — shipped games run fully offline with scripted NPCs)
 - Native client speaking the same protocol if we outgrow the browser
 
 ## Known gaps (accepted for now)

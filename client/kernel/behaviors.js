@@ -14,6 +14,7 @@ export class Behaviors {
     for (const [id, components] of this.store.entities) {
       const spec = components.behavior;
       if (!spec) continue;
+      if (this.view.suppressed.has(id)) continue;
       const group = this.view.getGroup(id);
       if (!group) continue;
       const list = Array.isArray(spec) ? spec : [spec];

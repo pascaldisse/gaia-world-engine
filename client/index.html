@@ -52,10 +52,38 @@
         font-size: 13px;
         opacity: 0.75;
       }
+      #crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        width: 4px;
+        height: 4px;
+        margin: -2px 0 0 -2px;
+        border-radius: 50%;
+        background: rgba(207, 227, 255, 0.85);
+        box-shadow: 0 0 6px rgba(125, 249, 255, 0.6);
+        display: none;
+        pointer-events: none;
+        z-index: 10;
+      }
+      #hint {
+        position: fixed;
+        bottom: 28px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #cfe3ff;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+        pointer-events: none;
+        z-index: 10;
+      }
     </style>
   </head>
   <body>
     <div id="hud">GAIA &middot; <span id="status">connecting&hellip;</span> &middot; <span id="count">0</span> entities</div>
+    <div id="crosshair"></div>
+    <div id="hint"></div>
     <div id="overlay">
       <h1>GAIA</h1>
       <p>click to enter the world</p>

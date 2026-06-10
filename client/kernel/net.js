@@ -1,3 +1,5 @@
+export const clientId = `c${Math.random().toString(36).slice(2, 8)}`;
+
 export function connect({ url, onSnapshot, onOps, onStatus }) {
   let socket;
   let retry = 500;
@@ -12,7 +14,7 @@ export function connect({ url, onSnapshot, onOps, onStatus }) {
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {});
-      else if (msg.type === 'ops') onOps?.(msg.ops ?? []);
+      else if (msg.type === 'ops') onOps?.(msg.ops ?? [], msg.from);
     };
     socket.onclose = () => {
       onStatus?.('reconnecting');
@@ -26,7 +28,9 @@ export function connect({ url, onSnapshot, onOps, onStatus }) {
 
   return {
     send: (ops) => {
-      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ops', ops }));
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'ops', ops, from: clientId }));
+      }
     },
   };
 }

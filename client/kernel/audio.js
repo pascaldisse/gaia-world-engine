@@ -11,6 +11,22 @@ export class AudioEngine {
     });
   }
 
+  blip(freq = 740, level = 0.16) {
+    const ctx = this.listener.context;
+    if (ctx.state !== 'running') return;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(level, ctx.currentTime + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+  }
+
   attach(group, spec) {
     const ctx = this.listener.context;
     const audio = new THREE.PositionalAudio(this.listener);

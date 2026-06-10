@@ -4,21 +4,55 @@ import { buildTerrainMesh, heightAt, setActiveTerrain } from './terrain.js';
 // Reconciles world store documents into three.js objects. Each entity gets a
 // Group; components map onto children/properties of that group.
 export class View {
-  constructor({ scene, store, audio }) {
+  constructor({ scene, store, audio, effects }) {
     this.scene = scene;
     this.store = store;
     this.audio = audio;
+    this.effects = effects;
     this.groups = new Map();
     this.lights = new Map();
     this.sounds = new Map();
+    this.suppressed = new Set();
     store.onChange((event) => this.handle(event));
   }
 
   handle(event) {
     if (event.kind === 'snapshot') this.rebuildAll();
-    else if (event.kind === 'spawn') this.build(event.id);
-    else if (event.kind === 'despawn') this.remove(event.id);
+    else if (event.kind === 'spawn') this.buildAnimated(event.id);
+    else if (event.kind === 'despawn') this.removeAnimated(event.id);
     else if (event.kind === 'set') this.applyComponent(event.id, event.component);
+  }
+
+  buildAnimated(id) {
+    this.build(id);
+    const group = this.groups.get(id);
+    const components = this.store.get(id);
+    if (!group || !this.effects || components?.terrain) return;
+    group.visible = false;
+    this.effects.wispTo(group.position.clone(), () => {
+      group.visible = true;
+      this.effects.scaleIn(group);
+    });
+  }
+
+  removeAnimated(id) {
+    const group = this.groups.get(id);
+    if (!group || !this.effects) {
+      this.remove(id);
+      return;
+    }
+    this.sounds.get(id)?.dispose();
+    this.sounds.delete(id);
+    this.effects.scaleOut(group, () => this.remove(id));
+  }
+
+  suppress(id) {
+    this.suppressed.add(id);
+  }
+
+  unsuppress(id) {
+    this.suppressed.delete(id);
+    if (this.store.get(id) && this.groups.has(id)) this.applyTransform(id);
   }
 
   rebuildAll() {
@@ -47,7 +81,7 @@ export class View {
     switch (name) {
       case 'transform':
       case 'ground':
-        this.applyTransform(id);
+        if (!this.suppressed.has(id)) this.applyTransform(id);
         break;
       case 'mesh':
         this.applyMesh(group, value);

@@ -261,6 +261,31 @@
         background: rgba(125, 249, 255, 0.25);
         color: #ffffff;
       }
+      #debug {
+        position: fixed;
+        top: 36px;
+        left: 14px;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px 12px;
+        background: rgba(8, 14, 24, 0.92);
+        border: 1px solid rgba(125, 249, 255, 0.25);
+        border-radius: 8px;
+        color: #dbe7ff;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        z-index: 40;
+      }
+      #debug label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #debug input[type='range'] {
+        width: 140px;
+        accent-color: #7df9ff;
+      }
       #title {
         position: fixed;
         top: 38%;
@@ -283,6 +308,9 @@
   <body>
     <div id="hud">GAIA &middot; <span id="status">connecting&hellip;</span> &middot; <span id="count">0</span> entities</div>
     <div id="title"></div>
+    <div id="debug">
+      <label>brightness <input id="debug-exposure" type="range" min="0.2" max="3" step="0.05" value="1" /> <span id="debug-exposure-value">1.00×</span></label>
+    </div>
     <div id="crosshair"></div>
     <div id="hint"></div>
     <div id="mode">CREATE &middot; Q view W move E rotate R scale &middot; F frame &middot; RMB/V fly &middot; &#8997;drag orbit &middot; &#8984;D dup &middot; &#9003; delete &middot; &#8984;Z undo &middot; Tab to play</div>

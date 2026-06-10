@@ -47,7 +47,8 @@ Open http://localhost:5173 and click to enter.
 **Play mode** — WASD move, mouse look, shift run, esc releases the pointer.
 **E** grabs the entity under the crosshair (scroll to push/pull, E again to
 drop) — carries stream live to every client. **V** toggles noclip flight,
-**G** toggles game mode (editing and HUD off).
+**G** toggles game mode (editing and HUD off — worlds whose `spawn` has
+`gameMode: true` start locked), **~** opens the debug panel (brightness).
 
 **Creator mode** — **Tab** toggles it, with Unity-style controls:
 
@@ -214,9 +215,10 @@ No manifest = one implicit zone, exactly as before.
   World logic as data.
 - `persist` — survives the `reset` op: the world re-seeds around it while it
   keeps its current state (the *Braid* rule — death resets all but the woven)
-- `spawn` also doubles as the void return: falling past the manifest's
-  `voidY` (default −120, per-zone overridable) teleports a body back to its
-  last safe ground, or the spawn point if it never had one
+- `spawn` — `{position, yaw, gameMode?}` — where players enter (`gameMode:
+  true` starts them with editing locked); also the void return: falling past
+  the manifest's `voidY` (default −120, per-zone overridable) teleports a
+  body back to its last safe ground, or the spawn point if it never had one
 - `scatter` — `{seed, count, area, instance:{parts}, scale, tilt, density, minHeight, maxHeight}` — instanced copies, terrain-following, noise-clustered
 - `particles` — `{seed, count, size, color, area, motion:{type: drift|rain, ...}}` — animated instanced motes
 - `environment` — `{background, fog, exposure, hemisphere, sun, bloom, audio}` — world mood as one patchable entity

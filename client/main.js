@@ -43,8 +43,10 @@ const net = connect({
   presence: presenceId,
   onSnapshot: (entities, time, manifest) => {
     clock.offset = time - performance.now() / 1000;
+    let spawnComp = null;
     for (const comps of Object.values(entities)) {
       if (comps.spawn) {
+        spawnComp = comps.spawn;
         player.spawnPose = { position: comps.spawn.position ?? [0, 2, 22], yaw: comps.spawn.yaw ?? 0 };
         break;
       }
@@ -52,6 +54,8 @@ const net = connect({
     if (!player.spawned) {
       player.respawn();
       player.spawned = true;
+      // a world can declare itself a game: editing locked until G
+      if (spawnComp?.gameMode && !player.gameMode) editor.toggleGameMode();
     }
     // zone set must be known before the snapshot builds, so only the
     // player's surroundings (plus backdrops) turn into meshes
@@ -111,6 +115,21 @@ function handleEvents(ops) {
     }
   }
 }
+
+// ~ toggles the debug panel (brightness, more knobs later)
+const debugEl = document.getElementById('debug');
+const debugExposure = document.getElementById('debug-exposure');
+const debugExposureValue = document.getElementById('debug-exposure-value');
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Backquote') return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+  debugEl.style.display = debugEl.style.display === 'flex' ? 'none' : 'flex';
+});
+debugExposure.addEventListener('input', () => {
+  environment.debugMul = Number(debugExposure.value);
+  debugExposureValue.textContent = `${Number(debugExposure.value).toFixed(2)}×`;
+});
 
 const titleEl = document.getElementById('title');
 let titleTimer = null;

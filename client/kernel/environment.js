@@ -12,6 +12,8 @@ export class Environment {
     this.audio = audio;
     this.flashLevel = 0;
     this.flashColor = new THREE.Color('#b9c4ee');
+    this.exposure = renderer.toneMappingExposure;
+    this.debugMul = 1; // the ~ debug panel's brightness multiplier
     this.current = {
       sunIntensity: sun.intensity,
       hemiIntensity: hemi.intensity,
@@ -42,7 +44,7 @@ export class Environment {
     const fog = { ...this.defaults.fog, ...(p.fog ?? {}) };
     if (fog.density) this.scene.fog = new THREE.FogExp2(fog.color, fog.density);
     else this.scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
-    this.renderer.toneMappingExposure = p.exposure;
+    this.exposure = p.exposure;
     const hemi = { ...this.defaults.hemisphere, ...(p.hemisphere ?? {}) };
     this.hemi.color.set(hemi.sky);
     this.hemi.groundColor.set(hemi.ground);
@@ -68,7 +70,7 @@ export class Environment {
       background: this.scene.background.clone(),
       fogColor: this.scene.fog.color.clone(),
       fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
-      exposure: this.renderer.toneMappingExposure,
+      exposure: this.exposure,
       hemiSky: this.hemi.color.clone(),
       hemiGround: this.hemi.groundColor.clone(),
       hemiIntensity: this.hemi.intensity,
@@ -80,7 +82,7 @@ export class Environment {
       background: this.scene.background.clone(),
       fogColor: this.scene.fog.color.clone(),
       fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
-      exposure: this.renderer.toneMappingExposure,
+      exposure: this.exposure,
       hemiSky: this.hemi.color.clone(),
       hemiGround: this.hemi.groundColor.clone(),
       hemiIntensity: this.hemi.intensity,
@@ -98,7 +100,6 @@ export class Environment {
   dip(seconds = 1.6) {
     this.dipT = 0;
     this.dipDur = seconds;
-    this.dipBase = this.renderer.toneMappingExposure;
   }
 
   update(dt) {
@@ -111,7 +112,7 @@ export class Environment {
       if (fade.from.fogDensity !== null && fade.to.fogDensity !== null && this.scene.fog.isFogExp2) {
         this.scene.fog.density = fade.from.fogDensity + (fade.to.fogDensity - fade.from.fogDensity) * k;
       }
-      this.renderer.toneMappingExposure = fade.from.exposure + (fade.to.exposure - fade.from.exposure) * k;
+      this.exposure = fade.from.exposure + (fade.to.exposure - fade.from.exposure) * k;
       this.hemi.color.copy(fade.from.hemiSky).lerp(fade.to.hemiSky, k);
       this.hemi.groundColor.copy(fade.from.hemiGround).lerp(fade.to.hemiGround, k);
       this.hemi.intensity = fade.from.hemiIntensity + (fade.to.hemiIntensity - fade.from.hemiIntensity) * k;
@@ -125,16 +126,15 @@ export class Environment {
       if (fade.t >= 1) this.fadeState = null;
     }
 
+    // exposure pipeline: logical value × dip × debug brightness
+    let exposure = this.exposure;
     if (this.dipDur) {
       this.dipT += dt;
       const p = Math.min(1, this.dipT / this.dipDur);
-      const k = Math.sin(p * Math.PI);
-      this.renderer.toneMappingExposure = (this.fadeState ? this.renderer.toneMappingExposure : this.dipBase) * (1 - 0.96 * k);
-      if (p >= 1) {
-        this.renderer.toneMappingExposure = this.dipBase;
-        this.dipDur = 0;
-      }
+      exposure *= 1 - 0.96 * Math.sin(p * Math.PI);
+      if (p >= 1) this.dipDur = 0;
     }
+    this.renderer.toneMappingExposure = exposure * this.debugMul;
 
     if (this.flashLevel <= 0) return;
     this.flashLevel *= Math.exp(-dt * 4.5);

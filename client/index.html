@@ -78,16 +78,202 @@
         pointer-events: none;
         z-index: 10;
       }
+      #mode {
+        position: fixed;
+        top: 12px;
+        right: 14px;
+        display: none;
+        color: #ffd9a0;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+        z-index: 10;
+      }
+      #panel {
+        position: fixed;
+        top: 40px;
+        right: 12px;
+        bottom: 70px;
+        width: 300px;
+        display: none;
+        flex-direction: column;
+        background: rgba(8, 14, 24, 0.92);
+        border: 1px solid rgba(125, 249, 255, 0.25);
+        border-radius: 8px;
+        color: #dbe7ff;
+        font-size: 11px;
+        z-index: 30;
+        overflow: hidden;
+      }
+      #panel .panel-head {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(125, 249, 255, 0.15);
+      }
+      #panel .panel-title {
+        flex: 1;
+        color: #7df9ff;
+        font-weight: 600;
+      }
+      #panel .panel-tabs {
+        display: flex;
+        gap: 4px;
+        padding: 6px 10px 0;
+      }
+      #panel .panel-tabs .active {
+        background: rgba(125, 249, 255, 0.2);
+      }
+      #panel .panel-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px 10px;
+      }
+      #panel button,
+      #panel select {
+        background: rgba(125, 249, 255, 0.08);
+        border: 1px solid rgba(125, 249, 255, 0.25);
+        border-radius: 4px;
+        color: #dbe7ff;
+        font: inherit;
+        padding: 2px 7px;
+        cursor: pointer;
+      }
+      #panel .panel-section {
+        margin-bottom: 10px;
+      }
+      #panel .section-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+      #panel .section-name {
+        color: #ffd9a0;
+        font-weight: 600;
+      }
+      #panel .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 3px 0;
+      }
+      #panel .label {
+        width: 78px;
+        flex-shrink: 0;
+        opacity: 0.75;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #panel .row input[type='range'] {
+        flex: 1;
+        min-width: 40px;
+        accent-color: #7df9ff;
+      }
+      #panel .row input[type='number'] {
+        width: 52px;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(125, 249, 255, 0.2);
+        border-radius: 3px;
+        color: #dbe7ff;
+        font: inherit;
+        padding: 1px 3px;
+      }
+      #panel .row input[type='text'] {
+        flex: 1;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(125, 249, 255, 0.2);
+        border-radius: 3px;
+        color: #dbe7ff;
+        font: inherit;
+        padding: 1px 4px;
+      }
+      #panel .vec {
+        display: flex;
+        gap: 3px;
+        flex: 1;
+      }
+      #panel .vec input {
+        width: 100%;
+        min-width: 0;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(125, 249, 255, 0.2);
+        border-radius: 3px;
+        color: #dbe7ff;
+        font: inherit;
+        padding: 1px 3px;
+      }
+      #panel .block {
+        margin: 4px 0;
+      }
+      #panel .item-head {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 6px;
+        opacity: 0.8;
+      }
+      #panel .indent {
+        margin-left: 10px;
+        border-left: 1px solid rgba(125, 249, 255, 0.12);
+        padding-left: 8px;
+      }
+      #panel textarea {
+        width: 100%;
+        height: 340px;
+        background: rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(125, 249, 255, 0.2);
+        border-radius: 4px;
+        color: #dbe7ff;
+        font: inherit;
+        padding: 6px;
+        box-sizing: border-box;
+        resize: vertical;
+      }
+      #panel .json-error {
+        color: #ff8c7a;
+        margin-top: 4px;
+        white-space: pre-wrap;
+      }
+      #panel .panel-add {
+        margin-top: 6px;
+      }
+      #palette {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        gap: 6px;
+        z-index: 30;
+      }
+      #palette .chip {
+        background: rgba(8, 14, 24, 0.92);
+        border: 1px solid rgba(125, 249, 255, 0.3);
+        border-radius: 14px;
+        color: #dbe7ff;
+        font: inherit;
+        font-size: 11px;
+        padding: 5px 12px;
+        cursor: pointer;
+      }
+      #palette .chip.active {
+        background: rgba(125, 249, 255, 0.25);
+        color: #ffffff;
+      }
     </style>
   </head>
   <body>
     <div id="hud">GAIA &middot; <span id="status">connecting&hellip;</span> &middot; <span id="count">0</span> entities</div>
     <div id="crosshair"></div>
     <div id="hint"></div>
+    <div id="mode">CREATE &middot; click select &middot; G/R/S gizmo &middot; &#8984;D dup &middot; &#9003; delete &middot; &#8984;Z undo &middot; Tab to play</div>
+    <div id="panel"></div>
+    <div id="palette"></div>
     <div id="overlay">
       <h1>GAIA</h1>
       <p>click to enter the world</p>
-      <p>WASD move &middot; mouse look &middot; shift run &middot; esc release</p>
+      <p>WASD move &middot; mouse look &middot; shift run &middot; E grab &middot; Tab create mode &middot; esc release</p>
     </div>
     <script type="module" src="/main.js"></script>
   </body>

@@ -6,6 +6,10 @@ import { AudioEngine } from './kernel/audio.js';
 import { Behaviors } from './kernel/behaviors.js';
 import { Effects } from './kernel/effects.js';
 import { Interact } from './kernel/interact.js';
+import { History } from './kernel/history.js';
+import { Panel } from './kernel/panel.js';
+import { Palette } from './kernel/palette.js';
+import { Editor } from './kernel/editor.js';
 import { connect } from './kernel/net.js';
 
 const statusEl = document.getElementById('status');
@@ -31,13 +35,48 @@ const net = connect({
   onOps: (ops) => {
     store.applyOps(ops);
     countEl.textContent = store.entities.size;
+    panel.refresh();
+    for (const op of ops) {
+      if (op.op === 'event' && op.name === 'prefabs-changed') palette.load();
+    }
   },
   onStatus: (s) => {
     statusEl.textContent = s;
   },
 });
 
-const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl });
+const history = new History(net.send);
+const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl, history });
+const panel = new Panel({
+  el: document.getElementById('panel'),
+  store,
+  send: net.send,
+  history,
+  onDuplicate: (id) => editor.duplicate(id),
+  onDelete: (id) => editor.delete(id),
+});
+const palette = new Palette({
+  el: document.getElementById('palette'),
+  store,
+  view,
+  send: net.send,
+  history,
+  camera,
+  renderer,
+});
+const editor = new Editor({
+  camera,
+  scene,
+  renderer,
+  store,
+  view,
+  send: net.send,
+  player,
+  history,
+  panel,
+  palette,
+  modeEl: document.getElementById('mode'),
+});
 
 document.addEventListener('pointerlockchange', () => {
   crosshairEl.style.display = player.locked ? 'block' : 'none';
@@ -52,5 +91,6 @@ renderer.setAnimationLoop(() => {
   effects.update(dt);
   player.update(dt);
   interact.update(dt, now);
+  editor.update();
   renderer.render(scene, camera);
 });

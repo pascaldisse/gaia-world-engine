@@ -47,6 +47,20 @@ switch (cmd) {
     console.log(await res.text());
     break;
   }
+  case 'prefab': {
+    const res = await fetch(`${BASE}/prefabs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: rest[0], components: JSON.parse(rest[1]) }),
+    });
+    console.log(await res.text());
+    break;
+  }
+  case 'prefabs': {
+    const res = await fetch(`${BASE}/prefabs`);
+    console.log(await res.text());
+    break;
+  }
   default:
-    console.log('usage: patch.mjs spawn <components-json> [id] | set <id> <component> <json|null> | merge <id> <component> <json> | despawn <id> | clear | load <ops-file> | snapshot');
+    console.log('usage: patch.mjs spawn <components-json> [id] | set <id> <component> <json|null> | merge <id> <component> <json> | despawn <id> | clear | load <ops-file> | snapshot | prefabs | prefab <name> <components-json>');
 }

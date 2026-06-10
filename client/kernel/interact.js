@@ -3,7 +3,7 @@ import * as THREE from 'three/webgpu';
 // Always-on hands: look at a thing, E to grab, scroll to push/pull, E to drop.
 // A carry is a stream of merge ops — every other client (and agent) sees it live.
 export class Interact {
-  constructor({ camera, scene, store, view, send, player, hintEl }) {
+  constructor({ camera, scene, store, view, send, player, hintEl, history }) {
     this.camera = camera;
     this.scene = scene;
     this.store = store;
@@ -11,6 +11,8 @@ export class Interact {
     this.send = send;
     this.player = player;
     this.hintEl = hintEl;
+    this.history = history;
+    this.grabStart = null;
     this.raycaster = new THREE.Raycaster();
     this.raycaster.far = 40;
     this.center = new THREE.Vector2(0, 0);
@@ -57,6 +59,7 @@ export class Interact {
     const group = this.view.getGroup(id);
     if (!group) return;
     this.holding = id;
+    this.grabStart = structuredClone(this.store.get(id)?.transform ?? null);
     this.view.suppress(id);
     this.dist = Math.min(30, Math.max(1.5, this.camera.position.distanceTo(group.position)));
     this.setHover(null);
@@ -68,7 +71,12 @@ export class Interact {
     const group = this.view.getGroup(id);
     if (group && this.store.get(id)) {
       const p = group.position;
-      this.send([{ op: 'merge', id, component: 'transform', value: { position: [r2(p.x), r2(p.y), r2(p.z)] } }]);
+      const position = [r2(p.x), r2(p.y), r2(p.z)];
+      this.send([{ op: 'merge', id, component: 'transform', value: { position } }]);
+      this.history?.push(
+        [{ op: 'set', id, component: 'transform', value: this.grabStart }],
+        [{ op: 'set', id, component: 'transform', value: { ...(this.grabStart ?? {}), position } }],
+      );
     }
     this.view.unsuppress(id);
   }
@@ -90,6 +98,7 @@ export class Interact {
 
   update(dt, now) {
     if (!this.player.locked) {
+      if (this.holding) this.drop();
       this.setHover(null);
       this.updateHint();
       return;

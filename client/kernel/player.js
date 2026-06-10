@@ -10,13 +10,14 @@ export class Player {
     this.velocity = new THREE.Vector3();
     this.keys = new Set();
     this.locked = false;
+    this.editorMode = false;
     this.eyeHeight = 1.7;
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
     overlay.addEventListener('click', () => dom.requestPointerLock());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === dom;
-      overlay.style.display = this.locked ? 'none' : 'flex';
+      overlay.style.display = this.locked || this.editorMode ? 'none' : 'flex';
     });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
@@ -33,7 +34,7 @@ export class Player {
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
     const move = new THREE.Vector3();
-    if (this.locked) {
+    if ((this.locked || this.editorMode) && !isTyping()) {
       if (this.keys.has('KeyW')) move.add(forward);
       if (this.keys.has('KeyS')) move.sub(forward);
       if (this.keys.has('KeyD')) move.add(right);
@@ -51,4 +52,9 @@ export class Player {
     this.euler.set(this.pitch, this.yaw, 0);
     this.camera.quaternion.setFromEuler(this.euler);
   }
+}
+
+function isTyping() {
+  const el = document.activeElement;
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
 }

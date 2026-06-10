@@ -49,10 +49,10 @@ agents build together, in-world, while it runs. 3D only.
 - [x] `tools/agent.mjs` CLI (MCP wrapper later)
 
 ### M3 — Inspector (creator mode)
-- [ ] Tab creator mode: cursor, click-select, TransformControls gizmos
-- [ ] Auto-generated component panel (sliders/color pickers/dropdowns from JSON)
-- [ ] Raw JSON tab, duplicate/delete, per-client undo (inverse ops)
-- [ ] Prefab palette + ghost stamping; AI-addable library
+- [x] Tab creator mode: cursor, click-select, TransformControls gizmos
+- [x] Auto-generated component panel (sliders/color pickers/dropdowns from JSON)
+- [x] Raw JSON tab, duplicate/delete, per-client undo (inverse ops)
+- [x] Prefab palette + ghost stamping; AI-addable library
 
 ### M4 — Tomb vocabulary (visual power)
 - [ ] `scatter`/`particles` components → InstancedMesh (candle-lake class scenes)

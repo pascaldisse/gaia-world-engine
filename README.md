@@ -18,6 +18,16 @@ to push/pull, E again to drop) — carries stream live to every client. World
 state persists in `world/world.json` (delete it to re-seed from
 `world/seed.json`).
 
+**Tab** toggles creator mode: free cursor, click anything to select it (the
+terrain too). **G/R/S** switch the gizmo (translate/rotate/scale — grounded
+entities lock Y), the inspector panel auto-generates sliders/pickers from the
+entity's JSON (raw JSON tab included), **⌘D** duplicates, **⌫** deletes,
+**⌘Z/⌘⇧Z** undo/redo (your own edits, as inverse ops). The bottom palette
+stamps prefabs with a ghost preview — click to place, right-click/esc to stop.
+WASD still walks while in creator mode. Prefabs live on the server
+(`GET/POST /prefabs`, or `node tools/patch.mjs prefab <name> '<components>'`)
+so agents can hand you new brushes at runtime.
+
 ## Patch the world while it runs
 
 ```sh

@@ -19,6 +19,19 @@ if (!world.load() && fs.existsSync(seedFile)) {
 
 const sense = new Sense(world);
 
+// ---- prefab library: brushes for the palette, addable by agents at runtime ----
+const prefabsFile = fileURLToPath(new URL('../world/prefabs.json', import.meta.url));
+let prefabs = [];
+try {
+  prefabs = JSON.parse(fs.readFileSync(prefabsFile, 'utf8'));
+} catch {
+  prefabs = [];
+}
+
+function savePrefabs() {
+  fs.writeFileSync(prefabsFile, JSON.stringify(prefabs, null, 2));
+}
+
 // ---- op journal: the world's nervous system ----
 const journal = [];
 let seq = 0;
@@ -79,6 +92,20 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/sense/check') {
       return text(res, sense.check());
+    }
+    if (req.method === 'GET' && url.pathname === '/prefabs') {
+      return json(res, prefabs);
+    }
+    if (req.method === 'POST' && url.pathname === '/prefabs') {
+      const prefab = await body(req);
+      if (!prefab.name || !prefab.components) throw new Error('prefab needs name and components');
+      const idx = prefabs.findIndex((p) => p.name === prefab.name);
+      if (idx >= 0) prefabs[idx] = prefab;
+      else prefabs.push(prefab);
+      savePrefabs();
+      applyAndBroadcast([{ op: 'event', name: 'prefabs-changed', data: { name: prefab.name } }], 'http');
+      console.log(`[gaia] prefab ${idx >= 0 ? 'updated' : 'added'}: ${prefab.name}`);
+      return json(res, { ok: true, count: prefabs.length });
     }
     if (req.method === 'POST' && url.pathname === '/op') {
       const parsed = await body(req);

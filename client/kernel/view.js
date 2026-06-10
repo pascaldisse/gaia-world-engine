@@ -227,7 +227,7 @@ export class View {
   }
 }
 
-function makeGeometry(part) {
+export function makeGeometry(part) {
   switch (part.shape) {
     case 'sphere':
       return new THREE.SphereGeometry(part.radius ?? 0.5, 24, 16);

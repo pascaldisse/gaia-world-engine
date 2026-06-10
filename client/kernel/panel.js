@@ -6,10 +6,15 @@ const ENUMS = {
   'mesh.shape': ['box', 'sphere', 'cylinder', 'cone', 'torus', 'octahedron', 'icosahedron', 'plane'],
   'light.type': ['point', 'spot', 'directional'],
   'behavior.type': ['spin', 'bob', 'orbit', 'pulse', 'flicker'],
-  'sound.kind': ['hum', 'chime'],
+  'sound.kind': ['hum', 'chime', 'patch', 'sample'],
   'sound.wave': ['sine', 'square', 'sawtooth', 'triangle'],
+  'sound.source': ['noise', 'sine', 'square', 'sawtooth', 'triangle'],
+  'sound.target': ['gain', 'freq', 'filter'],
   'scatter.shape': ['circle', 'rect'],
   'particles.type': ['drift', 'rain'],
+  preset: ['glow', 'flame', 'water', 'hologram'],
+  'sfx.on': ['lightning', 'grab', 'drop', 'say', 'intent'],
+  'sfx.wave': ['sine', 'square', 'sawtooth', 'triangle', 'noise'],
 };
 
 const RANGES = {
@@ -24,6 +29,10 @@ const RANGES = {
   count: [1, 2000], offsetY: [-5, 10], tilt: [0, 1], noise: [0.001, 0.1], bias: [0, 1],
   strength: [0, 2], threshold: [0, 1], near: [1, 200], far: [10, 800], exposure: [0.2, 3],
   density: [0.001, 0.05], bob: [0, 5], y: [-10, 60],
+  gain: [0, 1], detune: [-100, 100], Q: [0.1, 20], rate: [0, 20], depth: [0, 1],
+  reverb: [0, 1], attack: [0, 1], decay: [0, 6], delay: [0, 5], lowpass: [40, 8000], sweep: [20, 4000],
+  rainCycle: [5, 600], rainAmount: [0, 1], rain: [0, 1], minGap: [1, 120], maxGap: [2, 240],
+  glowStrength: [0, 4], lines: [2, 120],
 };
 
 const COMPONENT_DEFAULTS = {

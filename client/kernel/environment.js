@@ -3,12 +3,15 @@ import * as THREE from 'three/webgpu';
 // World mood as data: fog, sky, sun, exposure, bloom — all patchable live.
 // Falls back to the kernel defaults when the component is removed.
 export class Environment {
-  constructor({ renderer, scene, hemi, sun, post }) {
+  constructor({ renderer, scene, hemi, sun, post, audio }) {
     this.renderer = renderer;
     this.scene = scene;
     this.hemi = hemi;
     this.sun = sun;
     this.post = post;
+    this.audio = audio;
+    this.flashLevel = 0;
+    this.current = { sunIntensity: sun.intensity, hemiIntensity: hemi.intensity };
     this.defaults = {
       background: `#${scene.background.getHexString()}`,
       fog: { color: `#${scene.fog.color.getHexString()}`, near: scene.fog.near, far: scene.fog.far },
@@ -43,5 +46,19 @@ export class Environment {
     this.sun.intensity = sun.intensity;
     this.sun.position.set(...sun.position);
     this.post?.setBloom({ ...this.defaults.bloom, ...(p.bloom ?? {}) });
+    if (p.audio) this.audio?.applyBus(p.audio);
+    this.current = { sunIntensity: sun.intensity, hemiIntensity: hemi.intensity };
+  }
+
+  flash(intensity = 0.8) {
+    this.flashLevel = Math.max(this.flashLevel, intensity * 1.6);
+  }
+
+  update(dt) {
+    if (this.flashLevel <= 0) return;
+    this.flashLevel *= Math.exp(-dt * 5);
+    if (this.flashLevel < 0.01) this.flashLevel = 0;
+    this.sun.intensity = this.current.sunIntensity + this.flashLevel * 4;
+    this.hemi.intensity = this.current.hemiIntensity + this.flashLevel * 0.8;
   }
 }

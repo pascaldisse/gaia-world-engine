@@ -1,6 +1,6 @@
 export const clientId = `c${Math.random().toString(36).slice(2, 8)}`;
 
-export function connect({ url, onSnapshot, onOps, onStatus }) {
+export function connect({ url, presence, onSnapshot, onOps, onStatus, onScreenshot }) {
   let socket;
   let retry = 500;
 
@@ -10,11 +10,13 @@ export function connect({ url, onSnapshot, onOps, onStatus }) {
     socket.onopen = () => {
       retry = 500;
       onStatus?.('live');
+      if (presence) socket.send(JSON.stringify({ type: 'hello', presence }));
     };
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {});
+      if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {}, msg.time ?? 0);
       else if (msg.type === 'ops') onOps?.(msg.ops ?? [], msg.from);
+      else if (msg.type === 'screenshot-request') onScreenshot?.(msg.id);
     };
     socket.onclose = () => {
       onStatus?.('reconnecting');
@@ -31,6 +33,9 @@ export function connect({ url, onSnapshot, onOps, onStatus }) {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'ops', ops, from: clientId }));
       }
+    },
+    sendRaw: (msg) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
     },
   };
 }

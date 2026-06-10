@@ -55,11 +55,16 @@ Or POST raw ops to `http://localhost:8420/op`:
     `cone(radius,height)`, `torus(radius,tube)`, `octahedron(radius)`,
     `icosahedron(radius)`, `plane(size)`
 - `light` — `{type: point|spot|directional, color, intensity, distance, offset, castShadow}`
-- `sound` — `{kind: hum|chime, freq|notes, interval, level, refDistance}` (synthesized, positional)
+- `sound` — `{kind: hum|chime|patch|sample, ambient?, level, refDistance}` (positional, or `ambient:true` for world-wide)
+  - `patch`: `{layers:[{source: noise|sine|square|sawtooth|triangle, freq, detune, filter:{type,freq,Q}, gain, lfo:{target: gain|freq|filter, rate, depth}, reverb}]}` — Tomb-class layered ambience as data
+  - `sample`: `{url: "assets/file.ogg", loop, rate}` — files served from `world/assets/`, drop them in
+- `sfx` — `{on: lightning|grab|drop|say|intent, wave, freq, freqEnd, attack, decay, level, lowpass, sweep, reverb}` — one-shot synth triggered by events, positional at its entity
+- `weather` — `{lightning, minGap, maxGap, rainCycle, rainAmount}` (server-simulated: emits `lightning` events → all clients flash + thunder; cycles `rain` 0..1, which scales any rain-type particles)
 - `terrain` — `{seed, size, segments, amplitude, frequency, color}` (one per world)
 - `scatter` — `{seed, count, area:{shape:circle|rect, center, radius|size}, instance:{parts:[...]}, scale:[min,max], tilt, rotateY, offsetY, density:{noise, bias}}` — hundreds of instanced copies in a few draw calls, terrain-following, fbm-clustered
 - `particles` — `{seed, count, size, color, area, motion:{type:drift|rain, speed, radius, height, bob}}` — animated instanced motes (fireflies, souls, rain)
-- `environment` — `{background, fog:{color, near, far | density}, exposure, hemisphere:{sky, ground, intensity}, sun:{color, intensity, position}, bloom:{strength, radius, threshold}}` — world mood as one patchable entity
+- `environment` — `{background, fog:{color, near, far | density}, exposure, hemisphere:{sky, ground, intensity}, sun:{color, intensity, position}, bloom:{strength, radius, threshold}, audio:{level, reverb, compressor}}` — world mood as one patchable entity
+- mesh parts accept `preset: glow|flame|water|hologram` — TSL shader materials as data (a failing preset falls back to a standard material); flame/glow look best on crossed planes
 - `behavior` — one or array of:
   - `{type:"spin", speed}`
   - `{type:"bob", amplitude, speed, phase}`
@@ -84,6 +89,12 @@ The first act/look spawns a visible glowing avatar (`agent-claude`) that
 travels at finite speed over the terrain — watch it from the client. HTTP:
 `GET /sense/{look,map,describe,query,check}`, `GET /events?since=`,
 `POST /act {intent, as, ...}`.
+
+`node tools/agent.mjs shot out.png` captures a real screenshot through a
+connected browser tab (the slow path, for judging beauty; the tab must be
+visible). Senses run on the world clock, so orbiting/bobbing entities are
+sensed at their live positions, and each player publishes a presence entity
+agents can see and walk to.
 
 ## Architecture
 

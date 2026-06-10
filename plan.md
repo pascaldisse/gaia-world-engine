@@ -56,21 +56,21 @@ agents build together, in-world, while it runs. 3D only.
 
 ### M4 — Tomb vocabulary (visual power)
 - [x] `scatter`/`particles` components → InstancedMesh (candle-lake class scenes)
-- [ ] Shader preset library as data (water, flame, glow, dome, wet-rock; TSL)
+- [x] Shader preset library as data (water, flame, glow, hologram; TSL, safe fallback)
 - [x] `environment` entity: fog, sky, exposure, bloom post chain (grade later)
-- [ ] Weather-style behaviors emitting transient events
+- [x] `weather` component: server-side lightning events + rain cycles
 
 ### M5 — Sound (procedural + samples)
-- [ ] Declarative synth-patch format (layers: noise/osc → filters → LFO → sends)
-- [ ] World audio buses (master, compressor, generated reverb) on environment
-- [ ] Sample support: `{kind:"sample", url}` + static `world/assets/` serving
-- [ ] SFX patches triggered by events
+- [x] Declarative synth-patch format (layers: noise/osc → filters → LFO → sends)
+- [x] World audio buses (master, compressor, generated reverb) on environment.audio
+- [x] Sample support: `{kind:"sample", url}` + static `world/assets/` serving
+- [x] SFX patches triggered by events (`sfx` component + built-in thunder/flash)
 
 ### M6 — Observability polish
-- [ ] Screenshot endpoint (client-rendered, slow path)
-- [ ] World clock + server-evaluated deterministic behaviors (sense sees motion)
-- [ ] Player presence entity (agents can sense the player)
-- [ ] Semantic lint expansion (reachability, light coverage)
+- [x] Screenshot endpoint (client-rendered via ws relay; needs a visible tab)
+- [x] World clock + shared motion math (sense sees orbit/bob live)
+- [x] Player presence entity (published ~3Hz, despawned on disconnect)
+- [x] Semantic lint expansion (light coverage, walkability)
 
 ## Later
 
@@ -82,10 +82,12 @@ agents build together, in-world, while it runs. 3D only.
 
 ## Known gaps (accepted for now)
 
-- Display behaviors (orbit/bob) run client-side; server sense reads documents,
-  not animated positions → fixed by world clock in M6.
 - Carried grounded entities appear ground-snapped to other clients mid-carry.
-- Environment lighting is kernel-owned until M4.
+- Screenshots require a visible (non-backgrounded) browser tab — browsers
+  pause the render loop in background tabs.
+- World clock resets on server restart (orbit phases shift); persist later.
+- Scatter doesn't support billboard sprites; use crossed planes with the
+  flame/glow presets instead.
 
 ## Run
 

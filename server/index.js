@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { World } from './world.js';
@@ -9,6 +10,7 @@ import { Intents } from './intents.js';
 const PORT = 8420;
 const worldFile = fileURLToPath(new URL('../world/world.json', import.meta.url));
 const seedFile = fileURLToPath(new URL('../world/seed.json', import.meta.url));
+const assetsDir = fileURLToPath(new URL('../world/assets', import.meta.url));
 
 const world = new World(worldFile);
 if (!world.load() && fs.existsSync(seedFile)) {
@@ -17,7 +19,11 @@ if (!world.load() && fs.existsSync(seedFile)) {
   console.log(`[gaia] seeded world with ${world.entities.size} entities`);
 }
 
-const sense = new Sense(world);
+// world clock — one time base for every observer
+const bootTime = Date.now();
+const worldTime = () => (Date.now() - bootTime) / 1000;
+
+const sense = new Sense(world, worldTime);
 
 // ---- prefab library: brushes for the palette, addable by agents at runtime ----
 const prefabsFile = fileURLToPath(new URL('../world/prefabs.json', import.meta.url));
@@ -53,6 +59,49 @@ function applyAndBroadcast(ops, from) {
 
 const intents = new Intents({ world, apply: applyAndBroadcast });
 setInterval(() => intents.tick(0.1), 100);
+
+// ---- weather sim: lightning events + rain cycles for entities with `weather` ----
+const weatherState = new Map();
+const gap = (w) => ((w.minGap ?? 8) + Math.random() * ((w.maxGap ?? 30) - (w.minGap ?? 8))) * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, comps] of world.entities) {
+    const w = comps.weather;
+    if (!w) {
+      weatherState.delete(id);
+      continue;
+    }
+    let st = weatherState.get(id);
+    if (!st) {
+      st = { nextStrike: now + gap(w) };
+      weatherState.set(id, st);
+    }
+    if (w.lightning !== false && now >= st.nextStrike) {
+      st.nextStrike = now + gap(w);
+      applyAndBroadcast(
+        [
+          {
+            op: 'event',
+            name: 'lightning',
+            data: { intensity: Math.round((0.5 + Math.random() * 0.7) * 100) / 100, delay: Math.round((0.8 + Math.random() * 2) * 10) / 10 },
+          },
+        ],
+        'weather',
+      );
+    }
+    if (w.rainCycle) {
+      const rain =
+        Math.round((Math.sin((worldTime() * Math.PI * 2) / w.rainCycle) * 0.5 + 0.5) * (w.rainAmount ?? 1) * 100) / 100;
+      if (Math.abs(rain - (w.rain ?? 0)) > 0.05) {
+        applyAndBroadcast([{ op: 'merge', id, component: 'weather', value: { rain } }], 'weather');
+      }
+    }
+  }
+}, 1000);
+
+// ---- screenshots: client-rendered, relayed over the ws ----
+const shots = new Map();
+let shotSeq = 0;
 
 // ---- http ----
 const server = http.createServer(async (req, res) => {
@@ -92,6 +141,36 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/sense/check') {
       return text(res, sense.check());
+    }
+    if (req.method === 'GET' && url.pathname === '/screenshot') {
+      if (![...wss.clients].some((c) => c.readyState === WebSocket.OPEN)) {
+        return json(res, { ok: false, error: 'no client connected — open the world in a browser first' }, 503);
+      }
+      const id = ++shotSeq;
+      shots.set(id, res);
+      broadcast({ type: 'screenshot-request', id });
+      setTimeout(() => {
+        if (shots.has(id)) {
+          shots.delete(id);
+          json(res, { ok: false, error: 'screenshot timed out' }, 504);
+        }
+      }, 8000);
+      return undefined;
+    }
+    if (req.method === 'GET' && url.pathname.startsWith('/assets/')) {
+      const rel = path.normalize(url.pathname.slice('/assets/'.length)).replace(/^(\.\.[/\\])+/, '');
+      const file = path.join(assetsDir, rel);
+      if (!file.startsWith(assetsDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        res.writeHead(404);
+        res.end();
+        return undefined;
+      }
+      const mime =
+        { '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4' }[path.extname(file)] ??
+        'application/octet-stream';
+      res.writeHead(200, { 'content-type': mime });
+      fs.createReadStream(file).pipe(res);
+      return undefined;
     }
     if (req.method === 'GET' && url.pathname === '/prefabs') {
       return json(res, prefabs);
@@ -161,13 +240,27 @@ function nums(q, keys) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (socket) => {
-  socket.send(JSON.stringify({ type: 'snapshot', ...world.snapshot() }));
+  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), ...world.snapshot() }));
   socket.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'ops') applyAndBroadcast(msg.ops ?? [], msg.from ?? 'ws');
+      else if (msg.type === 'hello') socket.presenceId = msg.presence;
+      else if (msg.type === 'screenshot') {
+        const res = shots.get(msg.id);
+        if (res) {
+          shots.delete(msg.id);
+          res.writeHead(200, { 'content-type': 'image/png' });
+          res.end(Buffer.from(msg.data, 'base64'));
+        }
+      }
     } catch {
       // malformed message — ignore
+    }
+  });
+  socket.on('close', () => {
+    if (socket.presenceId && world.entities.has(socket.presenceId)) {
+      applyAndBroadcast([{ op: 'despawn', id: socket.presenceId }], 'server');
     }
   });
 });

@@ -32,7 +32,7 @@ export class View {
     this.build(id);
     const group = this.groups.get(id);
     const components = this.store.get(id);
-    if (!group || !this.effects || components?.terrain) return;
+    if (!group || !this.effects || components?.terrain || id === this.ownPresence) return;
     group.visible = false;
     this.effects.wispTo(group.position.clone(), () => {
       group.visible = true;
@@ -71,6 +71,7 @@ export class View {
     if (!components) return;
     const group = new THREE.Group();
     group.name = id;
+    if (id === this.ownPresence) group.visible = false; // don't render your own head
     this.groups.set(id, group);
     this.scene.add(group);
     // terrain first so grounded transforms in the same entity resolve correctly

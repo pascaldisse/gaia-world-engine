@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { makePresetMaterial } from './presets.js';
 
 // Shared mesh-recipe builders: entity meshes, scatter instances, palette ghosts.
 
@@ -29,6 +30,10 @@ export function makeGeometry(part) {
 }
 
 export function makePartMaterial(part) {
+  if (part.preset) {
+    const preset = makePresetMaterial(part);
+    if (preset) return preset;
+  }
   const material = new THREE.MeshStandardMaterial({
     color: part.color ?? '#9aa0a6',
     roughness: part.roughness ?? 0.8,

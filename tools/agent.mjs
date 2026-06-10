@@ -82,6 +82,18 @@ switch (cmd) {
   case 'say':
     await act('say', { text: rest.join(' ') });
     break;
+  case 'shot': {
+    const res = await fetch(`${BASE}/screenshot`);
+    if (!res.ok) {
+      console.error(await res.text());
+      break;
+    }
+    const fs = await import('node:fs');
+    const file = rest[0] ?? 'shot.png';
+    fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+    console.log(`${file} (${fs.statSync(file).size} bytes)`);
+    break;
+  }
   default:
     console.log(
       'usage: agent.mjs look | map [x z radius] | describe <id> | query [--has c] [--name s] [--nearX x --nearZ z --radius r] | check | events [since] | move <x> <z> [speed] | walk <dx> <dz> <sec> | face <id|yaw> | grab <id> | drop | say <text>',

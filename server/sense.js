@@ -1,10 +1,12 @@
 import { terrainHeight } from '../shared/noise.js';
+import { animatedPosition } from '../shared/motion.js';
 
 // Perception without pixels: the same world documents the renderer draws are
 // summarized into compact text frames, queries, maps, and sanity checks.
 export class Sense {
-  constructor(world) {
+  constructor(world, now = () => 0) {
     this.world = world;
+    this.now = now;
   }
 
   terrainParams() {
@@ -19,9 +21,8 @@ export class Sense {
   }
 
   positionOf(comps) {
-    const [x, y, z] = comps.transform?.position ?? [0, 0, 0];
-    if (comps.ground) return [x, this.groundAt(x, z) + (comps.ground.offset ?? 0), z];
-    return [x, y, z];
+    // world-clock motion math: orbiting/bobbing entities sense at their live position
+    return animatedPosition(comps, this.now(), (x, z) => this.groundAt(x, z));
   }
 
   poseOf(as) {
@@ -126,6 +127,10 @@ export class Sense {
       bits.push(`${comps.particles.count ?? 100} ${comps.particles.motion?.type ?? 'drift'} particles`);
     }
     if (comps.environment) bits.push('environment settings (fog, sky, sun, bloom)');
+    if (comps.weather) {
+      bits.push(`weather (rain ${comps.weather.rain ?? 0}${comps.weather.lightning !== false ? ', lightning' : ''})`);
+    }
+    if (comps.sfx) bits.push(`sfx on "${comps.sfx.on}"`);
     return bits.join(' · ') || 'empty entity';
   }
 
@@ -212,6 +217,37 @@ export class Sense {
         const d = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
         if (d < (a.r + b.r) * 0.5) problems.push(`${a.id} and ${b.id} overlap (${r1(d)}m apart)`);
       }
+    }
+    // lights that illuminate nothing
+    for (const [id, comps] of this.world.entities) {
+      if (!comps.light || comps.terrain) continue;
+      const [lx, ly, lz] = this.positionOf(comps);
+      const reach = comps.light.distance || 25;
+      let lit = 0;
+      for (const [otherId, other] of this.world.entities) {
+        if (otherId === id || !other.mesh) continue;
+        const [ox, oy, oz] = this.positionOf(other);
+        if (Math.hypot(ox - lx, oy - ly, oz - lz) < reach) lit++;
+      }
+      if (!lit) problems.push(`${id}'s light reaches nothing within ${reach}m`);
+    }
+    // walkability: how much of the local terrain is too steep
+    const params = this.terrainParams();
+    if (params) {
+      let steep = 0;
+      const samples = 28;
+      const extent = 100;
+      for (let i = 0; i < samples; i++) {
+        for (let j = 0; j < samples; j++) {
+          const x = -extent + (i / (samples - 1)) * extent * 2;
+          const z = -extent + (j / (samples - 1)) * extent * 2;
+          const h = this.groundAt(x, z);
+          const slope = Math.max(Math.abs(this.groundAt(x + 2, z) - h), Math.abs(this.groundAt(x, z + 2) - h)) / 2;
+          if (slope > 0.9) steep++;
+        }
+      }
+      const pct = Math.round((steep / (samples * samples)) * 100);
+      if (pct > 25) problems.push(`${pct}% of terrain within ${extent}m is too steep to walk`);
     }
     return problems.length ? problems.slice(0, 20).join('\n') : 'no problems found';
   }

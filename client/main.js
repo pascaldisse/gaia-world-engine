@@ -9,6 +9,8 @@ import { Interact } from './kernel/interact.js';
 import { History } from './kernel/history.js';
 import { Panel } from './kernel/panel.js';
 import { Palette } from './kernel/palette.js';
+import { Outliner } from './kernel/outliner.js';
+import { Gizmos } from './kernel/gizmos.js';
 import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
 import { Zones } from './kernel/zones.js';
@@ -54,8 +56,30 @@ const net = connect({
     if (!player.spawned) {
       player.respawn();
       player.spawned = true;
-      // a world can declare itself a game: editing locked until G
-      if (spawnComp?.gameMode && !player.gameMode) editor.toggleGameMode();
+      // dev deep-links: ?create=1 opens creator mode (?select=<id> selects,
+      // ?gizmos=a,b,c switches overlay categories on) — so tools and agents
+      // can screenshot the editor without touching the keyboard
+      const params = new URLSearchParams(location.search);
+      if (params.has('create')) {
+        setTimeout(() => {
+          overlay.style.display = 'none';
+          editor.enterCreate();
+          for (const key of (params.get('gizmos') ?? '').split(',').filter(Boolean)) gizmos.toggle(key);
+          const sel = params.get('select');
+          if (sel) {
+            editor.select(sel);
+            editor.frameSelected();
+          }
+          // explicit camera pose beats framing when you know the shot you want
+          const pos = params.get('pos')?.split(',').map(Number);
+          if (pos?.length === 3 && pos.every((n) => Number.isFinite(n))) player.position.set(...pos);
+          if (params.has('yaw')) player.yaw = Number(params.get('yaw')) || 0;
+          if (params.has('pitch')) player.pitch = Number(params.get('pitch')) || 0;
+        }, 800);
+      } else if (spawnComp?.gameMode && !player.gameMode) {
+        // a world can declare itself a game: editing locked until G
+        editor.toggleGameMode();
+      }
     }
     // zone set must be known before the snapshot builds, so only the
     // player's surroundings (plus backdrops) turn into meshes
@@ -90,7 +114,8 @@ const net = connect({
   onStatus: (s) => {
     statusEl.textContent = s;
   },
-  onScreenshot: (id) => {
+  onScreenshot: (id, from) => {
+    if (from && from !== presenceId) return; // addressed to another tab
     pendingShot = id;
   },
 });
@@ -194,6 +219,19 @@ const palette = new Palette({
   camera,
   renderer,
 });
+const gizmos = new Gizmos({ scene, store, view, zones });
+const outliner = new Outliner({
+  el: document.getElementById('outliner'),
+  store,
+  view,
+  zones,
+  gizmos,
+  onPick: (id) => editor.select(id),
+  onFocus: (id) => {
+    editor.select(id);
+    editor.frameSelected();
+  },
+});
 const editor = new Editor({
   camera,
   scene,
@@ -205,12 +243,17 @@ const editor = new Editor({
   history,
   panel,
   palette,
+  outliner,
+  gizmos,
   modeEl: document.getElementById('mode'),
 });
 
 document.addEventListener('pointerlockchange', () => {
   crosshairEl.style.display = player.locked && !player.editorMode ? 'block' : 'none';
 });
+
+// debug handle: poke the kernel from the devtools console (or CDP)
+window.gaia = { store, view, zones, gizmos, outliner, editor, panel, environment, player, net };
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };
@@ -263,6 +306,8 @@ renderer.setAnimationLoop(() => {
     hintEl.textContent = 'your strength fades — reach for the boat';
   }
   editor.update();
+  gizmos.update();
+  outliner.update();
   publishPresence(now);
   if (post) post.render();
   else renderer.render(scene, camera);

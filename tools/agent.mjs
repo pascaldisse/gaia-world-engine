@@ -83,7 +83,9 @@ switch (cmd) {
     await act('say', { text: rest.join(' ') });
     break;
   case 'shot': {
-    const res = await fetch(`${BASE}/screenshot`);
+    // shot [file] [presence-id] — with a presence id only that session's
+    // tab answers (otherwise the frontmost of all open tabs wins)
+    const res = await fetch(`${BASE}/screenshot${rest[1] ? `?from=${encodeURIComponent(rest[1])}` : ''}`);
     if (!res.ok) {
       console.error(await res.text());
       break;

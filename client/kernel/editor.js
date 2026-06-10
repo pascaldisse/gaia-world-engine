@@ -6,7 +6,7 @@ import { heightAt } from './terrain.js';
 // F frames the selection, hold RMB to fly (WASD + Q/E down/up), scroll dollies.
 // Every change is the same ops any agent sends.
 export class Editor {
-  constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, modeEl }) {
+  constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, outliner, gizmos, modeEl }) {
     this.camera = camera;
     this.scene = scene;
     this.renderer = renderer;
@@ -17,6 +17,8 @@ export class Editor {
     this.history = history;
     this.panel = panel;
     this.palette = palette;
+    this.outliner = outliner;
+    this.gizmos = gizmos;
     this.modeEl = modeEl;
     this.mode = 'play';
     this.tool = 'translate';
@@ -184,6 +186,8 @@ export class Editor {
     document.exitPointerLock();
     this.modeEl.style.display = 'block';
     this.palette.show();
+    this.outliner?.show();
+    this.gizmos?.setEnabled(true);
   }
 
   enterPlay() {
@@ -195,6 +199,8 @@ export class Editor {
     this.select(null);
     this.palette.disarm();
     this.palette.hide();
+    this.outliner?.hide();
+    this.gizmos?.setEnabled(false);
     this.modeEl.style.display = 'none';
     this.renderer.domElement.requestPointerLock();
   }
@@ -223,16 +229,22 @@ export class Editor {
     }
     this.tc.detach();
     this.helper.visible = false;
-    if (!id) {
+    this.outliner?.setSelected(id);
+    this.gizmos?.setSelected(id);
+    if (!id || !this.store.get(id)) {
       this.panel.hide();
       return;
     }
+    // entities without a body (triggers, water, environment…) are still
+    // selectable — from the outliner — with the panel and their own gizmos
     const group = this.view.getGroup(id);
-    const comps = this.store.get(id);
-    if (!group || !comps) return;
-    this.selBox = new THREE.BoxHelper(group, '#ffb347');
-    this.scene.add(this.selBox);
-    this.attachGizmo();
+    if (group) {
+      if (!new THREE.Box3().setFromObject(group).isEmpty()) {
+        this.selBox = new THREE.BoxHelper(group, '#ffb347');
+        this.scene.add(this.selBox);
+      }
+      this.attachGizmo();
+    }
     this.panel.show(id);
   }
 
@@ -286,12 +298,23 @@ export class Editor {
 
   frameSelected() {
     const group = this.selected && this.view.getGroup(this.selected);
-    if (!group) return;
-    const box = new THREE.Box3().setFromObject(group);
-    const center = box.getCenter(new THREE.Vector3());
-    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    if (group) {
+      const box = new THREE.Box3().setFromObject(group);
+      if (!box.isEmpty()) {
+        const center = box.getCenter(new THREE.Vector3());
+        const sphere = box.getBoundingSphere(new THREE.Sphere());
+        this.camera.getWorldDirection(this.dir);
+        this.player.position.copy(center).addScaledVector(this.dir, -Math.max(4, sphere.radius * 2.5));
+        this.player.velocity.set(0, 0, 0);
+        return;
+      }
+    }
+    // no body to frame: fly to where the data says it is
+    const comps = this.selected && this.store.get(this.selected);
+    const pos = comps && dataPosition(comps);
+    if (!pos) return;
     this.camera.getWorldDirection(this.dir);
-    this.player.position.copy(center).addScaledVector(this.dir, -Math.max(4, sphere.radius * 2.5));
+    this.player.position.set(...pos).addScaledVector(this.dir, -12);
     this.player.velocity.set(0, 0, 0);
   }
 
@@ -376,6 +399,24 @@ export class Editor {
 function isTyping() {
   const el = document.activeElement;
   return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+}
+
+// where a bodiless entity lives, judged from whichever component is spatial
+function dataPosition(comps) {
+  if (comps.transform?.position) return comps.transform.position;
+  const trigger = comps.trigger;
+  if (trigger?.area?.center) {
+    const [x, z] = trigger.area.center;
+    return [x, ((trigger.yMin ?? 0) + (trigger.yMax ?? 4)) / 2, z];
+  }
+  if (comps.water?.area?.center) {
+    const [x, z] = comps.water.area.center;
+    return [x, comps.water.level ?? 0, z];
+  }
+  const area = comps.scatter?.area ?? comps.particles?.area;
+  if (area?.center) return [area.center[0], 2, area.center[1]];
+  if (comps.spawn?.position) return comps.spawn.position;
+  return null;
 }
 
 function r2(v) {

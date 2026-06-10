@@ -17,14 +17,25 @@ not evidence that it renders.
 
 Screenshot discipline:
 - The capture comes from a connected, **visible** browser tab (background
-  tabs pause rendering). Keep exactly ONE tab open — every extra tab is a
-  full extra player session whose stale presence pollutes the world and may
-  be the tab that answers your screenshot request.
-- List sessions with `GET /sense/query?has=presence`; closing a tab despawns
-  its presence.
+  tabs pause rendering). With several tabs open the FIRST tab to render
+  answers — target one session with
+  `node tools/agent.mjs shot out.png <presence-id>`
+  (`GET /screenshot?from=<presence-id>`). Find the new tab's id by diffing
+  `GET /sense/query?has=presence` before/after opening it.
+- Still keep tabs to a minimum — every tab is a full player session whose
+  stale presence pollutes the world after it closes.
 - Low-alpha standard materials (`opacity` < ~0.15) are effectively invisible
   in dark scenes. For light shafts/halos use the additive presets (`beam`,
   `glow`) — that is what they are for.
+- You cannot press keys in the browser. To screenshot the EDITOR (outliner,
+  gizmos, selection) open a deep-link instead:
+  `?create=1&select=<id>&gizmos=colliders,triggers,water,lights,sounds,paths,areas,zones&pos=x,y,z&yaw=r&pitch=r`
+  — creator mode opens by itself, the entity is selected, the listed gizmo
+  categories switch on, and the camera goes exactly where you said (editor
+  mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so
+  `shot` captures them; the DOM panels (outliner/inspector) do NOT appear in
+  canvas screenshots — verify those with a headless Chromium screenshot
+  (e.g. Brave: `--headless --screenshot=out.png --user-data-dir=/tmp/x <url>`).
 
 ## Other ground rules
 

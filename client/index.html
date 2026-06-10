@@ -238,6 +238,111 @@
       #panel .panel-add {
         margin-top: 6px;
       }
+      #outliner {
+        position: fixed;
+        top: 40px;
+        left: 12px;
+        bottom: 70px;
+        width: 224px;
+        display: none;
+        flex-direction: column;
+        background: rgba(8, 14, 24, 0.92);
+        border: 1px solid rgba(125, 249, 255, 0.25);
+        border-radius: 8px;
+        color: #dbe7ff;
+        font-size: 11px;
+        z-index: 30;
+        overflow: hidden;
+      }
+      #outliner .o-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(125, 249, 255, 0.15);
+      }
+      #outliner .o-title {
+        flex: 1;
+        color: #7df9ff;
+        font-weight: 600;
+      }
+      #outliner .o-count {
+        opacity: 0.6;
+      }
+      #outliner input[type='text'] {
+        margin: 6px 10px;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(125, 249, 255, 0.2);
+        border-radius: 4px;
+        color: #dbe7ff;
+        font: inherit;
+        padding: 3px 6px;
+      }
+      #outliner .o-gizmos {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 0 10px 6px;
+        border-bottom: 1px solid rgba(125, 249, 255, 0.15);
+      }
+      #outliner .o-gizmos button {
+        background: rgba(125, 249, 255, 0.06);
+        border: 1px solid rgba(125, 249, 255, 0.18);
+        border-radius: 10px;
+        color: #9fb4d8;
+        font: inherit;
+        font-size: 10px;
+        padding: 1px 7px;
+        cursor: pointer;
+      }
+      #outliner .o-gizmos button.active {
+        background: rgba(125, 249, 255, 0.25);
+        border-color: rgba(125, 249, 255, 0.5);
+        color: #ffffff;
+      }
+      #outliner .o-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 0 8px;
+      }
+      #outliner .o-group {
+        padding: 5px 10px 2px;
+        color: #ffd9a0;
+        cursor: pointer;
+        user-select: none;
+      }
+      #outliner .o-group .o-n {
+        opacity: 0.55;
+        color: #dbe7ff;
+      }
+      #outliner .o-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px 2px 16px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      #outliner .o-row:hover {
+        background: rgba(125, 249, 255, 0.08);
+      }
+      #outliner .o-row.selected {
+        background: rgba(125, 249, 255, 0.18);
+        color: #ffffff;
+      }
+      #outliner .o-row.dim {
+        opacity: 0.45;
+      }
+      #outliner .o-icon {
+        width: 12px;
+        flex-shrink: 0;
+        text-align: center;
+        color: #7df9ff;
+      }
+      #outliner .o-id {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       #palette {
         position: fixed;
         bottom: 12px;
@@ -317,6 +422,7 @@
     <div id="crosshair"></div>
     <div id="hint"></div>
     <div id="mode">CREATE &middot; Q view W move E rotate R scale &middot; F frame &middot; RMB/V fly &middot; &#8997;drag orbit &middot; &#8984;D dup &middot; &#9003; delete &middot; &#8984;Z undo &middot; Tab to play</div>
+    <div id="outliner"></div>
     <div id="panel"></div>
     <div id="palette"></div>
     <div id="overlay">

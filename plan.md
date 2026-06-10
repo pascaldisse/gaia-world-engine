@@ -127,6 +127,24 @@ seen or reached; no gates, no loading, ever. Driven by
       seed files — persist-tagged entities, presences, and unzoned entities
       (world state) keep their current truth (the Braid rule as a primitive)
 
+### M10 — See the invisible (forced by: guessing at triggers, routes, volumes)
+
+- [x] Outliner: every entity listed in creator mode, grouped by zone (current
+      zone marked, unzoned "world" section, presences last), searchable by id
+      or component name, dimmed when out of the streamed zone set. Click
+      selects — including bodiless entities (triggers, water, environment,
+      world-state); double-click flies to where the data says it is.
+- [x] Gizmo layer: x-ray overlays for the data the renderer doesn't show —
+      collider boxes (green walkable / red blocker), trigger volumes (yellow,
+      with y-band), water areas at their level (blue), light ranges, sound
+      refDistance rings, path waypoints + direction cones + orbit rings
+      (orange), scatter/particle footprints draped on the terrain, zone bounds
+      + spawn markers. Selected entity always draws its own; outliner chips
+      toggle whole categories.
+- [x] Dev deep-links: `?create=1&select=<id>&gizmos=a,b,c&pos=x,y,z&yaw=&pitch=`
+      opens creator mode without keyboard input — agents can screenshot the
+      editor; people can bookmark a debugging vantage.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

@@ -56,6 +56,15 @@ drop) — carries stream live to every client. **V** toggles noclip flight,
   view/move/rotate/scale tools, **F** frames the selection.
 - Hold **RMB** to fly (WASD + Q/E down/up), **V** latches flight,
   **⌥-drag** orbits the selection, scroll dollies.
+- The **outliner** (left) lists every entity grouped by zone — searchable,
+  and the only way to reach the bodiless ones: triggers, water volumes,
+  ambience patches, the environment itself. Click selects, double-click
+  flies there.
+- **Gizmos** draw the invisible data as x-ray overlays: collider boxes
+  (green walkable, red blocker), trigger volumes, water surfaces, light and
+  sound ranges, ferry routes with direction arrows, scatter footprints, zone
+  bounds. The selected entity always shows its own; the chips at the top of
+  the outliner switch whole categories on.
 - The inspector panel auto-generates sliders, color pickers, and dropdowns
   from the entity's JSON (raw JSON tab included). **⌘D** duplicates,
   **⌫** deletes, **⌘Z/⌘⇧Z** undo/redo your own edits as inverse ops.
@@ -245,8 +254,9 @@ State lives on the server; the vite client hot-reloads freely around it.
 
 ## Roadmap
 
-See [plan.md](plan.md) — M1–M7 (in-world editing, agent senses and intents,
-inspector, instancing and shader presets, procedural audio, observability,
-zones & streaming) are done; next up are blocking colliders, swim and
-rideable platforms (M8), then triggers, world state, and persistence rules
-(M9).
+See [plan.md](plan.md) — M1–M10 are done: in-world editing, agent senses
+and intents, inspector, instancing and shader presets, procedural audio,
+observability, zones & streaming (M7), bodies in space — gravity, swim,
+rideable platforms, blockers (M8), world logic — triggers, state,
+persistence rules (M9), and the outliner + gizmo layer (M10). The Later
+list holds scripting, full TSL authoring, and multiplayer attribution.

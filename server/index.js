@@ -244,7 +244,10 @@ const server = http.createServer(async (req, res) => {
       }
       const id = ++shotSeq;
       shots.set(id, res);
-      broadcast({ type: 'screenshot-request', id });
+      // ?from=<presence-id> targets one session's tab — without it, the
+      // first (frontmost) tab to render answers, which with several tabs
+      // open is a race
+      broadcast({ type: 'screenshot-request', id, from: q.from });
       setTimeout(() => {
         if (shots.has(id)) {
           shots.delete(id);

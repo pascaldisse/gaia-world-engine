@@ -252,6 +252,35 @@ export class View {
     this.groups.delete(id);
   }
 
+  // analytic walkable boxes from `collider` components — the reliable path
+  // for decks, bridges, floors (no raycast, no gaps). Returns highest top
+  // under (x, z) or null. Boxes are entity-relative and yaw-aware.
+  walkableAt(x, z) {
+    let best = null;
+    for (const [id, comps] of this.store.entities) {
+      const boxes = comps.collider?.boxes;
+      if (!boxes) continue;
+      const group = this.groups.get(id);
+      if (!group) continue;
+      const yaw = group.rotation.y;
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      const wx = x - group.position.x;
+      const wz = z - group.position.z;
+      // world → entity-local (inverse yaw)
+      const lx = wx * cos - wz * sin;
+      const lz = wx * sin + wz * cos;
+      for (const box of boxes) {
+        const [bx, by, bz] = box.position ?? [0, 0, 0];
+        const [sx, sy, sz] = box.size ?? [1, 0.2, 1];
+        if (Math.abs(lx - bx) > sx / 2 || Math.abs(lz - bz) > sz / 2) continue;
+        const top = group.position.y + by + sy / 2;
+        if (best === null || top > best) best = top;
+      }
+    }
+    return best;
+  }
+
   // highest solid mesh surface under (x, z), cast from fromY downward —
   // walkable docks, bridges, platforms without a physics engine
   surfaceAt(x, z, fromY) {

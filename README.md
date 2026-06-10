@@ -68,6 +68,7 @@ Or POST raw ops to `http://localhost:8420/op`:
 - `terrain` — `{seed, size, segments, amplitude, frequency, color}` (one per world)
 - `scatter` — `{seed, count, area:{shape:circle|rect, center, radius|size}, instance:{parts:[...]}, scale:[min,max], tilt, rotateY, offsetY, minHeight, maxHeight, density:{noise, bias}}` — hundreds of instanced copies in a few draw calls, terrain-following, fbm-clustered; min/maxHeight filter by terrain height (shore-only pines, deep-water-only candles)
 - `spawn` — `{position:[x,y,z], yaw}` — where players enter the world
+- `collider` — `{boxes:[{size:[w,h,d], position:[x,y,z]}]}` — analytic walkable surfaces (entity-relative, yaw-aware); the reliable way to make decks/floors/bridges standable. Solid mesh parts also work via raycast, and `visible:false` parts collide without rendering
 - `particles` — `{seed, count, size, color, area, motion:{type:drift|rain, speed, radius, height, bob}}` — animated instanced motes (fireflies, souls, rain)
 - `environment` — `{background, fog:{color, near, far | density}, exposure, hemisphere:{sky, ground, intensity}, sun:{color, intensity, position}, bloom:{strength, radius, threshold}, audio:{level, reverb, compressor}}` — world mood as one patchable entity
 - mesh parts accept `preset: glow|flame|water|hologram` — TSL shader materials as data (a failing preset falls back to a standard material); flame/glow look best on crossed planes

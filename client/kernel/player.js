@@ -68,10 +68,15 @@ export class Player {
 
     if (!this.editorMode && !this.noclip) {
       let groundY = heightAt(this.position.x, this.position.z);
-      // walkable meshes (docks, platforms) override terrain within step height
       const feetY = this.position.y - this.eyeHeight;
+      const step = feetY + 0.65;
+      // analytic collider boxes first (decks, floors), mesh raycast as fallback
+      const walkable = this.view?.walkableAt(this.position.x, this.position.z);
+      if (walkable !== null && walkable !== undefined && walkable > groundY && walkable <= step) {
+        groundY = walkable;
+      }
       const surface = this.view?.surfaceAt(this.position.x, this.position.z, this.position.y + 0.5);
-      if (surface !== null && surface !== undefined && surface > groundY && surface <= feetY + 0.65) {
+      if (surface !== null && surface !== undefined && surface > groundY && surface <= step) {
         groundY = surface;
       }
       this.position.y += (groundY + this.eyeHeight - this.position.y) * Math.min(1, dt * 12);

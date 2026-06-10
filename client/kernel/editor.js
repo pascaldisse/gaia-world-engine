@@ -1,8 +1,9 @@
 import * as THREE from 'three/webgpu';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { heightAt } from './terrain.js';
 
-// Creator mode: Tab frees the cursor without leaving the world. Click selects,
-// G/R/S switch gizmos, the panel edits the document, the palette stamps prefabs.
+// Creator mode with Unity controls: Q view / W move / E rotate / R scale,
+// F frames the selection, hold RMB to fly (WASD + Q/E down/up), scroll dollies.
 // Every change is the same ops any agent sends.
 export class Editor {
   constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, modeEl }) {
@@ -18,12 +19,14 @@ export class Editor {
     this.palette = palette;
     this.modeEl = modeEl;
     this.mode = 'play';
+    this.tool = 'translate';
     this.selected = null;
     this.selBox = null;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
     this.lastStream = 0;
     this.dragStart = null;
+    this.dir = new THREE.Vector3();
 
     this.tc = new TransformControls(camera, renderer.domElement);
     this.tc.enabled = false;
@@ -34,11 +37,47 @@ export class Editor {
     scene.add(this.helper);
 
     renderer.domElement.addEventListener('pointerdown', (e) => {
-      if (this.mode !== 'create' || e.button !== 0) return;
+      if (this.mode !== 'create') return;
+      if (e.button === 2) {
+        if (this.palette.armed) {
+          this.palette.disarm();
+          return;
+        }
+        this.player.flyActive = true;
+        this.renderer.domElement.requestPointerLock();
+        return;
+      }
+      if (e.button !== 0 || this.player.flyActive) return;
       if (this.tc.axis) return; // gizmo interaction
       if (this.palette.armed) return; // palette stamps
       this.selectAt(e);
     });
+
+    document.addEventListener('pointerup', (e) => {
+      if (e.button === 2 && this.player.flyActive) {
+        this.player.flyActive = false;
+        if (this.mode === 'create') document.exitPointerLock();
+      }
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement) this.player.flyActive = false;
+    });
+
+    renderer.domElement.addEventListener('contextmenu', (e) => {
+      if (this.mode === 'create') e.preventDefault();
+    });
+
+    renderer.domElement.addEventListener(
+      'wheel',
+      (e) => {
+        if (this.mode !== 'create') return;
+        e.preventDefault();
+        this.camera.getWorldDirection(this.dir);
+        this.player.position.addScaledVector(this.dir, -Math.sign(e.deltaY) * 1.2);
+      },
+      { passive: false },
+    );
 
     document.addEventListener('keydown', (e) => {
       if (isTyping()) return;
@@ -53,21 +92,37 @@ export class Editor {
         else this.history.undo();
         return;
       }
-      if (this.mode !== 'create') return;
+      if (this.mode !== 'create' || this.player.flyActive) return;
       if ((e.metaKey || e.ctrlKey) && e.code === 'KeyD') {
         e.preventDefault();
         if (this.selected) this.duplicate(this.selected);
         return;
       }
-      if (e.code === 'KeyG') this.setGizmoMode('translate');
-      if (e.code === 'KeyR') this.setGizmoMode('rotate');
-      if (e.code === 'KeyS' && !e.metaKey && !e.ctrlKey) this.setGizmoMode('scale');
-      if (e.code === 'Delete' || e.code === 'Backspace') {
-        if (this.selected) this.delete(this.selected);
-      }
-      if (e.code === 'Escape') {
-        if (this.palette.armed) this.palette.disarm();
-        else this.select(null);
+      if (e.metaKey || e.ctrlKey) return;
+      switch (e.code) {
+        case 'KeyQ':
+          this.setTool(null);
+          break;
+        case 'KeyW':
+          this.setTool('translate');
+          break;
+        case 'KeyE':
+          this.setTool('rotate');
+          break;
+        case 'KeyR':
+          this.setTool('scale');
+          break;
+        case 'KeyF':
+          this.frameSelected();
+          break;
+        case 'Delete':
+        case 'Backspace':
+          if (this.selected) this.delete(this.selected);
+          break;
+        case 'Escape':
+          if (this.palette.armed) this.palette.disarm();
+          else this.select(null);
+          break;
       }
     });
   }
@@ -89,6 +144,7 @@ export class Editor {
   enterPlay() {
     this.mode = 'play';
     this.player.editorMode = false;
+    this.player.flyActive = false;
     this.tc.enabled = false;
     this.select(null);
     this.palette.disarm();
@@ -130,37 +186,57 @@ export class Editor {
     if (!group || !comps) return;
     this.selBox = new THREE.BoxHelper(group, '#ffb347');
     this.scene.add(this.selBox);
-    if (comps.transform) {
-      this.tc.attach(group);
-      this.helper.visible = true;
-      this.updateGizmoConstraints();
-    }
+    this.attachGizmo();
     this.panel.show(id);
   }
 
-  setGizmoMode(mode) {
-    this.tc.setMode(mode);
-    this.updateGizmoConstraints();
+  attachGizmo() {
+    const group = this.selected && this.view.getGroup(this.selected);
+    const comps = this.selected && this.store.get(this.selected);
+    if (group && comps?.transform && this.tool) {
+      this.tc.setMode(this.tool);
+      this.tc.attach(group);
+      this.helper.visible = true;
+    } else {
+      this.tc.detach();
+      this.helper.visible = false;
+    }
   }
 
-  updateGizmoConstraints() {
-    const comps = this.selected && this.store.get(this.selected);
-    this.tc.showY = !(comps?.ground && this.tc.mode === 'translate');
+  setTool(tool) {
+    this.tool = tool;
+    this.attachGizmo();
+  }
+
+  frameSelected() {
+    const group = this.selected && this.view.getGroup(this.selected);
+    if (!group) return;
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    this.camera.getWorldDirection(this.dir);
+    this.player.position.copy(center).addScaledVector(this.dir, -Math.max(4, sphere.radius * 2.5));
+    this.player.velocity.set(0, 0, 0);
   }
 
   onDragChanged(dragging) {
     if (!this.selected) return;
     if (dragging) {
       this.view.suppress(this.selected);
-      this.dragStart = structuredClone(this.store.get(this.selected)?.transform ?? null);
+      const comps = this.store.get(this.selected);
+      this.dragStart = {
+        transform: structuredClone(comps?.transform ?? null),
+        ground: structuredClone(comps?.ground),
+      };
     } else {
-      const value = this.transformFromGroup();
-      if (value) {
-        this.send([{ op: 'set', id: this.selected, component: 'transform', value }]);
-        this.history.push(
-          [{ op: 'set', id: this.selected, component: 'transform', value: this.dragStart }],
-          [{ op: 'set', id: this.selected, component: 'transform', value }],
-        );
+      const ops = this.streamOps();
+      if (ops) {
+        this.send(ops);
+        const undoOps = [{ op: 'set', id: this.selected, component: 'transform', value: this.dragStart.transform }];
+        if (this.dragStart.ground !== undefined) {
+          undoOps.push({ op: 'set', id: this.selected, component: 'ground', value: this.dragStart.ground });
+        }
+        this.history.push(undoOps, ops);
       }
       this.view.unsuppress(this.selected);
     }
@@ -170,18 +246,27 @@ export class Editor {
     const now = performance.now();
     if (now - this.lastStream < 60 || !this.selected) return;
     this.lastStream = now;
-    const value = this.transformFromGroup();
-    if (value) this.send([{ op: 'set', id: this.selected, component: 'transform', value }]);
+    const ops = this.streamOps();
+    if (ops) this.send(ops);
   }
 
-  transformFromGroup() {
+  // gizmo edits as ops: the Y arrow on grounded entities edits ground.offset,
+  // so a lifted object hovers relative to the terrain instead of snapping back
+  streamOps() {
     const group = this.view.getGroup(this.selected);
     if (!group) return null;
-    return {
+    const value = {
       position: [r2(group.position.x), r2(group.position.y), r2(group.position.z)],
       rotation: [r2(group.rotation.x), r2(group.rotation.y), r2(group.rotation.z)],
       scale: [r2(group.scale.x), r2(group.scale.y), r2(group.scale.z)],
     };
+    const ops = [{ op: 'set', id: this.selected, component: 'transform', value }];
+    const comps = this.store.get(this.selected);
+    if (comps?.ground) {
+      const offset = r2(group.position.y - heightAt(group.position.x, group.position.z));
+      ops.push({ op: 'merge', id: this.selected, component: 'ground', value: { offset } });
+    }
+    return ops;
   }
 
   duplicate(id) {

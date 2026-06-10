@@ -25,7 +25,7 @@ export class Interact {
     this.target = new THREE.Vector3();
 
     document.addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyE' || !this.player.locked) return;
+      if (e.code !== 'KeyE' || !this.player.locked || this.player.editorMode) return;
       if (this.holding) this.drop();
       else if (this.hovered) this.grab(this.hovered);
     });
@@ -97,7 +97,7 @@ export class Interact {
   }
 
   update(dt, now) {
-    if (!this.player.locked) {
+    if (!this.player.locked || this.player.editorMode) {
       if (this.holding) this.drop();
       this.setHover(null);
       this.updateHint();

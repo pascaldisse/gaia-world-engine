@@ -79,7 +79,7 @@ const editor = new Editor({
 });
 
 document.addEventListener('pointerlockchange', () => {
-  crosshairEl.style.display = player.locked ? 'block' : 'none';
+  crosshairEl.style.display = player.locked && !player.editorMode ? 'block' : 'none';
 });
 
 let last = performance.now();

@@ -224,7 +224,7 @@ const econsole = new EventConsole({ el: document.getElementById('console') });
 if (new URLSearchParams(location.search).has('log')) econsole.toggle();
 
 const history = new History(net.send);
-const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl, history });
+const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl, history, presence: presenceId });
 const panel = new Panel({
   el: document.getElementById('panel'),
   store,

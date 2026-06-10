@@ -15,7 +15,9 @@ export async function createRenderer() {
   scene.background = new THREE.Color('#101c30');
   scene.fog = new THREE.Fog('#101c30', 60, 280);
 
-  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+  // far 4000: the world axis runs ~2.5km — backdrop silhouettes (the tree,
+  // the void glow) must survive the projection, not just the fog
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 4000);
 
   // environment lighting is kernel-owned in v0; moves into world data later
   const hemi = new THREE.HemisphereLight('#8fb3ff', '#2c241a', 0.6);

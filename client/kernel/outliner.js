@@ -11,6 +11,7 @@ const ICONS = [
   ['terrain', '▲'],
   ['water', '≈'],
   ['trigger', '◈'],
+  ['interact', '✧'],
   ['light', '✦'],
   ['sound', '♪'],
   ['particles', '∴'],

@@ -139,8 +139,8 @@ export class Player {
       // analytic collider boxes first (decks, floors), mesh raycast as fallback;
       // a swimmer can haul up onto a low deck (the hand that pulls you out)
       const reach = this.swimming ? 2.0 : 0.65;
-      const walk = this.view?.walkableAt(x, z);
-      if (walk && walk.top > groundY && walk.top <= feet + reach) {
+      const walk = this.view?.walkableAt(x, z, feet + reach);
+      if (walk && walk.top > groundY) {
         groundY = walk.top;
         platformId = walk.id;
       }

@@ -66,6 +66,33 @@ export class Triggers {
     return true;
   }
 
+  // Press-E world logic: an `interact` component fires when a presence USES
+  // the entity on purpose (client sends {op:'use', id, by}) instead of by
+  // walking somewhere. Same rules as trigger volumes — when gates, cooldown,
+  // $now/$id substitution. Returns the expanded ops (empty = refused).
+  use(tid, pid) {
+    const comps = this.world.entities.get(tid);
+    const act = comps?.interact;
+    if (!act) return [];
+    const user = pid ? this.world.entities.get(pid) : null;
+    if (!user) return [];
+    const [px, py, pz] = this.sense.positionOf(user);
+    const [x, y, z] = this.sense.positionOf(comps);
+    // +2m slack: presence positions publish at 300ms — don't refuse a
+    // player the client already showed the prompt to
+    if (Math.hypot(px - x, py - y, pz - z) > (act.radius ?? 4) + 2) return [];
+    if (act.when && !this.matches(act.when)) return [];
+    const last = this.lastFired.get(tid) ?? -Infinity;
+    if (this.now() - last < (act.cooldown ?? 0)) return [];
+    this.lastFired.set(tid, this.now());
+    const ops = [
+      { op: 'event', name: act.event?.name ?? 'use', data: { ...(act.event?.data ?? {}), target: tid, by: pid } },
+    ];
+    for (const op of act.ops ?? []) ops.push(this.substitute(structuredClone(op), pid));
+    console.log(`[gaia] use ${tid} (by ${pid})`);
+    return ops;
+  }
+
   fire(tid, trig, pid) {
     this.lastFired.set(tid, this.now());
     const ops = [];

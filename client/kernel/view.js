@@ -94,7 +94,11 @@ export class View {
     }
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
-    this.effects.scaleOut(group, () => this.remove(id));
+    this.effects.scaleOut(group, () => {
+      // the id may have respawned while the shrink played (a zone reset
+      // despawns and respawns in one batch) — never remove the replacement
+      if (this.groups.get(id) === group) this.remove(id);
+    });
   }
 
   suppress(id) {
@@ -307,9 +311,11 @@ export class View {
 
   // analytic walkable boxes from `collider` components — the reliable path
   // for decks, bridges, floors (no raycast, no gaps). Returns the highest
-  // {top, id} under (x, z) or null — the id lets the player ride a moving
-  // platform. Boxes are entity-relative and yaw-aware.
-  walkableAt(x, z) {
+  // {top, id} under (x, z) no higher than maxTop, or null — feet-aware so
+  // stacked floors work (a switchback above you is not your ground). The id
+  // lets the player ride a moving platform. Boxes are entity-relative and
+  // yaw-aware.
+  walkableAt(x, z, maxTop = Infinity) {
     let best = null;
     for (const [id, comps] of this.store.entities) {
       const boxes = comps.collider?.boxes;
@@ -330,6 +336,7 @@ export class View {
         const [sx, sy, sz] = box.size ?? [1, 0.2, 1];
         if (Math.abs(lx - bx) > sx / 2 || Math.abs(lz - bz) > sz / 2) continue;
         const top = group.position.y + by + sy / 2;
+        if (top > maxTop) continue;
         if (best === null || top > best.top) best = { top, id };
       }
     }

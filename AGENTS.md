@@ -48,6 +48,18 @@ Screenshot discipline:
   (their instance can also wedge on localhost after heavy tab churn — a
   blank tab with an empty title means restart THEIR browser, not the
   server). `window.gaia` exposes store/view/gizmos/editor/audio in the page.
+- Launch the work instance with `--disable-backgrounding-occluded-windows
+  --disable-renderer-backgrounding --disable-background-timer-throttling`.
+  An occluded window freezes requestAnimationFrame AND timers — deep-links
+  silently never run, simulated input does nothing, and `gaia` reads stale
+  state. If evals look frozen, check rAF first:
+  `eval 'window.__t=0; requestAnimationFrame(()=>__t=1)'` … then read `__t`.
+- If another project squats 127.0.0.1:5173, the engine's vite still binds
+  IPv6 — open `http://[::1]:5173/` instead (cdp.mjs matches both).
+- You can drive a full play-test over CDP without a keyboard: set
+  `gaia.player.locked = true`, toggle modes via `gaia.editor`, and hold keys
+  with `gaia.player.keys.add("KeyW")` / `.delete(...)`. Verify climbs by
+  reading `gaia.player.position` — feet are `y - 1.6`.
 
 ## Other ground rules
 
@@ -59,6 +71,9 @@ Screenshot discipline:
   visible in screenshots), `&mute=1` keeps your tab silent.
 - Kill the dev server BEFORE deleting `world.json` — its debounced save
   (weather merges dirty it every ~1s) resurrects old state.
+- A `use` op expands against the world as it was BEFORE its batch — send it
+  in its own request, after the ops that position the user, or the range
+  check reads stale state and silently refuses.
 - The op journal caps at 2000 entries and presence updates flood it; query
   event tails promptly or you will miss them.
 - Worlds are separate repos (`GAIA_WORLD`). Never edit a world repo's frozen

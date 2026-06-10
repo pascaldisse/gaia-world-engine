@@ -2,8 +2,10 @@ import * as THREE from 'three/webgpu';
 
 // Always-on hands: look at a thing, E to grab, scroll to push/pull, E to drop.
 // A carry is a stream of merge ops — every other client (and agent) sees it live.
+// Entities with an `interact` component answer E differently: a `use` op goes
+// to the server, which decides what happens — the only hands a game world has.
 export class Interact {
-  constructor({ camera, scene, store, view, send, player, hintEl, history }) {
+  constructor({ camera, scene, store, view, send, player, hintEl, history, presence }) {
     this.camera = camera;
     this.scene = scene;
     this.store = store;
@@ -12,12 +14,15 @@ export class Interact {
     this.player = player;
     this.hintEl = hintEl;
     this.history = history;
+    this.presence = presence;
     this.grabStart = null;
     this.raycaster = new THREE.Raycaster();
     this.raycaster.far = 40;
     this.center = new THREE.Vector2(0, 0);
     this.hovered = null;
     this.holding = null;
+    this.usable = null;
+    this.usePrompt = '';
     this.helper = null;
     this.dist = 5;
     this.lastSent = 0;
@@ -25,9 +30,10 @@ export class Interact {
     this.target = new THREE.Vector3();
 
     document.addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyE' || !this.player.locked || this.player.editorMode || this.player.gameMode) return;
+      if (e.code !== 'KeyE' || !this.player.locked || this.player.editorMode) return;
       if (this.holding) this.drop();
-      else if (this.hovered) this.grab(this.hovered);
+      else if (this.usable) this.use(this.usable);
+      else if (!this.player.gameMode && this.hovered) this.grab(this.hovered);
     });
     document.addEventListener('wheel', (e) => {
       if (this.holding) this.dist = Math.min(30, Math.max(1.5, this.dist - Math.sign(e.deltaY) * 0.8));
@@ -50,9 +56,32 @@ export class Interact {
     this.raycaster.setFromCamera(this.center, this.camera);
     for (const hit of this.raycaster.intersectObjects(candidates, true)) {
       const id = this.rootIdOf(hit.object);
-      if (id) return id;
+      if (id) return { id, distance: hit.distance };
     }
     return null;
+  }
+
+  // the looked-at entity's interact component, if the player may use it now —
+  // same gates the server applies, so the prompt never lies
+  usableAct(picked) {
+    const act = picked && this.store.get(picked.id)?.interact;
+    if (!act || picked.distance > (act.radius ?? 4)) return null;
+    if (act.when && !this.matches(act.when)) return null;
+    return act;
+  }
+
+  matches(when) {
+    for (const [path, expected] of Object.entries(when)) {
+      const [id, ...keys] = path.split('.');
+      let value = this.store.get(id);
+      for (const key of keys) value = value?.[key];
+      if (value !== expected) return false;
+    }
+    return true;
+  }
+
+  use(id) {
+    this.send([{ op: 'use', id, by: this.presence }]);
   }
 
   grab(id) {
@@ -97,18 +126,26 @@ export class Interact {
   }
 
   update(dt, now) {
-    if (this.player.gameMode) {
-      if (this.holding) this.drop();
-      this.setHover(null);
-      return;
-    }
     if (!this.player.locked || this.player.editorMode) {
       if (this.holding) this.drop();
       this.setHover(null);
+      this.usable = null;
+      this.updateHint();
+      return;
+    }
+    if (this.player.gameMode) {
+      // no grabbing in a game world — but interactables still answer E
+      if (this.holding) this.drop();
+      this.setHover(null);
+      const picked = this.pick();
+      const act = this.usableAct(picked);
+      this.usable = act ? picked.id : null;
+      this.usePrompt = act?.prompt ?? 'use';
       this.updateHint();
       return;
     }
     if (this.holding) {
+      this.usable = null;
       const group = this.view.getGroup(this.holding);
       if (!group || !this.store.get(this.holding)) {
         this.holding = null;
@@ -125,7 +162,11 @@ export class Interact {
         }
       }
     } else {
-      this.setHover(this.pick());
+      const picked = this.pick();
+      const act = this.usableAct(picked);
+      this.usable = act ? picked.id : null;
+      this.usePrompt = act?.prompt ?? 'use';
+      this.setHover(this.usable ? null : picked?.id ?? null);
       this.helper?.update();
     }
     this.updateHint();
@@ -134,11 +175,13 @@ export class Interact {
   updateHint() {
     const text = this.holding
       ? `holding ${this.holding} — E drop · scroll push/pull`
-      : this.hovered
-        ? `${this.hovered} — E grab`
-        : this.player.noclip && this.player.locked
-          ? 'flight — space up · C down · V to land'
-          : '';
+      : this.usable
+        ? `${this.usePrompt} — E`
+        : this.hovered
+          ? `${this.hovered} — E grab`
+          : this.player.noclip && this.player.locked
+            ? 'flight — space up · C down · V to land'
+            : '';
     if (this.hintEl.textContent !== text) this.hintEl.textContent = text;
   }
 }

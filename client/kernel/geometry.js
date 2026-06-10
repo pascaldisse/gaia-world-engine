@@ -34,7 +34,10 @@ export function makeGeometry(part) {
 export function makePartMaterial(part) {
   if (part.preset) {
     const preset = makePresetMaterial(part);
-    if (preset) return preset;
+    if (preset) {
+      if (part.fog === false) preset.fog = false;
+      return preset;
+    }
   }
   const material = new THREE.MeshStandardMaterial({
     color: part.color ?? '#9aa0a6',
@@ -50,5 +53,8 @@ export function makePartMaterial(part) {
     material.transparent = true;
     material.opacity = part.opacity;
   }
+  // fog: false — for backdrop scenery whose colors already ARE the
+  // atmosphere (skybox content); zone fog would erase it at distance
+  if (part.fog === false) material.fog = false;
   return material;
 }

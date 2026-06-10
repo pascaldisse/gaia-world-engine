@@ -113,6 +113,11 @@ function applyAndBroadcast(ops, from) {
   if (ops.some((op) => op.op === 'reset')) {
     ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
   }
+  // `use` expands server-side like `reset`: the interact component decides
+  // what actually happens (and whether it happens at all)
+  if (ops.some((op) => op.op === 'use')) {
+    ops = ops.flatMap((op) => (op.op === 'use' ? triggers.use(op.id, op.by) : [op]));
+  }
   // runtime spawns inherit the zone their position lands in (presences,
   // editor stamps, agent avatars) so streaming clients know what to build
   if (manifest) {

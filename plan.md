@@ -158,6 +158,29 @@ seen or reached; no gates, no loading, ever. Driven by
       presence-noise toggles.
 - [x] Audio mute: `M` (persists per browser), `?mute=1` for agent work tabs.
 
+### M12 — Deliberate hands & deep worlds (forced by: Tomb G2 — the lantern ritual, the climb, the ferry, the vista)
+
+- [x] `interact` component: press-E world logic. A presence in range uses an
+      entity ON PURPOSE; the client sends `{op:'use', id, by}` and the server
+      decides (trigger rules: `when` gates, cooldown, `$now`/`$id` ops; range
+      check with presence-lag slack). Prompt hint in play AND game mode; one-
+      shots remove their own interact in their ops. Outliner icon ✧, dashed
+      use-range ring in the triggers gizmo category, schema'd. NOTE: a `use`
+      op expands against pre-batch state — send it alone, after the ops that
+      position the user.
+- [x] Path dwell: a waypoint's 4th number parks the follower there for that
+      many seconds (ferry stops). Path eval became time-parameterized
+      (`phase` is seconds now); loop pauses at the end too.
+- [x] Stacked floors: `walkableAt(x, z, maxTop)` is feet-aware — a switchback
+      above you is no longer your ground (it used to return the highest top,
+      which made floors under floors fall through).
+- [x] Zone reset, visibly: respawn-while-shrinking race fixed (the despawn
+      animation's callback no longer deletes the freshly rebuilt group).
+- [x] Mesh `fog: false` (plain parts AND presets): backdrop silhouettes whose
+      colors already are the atmosphere — zone fog stops erasing them.
+- [x] Camera far plane 4000 (was 1000): the world axis runs ~2.5km; the tree,
+      the bridge and the void glow must survive projection, not just fog.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

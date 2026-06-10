@@ -102,6 +102,10 @@ event   transient broadcast (journaled, never persisted)
 ```
 reset   re-seed a zone (or the world) — entities with a `persist` component,
         presences, and unzoned entities (world state) keep their current truth
+use     a presence uses an entity's `interact` component on purpose
+        ({op:'use', id, by}) — the server gates range/when/cooldown and
+        applies the component's event + ops. Send it alone: it expands
+        against the world as it was BEFORE the batch it travels in.
 ```
 
 `merge` on a missing entity materializes it — world flags appear on first
@@ -218,14 +222,16 @@ ranges, and enums — is `shared/schema.js`, served live at `GET /schema`.
     `cone(radius,height)`, `torus(radius,tube)`, `octahedron(radius)`,
     `icosahedron(radius)`, `plane(size)`
   - `preset: glow|flame|water|hologram|beam` — TSL shader materials as data;
-    `visible:false` parts collide without rendering; `solid:false` opts out of collision
+    `visible:false` parts collide without rendering; `solid:false` opts out of
+    collision; `fog:false` makes backdrop silhouettes immune to zone fog
 - `light` — `{type: point|spot|directional, color, intensity, distance, offset, castShadow}`
 - `sound` — `{kind: hum|chime|patch|sample, ambient?, level, refDistance}`
   - `patch`: `{layers:[{source: noise|sine|square|sawtooth|triangle, freq, filter, gain, lfo, reverb}]}` — layered ambience as data
   - `sample`: `{url: "assets/file.ogg", loop, rate}` — files served from `world/assets/`
 - `sfx` — `{on: <event>, wave, freq, freqEnd, attack, decay, level, lowpass, sweep, reverb}` — one-shot synth triggered by events, positional at its entity
 - `behavior` — one or an array of `{type: spin|bob|orbit|path|pulse|flicker, ...}`
-  (`path` follows waypoints at constant speed on the world clock — ferries, patrols)
+  (`path` follows waypoints at constant speed on the world clock — ferries,
+  patrols; a waypoint's 4th number is a dwell: seconds parked there — stops)
 - `terrain` — `{seed, size, segments, amplitude, frequency, color}` (per zone)
 - `collider` — `{boxes:[{size, position, blocker?}]}` — analytic surfaces
   (entity-relative, yaw-aware): walkable tops make decks and bridges standable
@@ -238,6 +244,10 @@ ranges, and enums — is `shared/schema.js`, served live at `GET /schema`.
   the event and applies the ops (`$now` → world time, `$id` → who entered).
   `when: {"world-state.state.gate": "open"}` gates firing on world flags.
   World logic as data.
+- `interact` — `{prompt, radius?, when?, cooldown?, event?, ops?}` — press-E
+  world logic: look at the entity in range and the prompt appears; E sends a
+  `use` op and the server fires the event + ops under trigger rules. One-shots
+  set their own interact to null inside `ops` (the lantern ritual)
 - `persist` — survives the `reset` op: the world re-seeds around it while it
   keeps its current state (the *Braid* rule — death resets all but the woven)
 - `spawn` — `{position, yaw, gameMode?}` — where players enter (`gameMode:
@@ -270,10 +280,11 @@ State lives on the server; the vite client hot-reloads freely around it.
 
 ## Roadmap
 
-See [plan.md](plan.md) — M1–M11 are done: in-world editing, agent senses
+See [plan.md](plan.md) — M1–M12 are done: in-world editing, agent senses
 and intents, inspector, instancing and shader presets, procedural audio,
 observability, zones & streaming (M7), bodies in space — gravity, swim,
 rideable platforms, blockers (M8), world logic — triggers, state,
-persistence rules (M9), the outliner + gizmo layer (M10), and the schema-
-driven inspector + world log (M11). The Later list holds scripting, full
-TSL authoring, and multiplayer attribution.
+persistence rules (M9), the outliner + gizmo layer (M10), the schema-
+driven inspector + world log (M11), and deliberate interaction + ferry
+dwells + stacked floors + deep-world rendering (M12). The Later list holds
+scripting, full TSL authoring, and multiplayer attribution.

@@ -16,22 +16,43 @@ export function animatedPosition(comps, time, heightFn) {
       y = b.ground && heightFn ? heightFn(x, z) + (b.height ?? 0) : cy + (b.height ?? 0);
     } else if (b.type === 'path') {
       // waypoint follow at constant speed; `start` anchors it to a world-time
-      // moment (triggers stamp $now), loop:false parks at the last point
+      // moment (triggers stamp $now), loop:false parks at the last point.
+      // A waypoint's 4th number is a dwell: seconds parked there before
+      // moving on — ferry stops. The walk is time-parameterized so dwells
+      // and travel share one clock (phase is seconds too).
       const pts = b.points ?? [];
       if (pts.length >= 2) {
-        const lens = [];
+        const speed = b.speed ?? 2;
+        const legs = []; // { dwell: pause at the leg's start point, travel: seconds underway }
         let total = 0;
         for (let i = 1; i < pts.length; i++) {
-          const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]);
-          lens.push(l);
-          total += l;
+          const dwell = pts[i - 1][3] ?? 0;
+          const travel =
+            Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]) /
+            Math.max(0.01, speed);
+          legs.push({ dwell, travel });
+          total += dwell + travel;
         }
-        let dist = Math.max(0, time - (b.start ?? 0)) * (b.speed ?? 2) + (b.phase ?? 0);
-        if (b.loop) dist = ((dist % total) + total) % total;
-        else dist = Math.min(dist, total);
-        let seg = 0;
-        while (seg < lens.length - 1 && dist > lens[seg]) dist -= lens[seg++];
-        const k = lens[seg] ? Math.min(1, dist / lens[seg]) : 0;
+        total += pts[pts.length - 1][3] ?? 0; // looping: pause at the end too
+        let t = Math.max(0, time - (b.start ?? 0)) + (b.phase ?? 0);
+        if (b.loop) t = total ? ((t % total) + total) % total : 0;
+        else t = Math.min(t, total);
+        let seg = legs.length - 1;
+        let k = 1;
+        for (let i = 0; i < legs.length; i++) {
+          if (t < legs[i].dwell) {
+            seg = i;
+            k = 0;
+            break;
+          }
+          t -= legs[i].dwell;
+          if (t < legs[i].travel) {
+            seg = i;
+            k = legs[i].travel ? Math.min(1, t / legs[i].travel) : 1;
+            break;
+          }
+          t -= legs[i].travel;
+        }
         const a = pts[seg];
         const c = pts[seg + 1];
         x = a[0] + (c[0] - a[0]) * k;

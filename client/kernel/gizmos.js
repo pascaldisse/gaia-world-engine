@@ -21,7 +21,7 @@ const COLORS = {
   spawn: '#7dffb0',
 };
 
-const RELEVANT = new Set(['collider', 'trigger', 'water', 'light', 'sound', 'behavior', 'scatter', 'particles', 'spawn']);
+const RELEVANT = new Set(['collider', 'trigger', 'interact', 'water', 'light', 'sound', 'behavior', 'scatter', 'particles', 'spawn']);
 
 export class Gizmos {
   constructor({ scene, store, view, zones }) {
@@ -114,6 +114,7 @@ export class Gizmos {
     for (const [id, comps] of this.store.entities) {
       if (comps.collider?.boxes && this.want('colliders', id)) this.addColliders(id, comps);
       if (comps.trigger && this.want('triggers', id)) this.addTrigger(comps);
+      if (comps.interact && this.want('triggers', id)) this.addInteract(id, comps);
       if (comps.water && this.want('water', id)) this.addWater(comps.water);
       if (comps.light && this.want('lights', id)) this.addLight(id, comps);
       if (comps.sound && !comps.sound.ambient && this.want('sounds', id)) this.addSound(id, comps);
@@ -208,6 +209,17 @@ export class Gizmos {
     mark(verticals);
     holder.add(verticals);
     this.root.add(holder);
+  }
+
+  // use-range: a dashed reach ring at chest height — same family as triggers
+  // (it IS world logic), dashed to say "deliberate", not "walk-in"
+  addInteract(id, comps) {
+    const wrapper = this.attach(id);
+    const ring = new THREE.Line(circleGeometry(comps.interact.radius ?? 4), dashedMaterial(COLORS.trigger, 0.8));
+    ring.computeLineDistances();
+    ring.position.y = 1.2;
+    mark(ring);
+    wrapper.add(ring);
   }
 
   addWater(water) {

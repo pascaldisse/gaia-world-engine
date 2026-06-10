@@ -30,7 +30,10 @@ export function buildScatter(spec) {
       const cluster = fbm(x * (spec.density.noise ?? 0.02), z * (spec.density.noise ?? 0.02), (spec.seed ?? 1) + 99);
       if (rng() > cluster * 0.85 + (spec.density.bias ?? 0.15)) continue;
     }
-    const y = spec.ground === false ? spec.y ?? 0 : heightAt(x, z) + (spec.offsetY ?? 0);
+    const h = heightAt(x, z);
+    if (spec.minHeight !== undefined && h < spec.minHeight) continue;
+    if (spec.maxHeight !== undefined && h > spec.maxHeight) continue;
+    const y = spec.ground === false ? spec.y ?? 0 : h + (spec.offsetY ?? 0);
     positions.push([x, y, z]);
   }
 

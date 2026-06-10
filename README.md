@@ -1,5 +1,10 @@
 # GAIA World Engine
 
+Worlds are separate projects: set `GAIA_WORLD=/path/to/project/world` before
+`npm run dev` and the engine loads that directory's `seed.json`,
+`prefabs.json`, `assets/`, and persists its `world.json` there. Without it,
+the engine's own `world/` is used.
+
 Half game, half engine. The world is a live database of entity documents; every
 viewer, tool, and agent is a client that patches it over a shared protocol. The
 3D client (three.js, WebGPU with WebGL fallback) renders whatever the world
@@ -61,7 +66,8 @@ Or POST raw ops to `http://localhost:8420/op`:
 - `sfx` — `{on: lightning|grab|drop|say|intent, wave, freq, freqEnd, attack, decay, level, lowpass, sweep, reverb}` — one-shot synth triggered by events, positional at its entity
 - `weather` — `{lightning, minGap, maxGap, rainCycle, rainAmount}` (server-simulated: emits `lightning` events → all clients flash + thunder; cycles `rain` 0..1, which scales any rain-type particles)
 - `terrain` — `{seed, size, segments, amplitude, frequency, color}` (one per world)
-- `scatter` — `{seed, count, area:{shape:circle|rect, center, radius|size}, instance:{parts:[...]}, scale:[min,max], tilt, rotateY, offsetY, density:{noise, bias}}` — hundreds of instanced copies in a few draw calls, terrain-following, fbm-clustered
+- `scatter` — `{seed, count, area:{shape:circle|rect, center, radius|size}, instance:{parts:[...]}, scale:[min,max], tilt, rotateY, offsetY, minHeight, maxHeight, density:{noise, bias}}` — hundreds of instanced copies in a few draw calls, terrain-following, fbm-clustered; min/maxHeight filter by terrain height (shore-only pines, deep-water-only candles)
+- `spawn` — `{position:[x,y,z], yaw}` — where players enter the world
 - `particles` — `{seed, count, size, color, area, motion:{type:drift|rain, speed, radius, height, bob}}` — animated instanced motes (fireflies, souls, rain)
 - `environment` — `{background, fog:{color, near, far | density}, exposure, hemisphere:{sky, ground, intensity}, sun:{color, intensity, position}, bloom:{strength, radius, threshold}, audio:{level, reverb, compressor}}` — world mood as one patchable entity
 - mesh parts accept `preset: glow|flame|water|hologram` — TSL shader materials as data (a failing preset falls back to a standard material); flame/glow look best on crossed planes

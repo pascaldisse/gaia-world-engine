@@ -51,6 +51,7 @@ export function updateParticles(state, time) {
       x = ax + Math.sin(time * 0.37 * speed + ph * 6.283) * r + Math.sin(time * 0.11 * speed + ph * 13) * r * 0.6;
       z = az + Math.cos(time * 0.29 * speed + ph * 6.283) * r + Math.cos(time * 0.07 * speed + ph * 17) * r * 0.6;
       y = heightAt(x, z) + (motion.height ?? 1.8) + Math.sin(time * 0.8 * speed + ph * 9) * (motion.bob ?? 0.6);
+      if (motion.floor !== undefined) y = Math.max(y, motion.floor);
     }
     m.makeTranslation(x, y, z);
     mesh.setMatrixAt(i, m);

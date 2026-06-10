@@ -43,6 +43,16 @@ const net = connect({
     clock.offset = time - performance.now() / 1000;
     store.applySnapshot(entities);
     countEl.textContent = store.entities.size;
+    if (!player.spawned) {
+      for (const comps of store.entities.values()) {
+        if (comps.spawn) {
+          player.position.set(...(comps.spawn.position ?? [0, 2, 22]));
+          player.yaw = comps.spawn.yaw ?? 0;
+          break;
+        }
+      }
+      player.spawned = true;
+    }
     if (!store.get(presenceId)) {
       net.send([
         {

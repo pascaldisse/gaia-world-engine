@@ -8,9 +8,15 @@ import { Sense } from './sense.js';
 import { Intents } from './intents.js';
 
 const PORT = 8420;
-const worldFile = fileURLToPath(new URL('../world/world.json', import.meta.url));
-const seedFile = fileURLToPath(new URL('../world/seed.json', import.meta.url));
-const assetsDir = fileURLToPath(new URL('../world/assets', import.meta.url));
+// GAIA_WORLD points the engine at any world project directory (separate repo);
+// defaults to the engine's own world/.
+const worldDir = process.env.GAIA_WORLD
+  ? path.resolve(process.env.GAIA_WORLD)
+  : fileURLToPath(new URL('../world', import.meta.url));
+const worldFile = path.join(worldDir, 'world.json');
+const seedFile = path.join(worldDir, 'seed.json');
+const assetsDir = path.join(worldDir, 'assets');
+console.log(`[gaia] world dir: ${worldDir}`);
 
 const world = new World(worldFile);
 if (!world.load() && fs.existsSync(seedFile)) {
@@ -26,7 +32,7 @@ const worldTime = () => (Date.now() - bootTime) / 1000;
 const sense = new Sense(world, worldTime);
 
 // ---- prefab library: brushes for the palette, addable by agents at runtime ----
-const prefabsFile = fileURLToPath(new URL('../world/prefabs.json', import.meta.url));
+const prefabsFile = path.join(worldDir, 'prefabs.json');
 let prefabs = [];
 try {
   prefabs = JSON.parse(fs.readFileSync(prefabsFile, 'utf8'));

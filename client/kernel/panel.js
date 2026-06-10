@@ -32,7 +32,7 @@ const RANGES = {
   gain: [0, 1], detune: [-100, 100], Q: [0.1, 20], rate: [0, 20], depth: [0, 1],
   reverb: [0, 1], attack: [0, 1], decay: [0, 6], delay: [0, 5], lowpass: [40, 8000], sweep: [20, 4000],
   rainCycle: [5, 600], rainAmount: [0, 1], rain: [0, 1], minGap: [1, 120], maxGap: [2, 240],
-  glowStrength: [0, 4], lines: [2, 120],
+  glowStrength: [0, 4], lines: [2, 120], minHeight: [-20, 20], maxHeight: [-20, 20],
 };
 
 const COMPONENT_DEFAULTS = {

@@ -28,6 +28,7 @@ export class Editor {
     this.pointer = new THREE.Vector2();
     this.lastStream = 0;
     this.dragStart = null;
+    this.pathEdit = null;
     this.dir = new THREE.Vector3();
     this.orbiting = false;
     this.pivot = new THREE.Vector3();
@@ -42,6 +43,16 @@ export class Editor {
     this.helper = this.tc.getHelper();
     this.helper.visible = false;
     scene.add(this.helper);
+
+    // path mode follows the data, not its own edits: undo, another agent's
+    // op, or our own commit echo all land here and re-place the handles
+    store.onChange((event) => {
+      if (!this.pathEdit) return;
+      if (event.kind === 'snapshot') this.refreshPathHandles();
+      else if (event.id !== this.pathEdit.id) return;
+      else if (event.kind === 'despawn') this.exitPathEdit();
+      else if (event.kind === 'set' && event.component === 'mesh') this.refreshPathHandles();
+    });
 
     renderer.domElement.addEventListener('pointerdown', (e) => {
       if (this.mode !== 'create') return;
@@ -60,6 +71,10 @@ export class Editor {
         return;
       }
       if (this.tc.axis) return; // gizmo interaction
+      if (this.pathEdit) {
+        this.pickPathPoint(e); // path mode owns the click — esc leaves
+        return;
+      }
       if (this.palette.armed) return; // palette stamps
       this.selectAt(e);
     });
@@ -128,6 +143,28 @@ export class Editor {
         return;
       }
       if (e.metaKey || e.ctrlKey) return;
+      if (this.pathEdit) {
+        // a spline point translates and thickens — no rotate, and delete
+        // still means "delete the entity", too heavy a key to leave armed
+        switch (e.code) {
+          case 'KeyQ':
+            this.setTool(null);
+            break;
+          case 'KeyW':
+            this.setTool('translate');
+            break;
+          case 'KeyR':
+            this.setTool('scale');
+            break;
+          case 'KeyF':
+            this.frameSelected();
+            break;
+          case 'Escape':
+            this.exitPathEdit();
+            break;
+        }
+        return;
+      }
       switch (e.code) {
         case 'KeyQ':
           this.setTool(null);
@@ -221,6 +258,7 @@ export class Editor {
   }
 
   select(id) {
+    this.exitPathEdit();
     this.selected = id;
     if (this.selBox) {
       this.scene.remove(this.selBox);
@@ -251,6 +289,7 @@ export class Editor {
   attachGizmo() {
     const group = this.selected && this.view.getGroup(this.selected);
     const comps = this.selected && this.store.get(this.selected);
+    this.tc.showX = this.tc.showY = this.tc.showZ = true;
     if (group && comps?.transform && this.tool) {
       this.tc.setMode(this.tool);
       this.tc.attach(group);
@@ -263,7 +302,255 @@ export class Editor {
 
   setTool(tool) {
     this.tool = tool;
+    if (this.pathEdit) this.attachPathGizmo();
+    else this.attachGizmo();
+  }
+
+  // ---- path edit: tube splines as grabbable points ----
+  // The inspector's numbers are exact but blind; this is the hands-on lens.
+  // Click a control point, W drags it with the same translate gizmo entities
+  // use, R scales its radius — one axis, because a spline point has
+  // thickness, not volume, and rotation doesn't exist for it at all. The
+  // tube itself rebuilds on release, not per frame: a carve-heavy tube
+  // re-runs CSG every rebuild, so the orange spline and the radius ring are
+  // the live preview while dragging.
+
+  editPath(id, partIndex = 0) {
+    if (this.player.gameMode) return;
+    if (this.mode !== 'create') this.enterCreate();
+    this.select(id); // also tears down any previous path session
+    if (!this.store.get(id)) return;
+    this.tc.detach();
+    this.helper.visible = false;
+    this.pathEdit = {
+      id,
+      part: partIndex,
+      index: null,
+      handles: [],
+      proxy: new THREE.Object3D(),
+      root: null,
+      frame: null,
+      line: null,
+      ring: null,
+      closed: false,
+      dragging: false,
+      dragMode: null,
+      startMesh: null,
+      startRadius: 1,
+    };
+    this.scene.add(this.pathEdit.proxy);
+    if (this.tool === 'rotate' || !this.tool) this.tool = 'translate';
+    this.buildPathHandles();
+    if (this.pathEdit) hintText('path edit — click a point · W move · R radius · esc done');
+  }
+
+  exitPathEdit() {
+    if (!this.pathEdit) return;
+    this.disposePathVisuals();
+    this.scene.remove(this.pathEdit.proxy);
+    this.pathEdit = null;
+    this.tc.detach();
+    this.tc.showX = this.tc.showY = this.tc.showZ = true;
+    this.helper.visible = false;
+    hintText('');
     this.attachGizmo();
+  }
+
+  // handle space is the part's own frame (scene ∘ entity ∘ part transform),
+  // so a handle's position IS a path coordinate — no conversion drift
+  buildPathHandles() {
+    const pe = this.pathEdit;
+    this.disposePathVisuals();
+    const comps = this.store.get(pe.id);
+    const mesh = comps?.mesh;
+    const part = (mesh?.parts ?? [mesh])[pe.part];
+    if (!part || !Array.isArray(part.path) || part.path.length < 2) {
+      this.exitPathEdit();
+      return;
+    }
+    pe.closed = part.closed ?? false;
+    const root = new THREE.Group();
+    const group = this.view.getGroup(pe.id);
+    if (group) {
+      group.updateWorldMatrix(true, false);
+      root.applyMatrix4(group.matrixWorld);
+    } else {
+      const t = comps.transform ?? {};
+      root.position.set(...(t.position ?? [0, 0, 0]));
+      root.rotation.set(...(t.rotation ?? [0, 0, 0]));
+    }
+    const frame = new THREE.Group();
+    frame.position.set(...(part.position ?? [0, 0, 0]));
+    frame.rotation.set(...(part.rotation ?? [0, 0, 0]));
+    if (part.scale) {
+      if (Array.isArray(part.scale)) frame.scale.set(...part.scale);
+      else frame.scale.setScalar(part.scale);
+    }
+    root.add(frame);
+    this.scene.add(root);
+    root.updateWorldMatrix(true, true);
+    pe.root = root;
+    pe.frame = frame;
+
+    part.path.forEach((p, i) => {
+      const material = new THREE.MeshBasicMaterial({ color: '#ffa94d', transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, fog: false });
+      const handle = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), material);
+      handle.position.set(...p);
+      handle.userData.pathIndex = i;
+      handle.renderOrder = 999;
+      frame.add(handle);
+      pe.handles.push(handle);
+    });
+    const xray = (color, opacity) =>
+      new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, fog: false });
+    const pts = pe.handles.map((h) => h.position);
+    pe.line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pe.closed ? [...pts, pts[0]] : pts), xray('#ffa94d', 0.9));
+    pe.line.renderOrder = 999;
+    frame.add(pe.line);
+    pe.ring = new THREE.Line(unitCircle(), xray('#7df9ff', 0.8));
+    pe.ring.renderOrder = 999;
+    pe.ring.visible = false;
+    frame.add(pe.ring);
+  }
+
+  disposePathVisuals() {
+    const pe = this.pathEdit;
+    if (!pe) return;
+    if (pe.root) {
+      pe.root.traverse((node) => {
+        node.geometry?.dispose();
+        node.material?.dispose();
+      });
+      this.scene.remove(pe.root);
+    }
+    pe.root = pe.frame = pe.line = pe.ring = null;
+    pe.handles = [];
+  }
+
+  refreshPathHandles() {
+    const pe = this.pathEdit;
+    if (!pe || pe.dragging) return;
+    const index = pe.index;
+    this.buildPathHandles();
+    if (!this.pathEdit) return; // the part lost its path — session closed
+    if (index !== null && index < pe.handles.length) this.selectPathPoint(index);
+    else {
+      pe.index = null;
+      this.tc.detach();
+      this.helper.visible = false;
+    }
+  }
+
+  pickPathPoint(event) {
+    this.pointer.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.pathEdit.handles, false);
+    if (hits.length) this.selectPathPoint(hits[0].object.userData.pathIndex);
+    // a miss keeps the mode — deliberate exit only (esc), so a sloppy
+    // click near a thin spline never dumps you back to entity selection
+  }
+
+  selectPathPoint(i) {
+    const pe = this.pathEdit;
+    pe.index = i;
+    for (const h of pe.handles) h.material.color.set(h.userData.pathIndex === i ? '#7df9ff' : '#ffa94d');
+    pe.handles[i].getWorldPosition(pe.proxy.position);
+    pe.proxy.scale.set(1, 1, 1);
+    this.attachPathGizmo();
+    this.updateRing();
+  }
+
+  attachPathGizmo() {
+    const pe = this.pathEdit;
+    if (this.tool === 'rotate') this.tool = 'translate'; // spline points don't rotate
+    if (!pe || pe.index === null || !this.tool) {
+      this.tc.detach();
+      this.helper.visible = false;
+      return;
+    }
+    const scale = this.tool === 'scale';
+    this.tc.setMode(this.tool);
+    // thickness is one number — the scale gizmo offers a single axis
+    this.tc.showX = true;
+    this.tc.showY = !scale;
+    this.tc.showZ = !scale;
+    this.tc.attach(pe.proxy);
+    this.helper.visible = true;
+  }
+
+  onPathDragChanged(dragging) {
+    const pe = this.pathEdit;
+    if (pe.index === null) return;
+    if (dragging) {
+      pe.dragging = true;
+      pe.dragMode = this.tool;
+      pe.startMesh = structuredClone(this.store.get(pe.id)?.mesh ?? null);
+      pe.startRadius = this.pointRadius(pe.index);
+    } else {
+      pe.dragging = false;
+      const value = this.pathCommitMesh();
+      pe.proxy.scale.set(1, 1, 1);
+      if (!value) return;
+      const redo = [{ op: 'set', id: pe.id, component: 'mesh', value }];
+      this.send(redo);
+      this.history.push([{ op: 'set', id: pe.id, component: 'mesh', value: pe.startMesh }], redo);
+    }
+  }
+
+  onPathChange() {
+    const pe = this.pathEdit;
+    if (pe.index === null || !pe.dragging) return;
+    if (pe.dragMode === 'scale') {
+      this.updateRing(Math.max(0.15, pe.startRadius * pe.proxy.scale.x));
+    } else {
+      pe.handles[pe.index].position.copy(pe.frame.worldToLocal(_v.copy(pe.proxy.position)));
+      this.updatePathLine();
+      this.updateRing();
+    }
+  }
+
+  pathCommitMesh() {
+    const pe = this.pathEdit;
+    const mesh = structuredClone(this.store.get(pe.id)?.mesh ?? null);
+    const part = mesh ? (mesh.parts ?? [mesh])[pe.part] : null;
+    if (!part || !Array.isArray(part.path)) return null;
+    if (pe.dragMode === 'scale') {
+      const radii = fullRadii(part);
+      radii[pe.index] = r2(Math.max(0.15, pe.startRadius * pe.proxy.scale.x));
+      part.radii = radii;
+    } else {
+      const p = pe.handles[pe.index].position;
+      part.path[pe.index] = [r2(p.x), r2(p.y), r2(p.z)];
+    }
+    return mesh;
+  }
+
+  pointRadius(i) {
+    const mesh = this.store.get(this.pathEdit.id)?.mesh;
+    const part = (mesh?.parts ?? [mesh])[this.pathEdit.part];
+    return part?.path ? fullRadii(part)[i] : 1;
+  }
+
+  updatePathLine() {
+    const pe = this.pathEdit;
+    const pts = pe.handles.map((h) => h.position);
+    pe.line.geometry.dispose();
+    pe.line.geometry = new THREE.BufferGeometry().setFromPoints(pe.closed ? [...pts, pts[0]] : pts);
+  }
+
+  updateRing(liveRadius = null) {
+    const pe = this.pathEdit;
+    if (!pe.ring) return;
+    if (pe.index === null) {
+      pe.ring.visible = false;
+      return;
+    }
+    pe.ring.visible = true;
+    pe.ring.position.copy(pe.handles[pe.index].position);
+    const pts = pe.handles.map((h) => h.position);
+    const tangent = _v.copy(pts[Math.min(pts.length - 1, pe.index + 1)]).sub(pts[Math.max(0, pe.index - 1)]);
+    if (tangent.lengthSq() > 0.001) pe.ring.quaternion.setFromUnitVectors(_up, tangent.normalize());
+    pe.ring.scale.setScalar(Math.max(0.05, liveRadius ?? this.pointRadius(pe.index)));
   }
 
   startOrbit(e) {
@@ -319,6 +606,10 @@ export class Editor {
   }
 
   onDragChanged(dragging) {
+    if (this.pathEdit) {
+      this.onPathDragChanged(dragging);
+      return;
+    }
     if (!this.selected) return;
     if (dragging) {
       this.view.suppress(this.selected);
@@ -342,6 +633,10 @@ export class Editor {
   }
 
   onObjectChange() {
+    if (this.pathEdit) {
+      this.onPathChange();
+      return;
+    }
     const now = performance.now();
     if (now - this.lastStream < 60 || !this.selected) return;
     this.lastStream = now;
@@ -421,4 +716,30 @@ function dataPosition(comps) {
 
 function r2(v) {
   return Math.round(v * 100) / 100;
+}
+
+const _v = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+
+// expand radii (single number, short array, or legacy radius) to one entry
+// per path point — the tube maps radius i to point i, clamping past the
+// end, so this expansion reproduces the existing shape exactly
+function fullRadii(part) {
+  const radii = Array.isArray(part.radii) ? part.radii : [part.radii ?? part.radius ?? 3];
+  return part.path.map((_, i) => radii[Math.min(radii.length - 1, i)]);
+}
+
+// closed strip, not LineLoop — WebGPU silently drops line-loop topology
+function unitCircle(segs = 48) {
+  const points = [];
+  for (let i = 0; i <= segs; i++) {
+    const a = (i / segs) * Math.PI * 2;
+    points.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)));
+  }
+  return new THREE.BufferGeometry().setFromPoints(points);
+}
+
+function hintText(text) {
+  const el = document.getElementById('hint');
+  if (el) el.textContent = text;
 }

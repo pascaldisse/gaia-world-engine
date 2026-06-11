@@ -27,7 +27,7 @@ const RANGES = {
 const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, view, zones, send, history, onDuplicate, onDelete }) {
+  constructor({ el, store, view, zones, send, history, onDuplicate, onDelete, onEditPath }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -36,6 +36,7 @@ export class Panel {
     this.history = history;
     this.onDuplicate = onDuplicate;
     this.onDelete = onDelete;
+    this.onEditPath = onEditPath;
     this.id = null;
     this.zoneName = null;
     this.tab = 'fields';
@@ -233,6 +234,15 @@ export class Panel {
         setTimeout(() => this.render(), 160);
       });
       section.append(content);
+      // tube parts get a door into the world: Edit Path hands the spline to
+      // the editor (click a point, W moves it, R scales its thickness)
+      if (name === 'mesh') {
+        const parts = comps.mesh?.parts ?? [comps.mesh];
+        parts.forEach((part, i) => {
+          if (part?.shape !== 'tube' || !Array.isArray(part.path) || part.path.length < 2) return;
+          section.append(button(parts.length > 1 ? `edit path · part ${i}` : 'edit path', () => this.onEditPath?.(this.id, i)));
+        });
+      }
       body.append(section);
     }
 

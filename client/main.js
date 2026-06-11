@@ -530,6 +530,7 @@ const panel = new Panel({
   history,
   onDuplicate: (id) => editor.duplicate(id),
   onDelete: (id) => editor.delete(id),
+  onEditPath: (id, part) => editor.editPath(id, part),
 });
 const palette = new Palette({
   el: document.getElementById('palette'),

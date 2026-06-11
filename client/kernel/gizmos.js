@@ -22,7 +22,7 @@ const COLORS = {
   spawn: '#7dffb0',
 };
 
-const RELEVANT = new Set(['collider', 'trigger', 'interact', 'water', 'light', 'sound', 'behavior', 'scatter', 'particles', 'spawn']);
+const RELEVANT = new Set(['collider', 'trigger', 'interact', 'water', 'light', 'sound', 'behavior', 'scatter', 'particles', 'spawn', 'mesh']);
 
 export class Gizmos {
   constructor({ scene, store, view, zones }) {

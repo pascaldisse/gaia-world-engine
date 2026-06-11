@@ -14,11 +14,13 @@ import { buildParticles } from './particles.js';
 // forward-lighting cost stays constant no matter how much of the world is
 // burning. (Playdead's INSIDE rule: never change the shader environment
 // mid-play.)
-// 24 covers the busiest zone with headroom (the sea runs 18: a dozen lake
-// candles, the shore lights, and one carried flame per presence). A pool
-// SMALLER than the live set means per-frame sort/slice churn and a starved
-// light — seen in play as a burning candle casting nothing.
-const LIGHT_POOL_SIZE = 24;
+// 16 is the M13-verified budget — 24 measurably hurt frame rate (every
+// pooled light is in every lit fragment's loop, used or not). The pool must
+// stay LARGER than any zone's live spec set: a smaller pool means per-frame
+// sort/slice churn and starved lights — a burning candle casting nothing.
+// Worlds keep within it by FAKING small sources (emissive glow cards +
+// flicker), Cyberpunk-style: real lights are for the player and heroes.
+const LIGHT_POOL_SIZE = 16;
 const _lightPos = new THREE.Vector3();
 const _lightDir = new THREE.Vector3();
 const _probeGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);

@@ -25,7 +25,16 @@ export function makePresetMaterial(part) {
       case 'glow': {
         const material = new THREE.MeshBasicNodeMaterial();
         const d = length(uv().sub(0.5)).mul(2);
-        const g = exp(d.mul(d).mul(-4.2));
+        let g = exp(d.mul(d).mul(-4.2));
+        if (part.flicker) {
+          // candle-wander, dephased by world position: a field of glows
+          // (fake light pools, halos) never pulses in lockstep. Two
+          // incommensurate sines read as fire, not as a metronome.
+          const sp = part.speed ?? 7;
+          const phase = positionWorld.x.mul(7.13).add(positionWorld.z.mul(3.71));
+          const wave = sin(time.mul(sp).add(phase)).mul(0.6).add(sin(time.mul(sp * 2.63).add(phase.mul(1.7))).mul(0.4));
+          g = g.mul(wave.mul(part.flicker * 0.5).add(1));
+        }
         material.colorNode = color(part.color ?? '#ffc46b').mul(g).mul(part.glowStrength ?? 1);
         material.opacityNode = g;
         material.transparent = true;

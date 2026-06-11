@@ -59,7 +59,14 @@ Screenshot discipline:
 - You can drive a full play-test over CDP without a keyboard: set
   `gaia.player.locked = true`, toggle modes via `gaia.editor`, and hold keys
   with `gaia.player.keys.add("KeyW")` / `.delete(...)`. Verify climbs by
-  reading `gaia.player.position` — feet are `y - 1.6`.
+  reading `gaia.player.position` — feet are `y - eyeHeight` (1.7 standing,
+  1.0 crouched). Space jumps off the grounded branch; ctrl/C crouch.
+- '+' in the client (or `POST /snapshot` with `{image?, player}`) drops a
+  debug snapshot: `debug/<stamp>.png` + `.json` next to the world dir —
+  pose, the presence's components, every `state` component, nearby ids,
+  and the agent-sense `look()` of that pose. The fastest way to answer
+  "what did the world believe when this frame looked wrong" — players can
+  file pixel bugs with it too, and you read their JSON instead of guessing.
 
 ## Performance rules (M13 — keep streaming invisible)
 

@@ -240,7 +240,42 @@ Three primitives make it real:
       only across full disconnects (the server reaps dead presences).
 - [x] Look-dev knobs (~): a `flame` slider tunes the reach of the light
       your presence carries, and the whole menu drives with arrow keys —
-      ↑/↓ select a knob, ←/→ nudge it.
+      ↑/↓ select a knob, ←/→ nudge it. The slider scales intensity with
+      the square of the reach — a point light's `distance` is only a
+      cutoff, and inverse-square decay has faded long before it.
+
+## M15 — the body and the debug kit (DONE)
+
+What playtesting asked for next, in one round:
+
+- [x] Jump (Space) and crouch (hold ctrl or C), Half-Life flavored: jump
+      is a vy impulse off the grounded branch (which now requires vy ≤ 0,
+      so the first airborne frame survives the ground-snap band); the
+      ridden platform is kept while airborne — jumping on the moving ferry
+      lands you on deck, not in its wake. Crouch sinks the eye toward 1.0:
+      grounded, the camera follows; mid-air the FEET rise instead, which
+      is what makes the crouch-jump clear higher ledges for free.
+- [x] Debug snapshots ('+'): the client captures the canvas right after
+      render (WebGPU readback only works in the drawing task) and POSTs it
+      with the player pose to /snapshot; the server writes debug/<stamp>.png
+      + .json — wall + world time, the presence's components, every `state`
+      component (quest flags), nearby ids (sense.query), and the agent-sense
+      look() of that pose. debug/ sits next to the world dir, gitignored.
+- [x] The light budget lesson, learned both ways: a pool SMALLER than a
+      zone's live spec set starves lights (a burning candle casting
+      nothing — the sea ran 18 specs against 16 slots), but growing the
+      pool to 24 measurably hurt frame rate (every pooled light is in
+      every lit fragment's loop, used or not). Resolution: pool stays 16,
+      and worlds keep UNDER it by faking small sources Cyberpunk-style —
+      emissive glow cards (a lit pool on the water doubles as the
+      reflection) with `flicker` in the glow preset, dephased by world
+      position so a candle field never pulses in lockstep. Real lights
+      are for the carried flame and hero fixtures.
+- [x] Beams fade with camera height (`fadeAbove`, default 25m, gone by
+      ~2.4×): from altitude their walls fill the frame from ANY view
+      angle — isolated as the sole cause of the mid-fall grey wash — so
+      no sight-line trick survives a level camera. The fall stays dark
+      all the way down; the shafts fade back in by the water.
 
 ## Later
 

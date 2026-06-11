@@ -161,3 +161,11 @@ Screenshot discipline:
   event tails promptly or you will miss them.
 - Worlds are separate repos (`GAIA_WORLD`). Never edit a world repo's frozen
   demo content; the engine's own `world/` is the hub world.
+- Caves/tunnels are ONE mesh part: `shape: 'tube'` — spline `path` (part-
+  local control points) + `radii` per point (eases between), `inside: true`
+  to walk through it (floor raycast-walkable — add `solid: true` when using
+  a preset like stone), `wobble` for rock. The `paths` gizmo chip draws the
+  spine + radius rings; edit points as plain numbers in the inspector or
+  ops. Long systems: author as ~100m SEGMENTS (surfaceAt culls meshes whose
+  entity origin is >60m away in xz; segments also stream better). Walls
+  don't block (blockers are boxes) — fine for caves, gate the mouths.

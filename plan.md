@@ -357,6 +357,46 @@ until the approach actually reveals it.
       merges need the body to exist). The overlay ships empty; a titled
       game never flashes the GAIA defaults.
 
+## M18 — caves as splines (tube shape DONE; carve proposed)
+
+A lot of caves are coming (Agartha). A cave is now one mesh part:
+
+- [x] `shape: 'tube'` — a Catmull-Rom spline (`path: [[x,y,z],…]`, part-
+      local) with a radius PER CONTROL POINT (`radii`), eased between
+      points on its own Catmull-Rom (chambers flow into squeezes). Rings
+      are placed by ARC LENGTH (even spacing however control points
+      cluster) and oriented by parallel transport (no twist, no Frenet
+      flips) — the industry-standard recipe. `inside: true` winds faces
+      inward: a space you walk THROUGH; the floor is walkable via the
+      solid-mesh raycast, and from outside the shell backface-culls away
+      (buried rock is invisible, free). `wobble`/`wobbleScale` add
+      deterministic lumpiness (never Math.random — recipes are cache keys
+      and every client must agree). Works with every preset — `stone`
+      gives carved masonry bores, plain rock + flatShading gives natural
+      caves. ~2k tris at defaults; geometry cached by recipe like all
+      shapes.
+- [x] `solid: true` now FORCES collidability on preset parts (presets
+      defaulted to visual-only — right for glow/flame/water, wrong for
+      stone floors).
+- [x] Editor: the `paths` gizmo chip draws every tube's spine — spline,
+      point markers, and a ring of each point's radius oriented along the
+      run. Points/radii are plain numbers in the inspector (and ops), so
+      both the player and agents edit caves the same way.
+- [ ] CAVEAT for long caves: `surfaceAt` culls candidate meshes whose
+      entity sits >60m away in xz — author long systems as SEGMENTS
+      (~100m each, own origins). Segments also stream better.
+- [ ] PROPOSED — `carve`: boolean holes as data. Dreams runs on pure
+      SDF/CSG trees evaluated by a GPU splatting renderer — gorgeous, not
+      portable to a three.js triangle pipeline. The portable lesson is
+      AUTHOR as CSG, EVALUATE ONCE: add `carve: [{shape, position,
+      rotation, …}]` to mesh parts, evaluated at geometry-build time with
+      three-bvh-csg (SUBTRACTION; ~100× faster than BSP CSG libs, ms-scale
+      for our vertex counts), result cached by recipe exactly like every
+      other geometry — zero per-frame cost. Doorways/windows/cracks stop
+      needing thetaLength lattice tricks or rock-pile concealment. Until
+      then: cylinder arcs (crater mouth) and tube mouths plugged with
+      rocks remain the cheap path.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

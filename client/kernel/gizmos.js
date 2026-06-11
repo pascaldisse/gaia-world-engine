@@ -125,6 +125,9 @@ export class Gizmos {
           if (b.type === 'path' && b.points?.length >= 2) this.addPath(b);
           if (b.type === 'orbit') this.addOrbit(b);
         }
+        for (const p of comps.mesh?.parts ?? []) {
+          if (p.shape === 'tube' && p.path?.length >= 2) this.addTubeSpline(id, p);
+        }
       }
       if (this.want('areas', id)) {
         if (comps.scatter) this.addArea(comps.scatter.area ?? { center: [0, 0], radius: 60 }, COLORS.scatter);
@@ -298,6 +301,35 @@ export class Gizmos {
       mark(cone);
       this.root.add(cone);
     }
+  }
+
+  // a tube part's spine: the spline through its control points, a marker at
+  // each, and a ring of that point's radius oriented along the local run —
+  // thickness made visible, editable as plain numbers in the inspector
+  addTubeSpline(id, p) {
+    const wrapper = this.attach(id);
+    const offset = new THREE.Vector3(...(p.position ?? [0, 0, 0]));
+    const pts = p.path.map((v) => new THREE.Vector3(...v).add(offset));
+    const linePts = p.closed ? [...pts, pts[0]] : pts;
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(linePts), lineMaterial(COLORS.path, 0.9));
+    mark(line);
+    wrapper.add(line);
+    const radii = Array.isArray(p.radii) ? p.radii : [p.radii ?? p.radius ?? 3];
+    const markerMat = new THREE.MeshBasicMaterial({ color: COLORS.path, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, fog: false });
+    const up = new THREE.Vector3(0, 1, 0);
+    pts.forEach((pt, i) => {
+      const marker = new THREE.Mesh(new THREE.SphereGeometry(i === 0 ? 0.45 : 0.22, 8, 6), markerMat);
+      marker.position.copy(pt);
+      mark(marker);
+      wrapper.add(marker);
+      const r = radii[Math.min(radii.length - 1, i)];
+      const ring = new THREE.Line(circleGeometry(r, 40), lineMaterial(COLORS.path, 0.5));
+      const tangent = pts[Math.min(pts.length - 1, i + 1)].clone().sub(pts[Math.max(0, i - 1)]);
+      if (tangent.lengthSq() > 0.001) ring.quaternion.setFromUnitVectors(up, tangent.normalize());
+      ring.position.copy(pt);
+      mark(ring);
+      wrapper.add(ring);
+    });
   }
 
   addOrbit(b) {

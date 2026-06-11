@@ -399,7 +399,9 @@ export class View {
     for (const part of parts) {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
       // preset parts (water, flame, glow, hologram) are visual, not walkable
-      mesh.userData.solid = !part.preset && part.solid !== false;
+      // by default — but an explicit solid wins either way: architectural
+      // presets (a stone tube's cave floor) can opt in with solid: true
+      mesh.userData.solid = part.solid !== undefined ? !!part.solid : !part.preset;
       // invisible parts still collide — walkway/box colliders
       if (part.visible === false) mesh.visible = false;
       mesh.position.set(...(part.position ?? [0, 0, 0]));

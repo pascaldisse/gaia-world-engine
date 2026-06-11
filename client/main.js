@@ -213,6 +213,54 @@ debugKnob('flame', (v) => {
   }, 150);
 }, (v) => `${v.toFixed(0)}m`);
 
+// '+' drops a debug snapshot: the rendered frame + a json of what the world
+// knew at that moment (pose, carried components, quest state, nearby ids,
+// the agent-sense look) — written by the server into debug/, same stamp.
+// Captured in the render loop right after render: a WebGPU canvas only
+// reads back reliably in the same task that drew it.
+let pendingSnapshot = false;
+document.addEventListener('keydown', (e) => {
+  if (e.key !== '+' || e.metaKey || e.ctrlKey || e.altKey) return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+  pendingSnapshot = true;
+});
+function captureSnapshot() {
+  pendingSnapshot = false;
+  renderer.domElement.toBlob((blob) => {
+    if (!blob) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const res = await fetch(`http://${location.hostname}:8420/snapshot`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            image: reader.result,
+            player: {
+              id: presenceId,
+              position: [r2(player.position.x), r2(player.position.y), r2(player.position.z)],
+              yaw: r2(player.yaw),
+              pitch: r2(player.pitch),
+              zone: zones.current,
+            },
+          }),
+        });
+        const { file } = await res.json();
+        console.log(`[gaia] snapshot ${file}`);
+        const prev = statusEl.textContent;
+        statusEl.textContent = `snapshot ${file}`;
+        setTimeout(() => {
+          if (statusEl.textContent.startsWith('snapshot')) statusEl.textContent = prev;
+        }, 2500);
+      } catch (err) {
+        console.warn('[gaia] snapshot failed', err);
+      }
+    };
+    reader.readAsDataURL(blob);
+  }, 'image/png');
+}
+
 // the debug menu drives with arrow keys too: ↑/↓ pick a knob, ←/→ nudge it
 const debugKnobNames = ['exposure', 'skylight', 'fog', 'storm', 'flame'];
 let debugSelected = 0;
@@ -381,4 +429,5 @@ renderer.setAnimationLoop(() => {
   if (post) post.render();
   else renderer.render(scene, camera);
   if (pendingShot !== null) captureShot();
+  if (pendingSnapshot) captureSnapshot();
 });

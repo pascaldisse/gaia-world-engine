@@ -1,3 +1,4 @@
 node_modules/
 world/world.json
+debug/
 .DS_Store

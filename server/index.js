@@ -19,6 +19,9 @@ const worldDir = process.env.GAIA_WORLD
 const worldFile = path.join(worldDir, 'world.json');
 const seedFile = path.join(worldDir, 'seed.json');
 const assetsDir = path.join(worldDir, 'assets');
+// debug snapshots land NEXT TO the world dir (game/debug, not game/world/debug)
+// so they sit at the project's top level — gitignored, never committed
+const debugDir = path.join(worldDir, '..', 'debug');
 console.log(`[gaia] world dir: ${worldDir}`);
 
 // zoned world: manifest.json assembles independently authored zone seeds
@@ -316,6 +319,31 @@ const server = http.createServer(async (req, res) => {
       const applied = applyAndBroadcast(ops, parsed.from ?? 'http');
       for (const op of applied) console.log(`[gaia] ${describe(op)}`);
       return json(res, { ok: true, applied });
+    }
+    if (req.method === 'POST' && url.pathname === '/snapshot') {
+      // '+' in the client: the rendered frame plus what the world (and an
+      // agent's senses) knew at that moment — png + json, same stamp
+      const snap = await body(req);
+      const p = snap.player ?? {};
+      const [x, y, z] = p.position ?? [0, 0, 0];
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const state = {};
+      for (const [id, comps] of world.entities) if (comps.state) state[id] = comps.state;
+      const data = {
+        time: { wall: new Date().toISOString(), world: Math.round(worldTime() * 10) / 10 },
+        player: p,
+        carried: world.entities.get(p.id) ?? null,
+        state,
+        nearby: sense.query({ nearX: x, nearZ: z, radius: snap.radius ?? 20 }),
+        look: sense.look({ x, y: y + 1.2, z, yaw: p.yaw ?? 0 }).split('\n'),
+      };
+      fs.mkdirSync(debugDir, { recursive: true });
+      fs.writeFileSync(path.join(debugDir, `${stamp}.json`), JSON.stringify(data, null, 2));
+      if (snap.image) {
+        fs.writeFileSync(path.join(debugDir, `${stamp}.png`), Buffer.from(snap.image.split(',')[1], 'base64'));
+      }
+      console.log(`[gaia] snapshot ${stamp}`);
+      return json(res, { ok: true, file: `debug/${stamp}` });
     }
     if (req.method === 'POST' && url.pathname === '/act') {
       const cmd = await body(req);

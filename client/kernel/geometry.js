@@ -13,11 +13,16 @@ import { makePresetMaterial } from './presets.js';
 const geometryCache = new Map();
 const materialCache = new Map();
 
-const GEOMETRY_FIELDS = ['shape', 'size', 'radius', 'radiusTop', 'radiusBottom', 'height', 'open', 'tube'];
+const GEOMETRY_FIELDS = [
+  'shape', 'size', 'radius', 'radiusTop', 'radiusBottom', 'height', 'open', 'tube', 'segments',
+  'thetaStart', 'thetaLength', 'radialSegments',
+];
 const MATERIAL_FIELDS = [
   'preset', 'color', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
   'opacity', 'fog', 'tip', 'speed', 'glowStrength', 'beamStrength', 'sparkle', 'sky', 'glint', 'lines',
   'fadeAbove', 'flicker',
+  'horizon', 'bands', 'bright', 'sunPos', 'sunColor', 'sunGlow', 'sunRadius', 'noiseScale', 'cover',
+  'waveHeight', 'waveScale', 'crest', 'haze', 'blockSize', 'grout', 'grain', 'doubleSide',
 ];
 
 function recipeKey(part, fields) {
@@ -45,13 +50,19 @@ function buildGeometry(part) {
     case 'sphere':
       return new THREE.SphereGeometry(part.radius ?? 0.5, 24, 16);
     case 'cylinder':
+      // thetaStart/thetaLength: partial arcs — how a shell gets a carved
+      // opening (the crater's mouth) without CSG. Stacked bands only meet
+      // crack-free when their rings share one angular lattice: same
+      // thetaStart, radialSegments chosen so every band's step is equal.
       return new THREE.CylinderGeometry(
         part.radiusTop ?? part.radius ?? 0.5,
         part.radiusBottom ?? part.radius ?? 0.5,
         part.height ?? 1,
-        16,
+        part.radialSegments ?? 16,
         1,
         part.open ?? false,
+        part.thetaStart ?? 0,
+        part.thetaLength ?? Math.PI * 2,
       );
     case 'cone':
       return new THREE.ConeGeometry(part.radius ?? 0.5, part.height ?? 1, 16);
@@ -61,8 +72,12 @@ function buildGeometry(part) {
       return new THREE.OctahedronGeometry(part.radius ?? 0.5, 0);
     case 'icosahedron':
       return new THREE.IcosahedronGeometry(part.radius ?? 0.5, 0);
-    case 'plane':
-      return new THREE.PlaneGeometry(part.size?.[0] ?? 1, part.size?.[1] ?? 1);
+    case 'plane': {
+      // segments: tessellation for vertex-displaced presets (the abyss swell)
+      const seg = part.segments;
+      const [sx, sy] = Array.isArray(seg) ? seg : [seg ?? 1, seg ?? 1];
+      return new THREE.PlaneGeometry(part.size?.[0] ?? 1, part.size?.[1] ?? 1, sx, sy);
+    }
     default:
       return new THREE.BoxGeometry(...(part.size ?? [1, 1, 1]));
   }
@@ -104,6 +119,9 @@ function buildPartMaterial(part) {
   // fog: false — for backdrop scenery whose colors already ARE the
   // atmosphere (skybox content); zone fog would erase it at distance
   if (part.fog === false) material.fog = false;
+  // doubleSide: shells seen from both worlds (the crater: pale rock outside,
+  // near-black inside — the ZONE lighting does the painting, not the part)
+  if (part.doubleSide) material.side = THREE.DoubleSide;
   return material;
 }
 

@@ -501,6 +501,12 @@ export class View {
         if (!slot) continue;
         this.assignSlot(slot, c.id, c.spec);
       }
+      // zone lightScale, re-applied per frame (it crossfades at seams): a
+      // flame authored against the dark washes out under a daylight env.
+      // baseIntensity too, so flicker behaviors compose with the scale.
+      const scaled = (c.spec.intensity ?? 10) * (this.environment?.lightScale ?? 1);
+      slot.light.intensity = scaled;
+      slot.light.userData.baseIntensity = scaled;
       if (c.id === this.ownPresence) {
         // your own carried light rides the camera, smooth at frame rate —
         // not the 300ms presence trickle the rest of the world sees. The

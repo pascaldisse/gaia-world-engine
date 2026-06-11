@@ -277,6 +277,48 @@ What playtesting asked for next, in one round:
       no sight-line trick survives a level camera. The fall stays dark
       all the way down; the shafts fade back in by the water.
 
+## M16 — the sky as geometry (DONE)
+
+The bright outside, for worlds whose interiors stay dark. scene.background
+is ONE color per zone — so a sunny world seen from inside a cave must
+physically exist. Everything here is data; no texture assets anywhere.
+
+- [x] Preset `sky`: vertical gradient wall (horizon glow → zenith) with
+      drifting fbm banding. Preset `overcast`: a cloud roof crawling
+      overhead, the hidden sun burning through at `sunPos` (world xz) —
+      bright enough that a dark zone's bloom blows out at any opening.
+      Preset `clouds`: torn sheets, fbm alpha dissolved at the quad's own
+      uv edges, NORMAL blending (clouds occlude what's beneath them).
+- [x] Preset `abyss`: an obsidian ocean. Vertex-displaced swell (planes
+      take `segments`), normals rebuilt FLAT per facet from
+      `cross(dFdx(positionView), dFdy(positionView))` (normalNode is
+      view-space), fresnel sheen + crest tint, and EMISSIVE aerial haze —
+      albedo haze multiplies to black under a dark env; painted light
+      survives any zone.
+- [x] Preset `stone`: masonry without textures — world-space ashlar
+      courses with a running bond, per-block value shifts (perlin at
+      non-integer multiples of block indices; integer lattices are zero),
+      fbm grain on color and roughness. Tops use (x,z), faces (x+z,y),
+      blended by the normal. One long box shows no repetition.
+- [x] Cylinders take `thetaStart`/`thetaLength`/`radialSegments`: partial
+      arcs — carved openings without CSG. Stacked bands only meet
+      crack-free on ONE angular lattice: same thetaStart, segment counts
+      chosen so every band's step is equal (full ring 64, arc 63 over
+      2π − one step).
+- [x] `doubleSide` part field — a shell seen from both worlds (a crater:
+      pale rock outside, near-black inside) is painted by ZONE LIGHTING,
+      not by the part. Culling can't fake an opening on a DoubleSide
+      shell; carve a real one.
+- [x] `environment.lightScale`: pooled point-light intensities × the
+      zone's scale, crossfaded at seams like everything else. A flame
+      authored for the dark (intensity 48) washes out under a daylight
+      env instead of painting it orange. Flicker behaviors compose (the
+      per-frame scale writes baseIntensity too).
+- [x] Field-name footgun fixed by rename: preset noise scale is
+      `noiseScale` — `scale` was already the mesh-part TRANSFORM scale,
+      and a 5200m sky quad authored with `scale: 0.0012` quietly became
+      six meters wide.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

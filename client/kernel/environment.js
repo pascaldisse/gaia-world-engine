@@ -14,6 +14,9 @@ export class Environment {
     this.flashColor = new THREE.Color('#b9c4ee');
     this.exposure = renderer.toneMappingExposure;
     this.fogDensity = scene.fog.isFogExp2 ? scene.fog.density : null;
+    // pooled point lights × this — a flame authored for the dark (intensity
+    // 48) must wash out in a daylight zone, not paint it orange
+    this.lightScale = 1;
     // skylight: a true global light (the zone hemisphere is often nearly
     // black on purpose — multiplying it does nothing, so this adds instead)
     this.ambient = new THREE.AmbientLight('#b8c6e6', 0);
@@ -44,6 +47,7 @@ export class Environment {
       },
       bloom: { strength: 0.35, radius: 0.4, threshold: 0.85 },
       ambient: { color: '#b8c6e6', intensity: 0 },
+      lightScale: 1,
     };
     this.current.ambientIntensity = 0;
   }
@@ -82,6 +86,7 @@ export class Environment {
     this.sun.position.set(...sun.position);
     const ambient = { ...this.defaults.ambient, ...(p.ambient ?? {}) };
     this.ambient.color.set(ambient.color);
+    this.lightScale = p.lightScale ?? 1;
     this.post?.setBloom({ ...this.defaults.bloom, ...(p.bloom ?? {}) });
     if (p.audio) this.audio?.applyBus(p.audio);
     this.current = {
@@ -107,6 +112,7 @@ export class Environment {
       sunColor: this.sun.color.clone(),
       sunIntensity: this.sun.intensity,
       ambientIntensity: this.current.ambientIntensity,
+      lightScale: this.lightScale,
     };
     this.apply(params); // snap to target (sets bloom, buses, fog type)
     const to = {
@@ -120,6 +126,7 @@ export class Environment {
       sunColor: this.sun.color.clone(),
       sunIntensity: this.sun.intensity,
       ambientIntensity: this.current.ambientIntensity,
+      lightScale: this.lightScale,
     };
     this.fadeState = { from, to, t: 0, seconds };
   }
@@ -150,6 +157,7 @@ export class Environment {
       this.hemi.intensity = fade.from.hemiIntensity + (fade.to.hemiIntensity - fade.from.hemiIntensity) * k;
       this.sun.color.copy(fade.from.sunColor).lerp(fade.to.sunColor, k);
       this.sun.intensity = fade.from.sunIntensity + (fade.to.sunIntensity - fade.from.sunIntensity) * k;
+      this.lightScale = fade.from.lightScale + (fade.to.lightScale - fade.from.lightScale) * k;
       // keep the flash baseline tracking the fade
       this.current.background.copy(this.scene.background);
       this.current.fogColor.copy(this.scene.fog.color);

@@ -51,9 +51,125 @@ try {
   game = null;
 }
 
-// zone seeds are read at boot and again by the `reset` op — placed into
-// world-space and stamped with their zone every time
+// ---- prefab library: reusable objects, one file per prefab ----
+// world/prefabs/<name>.json is the canonical home (small files, small diffs,
+// small context loads); a legacy single prefabs.json list still reads in.
+const prefabsFile = path.join(worldDir, 'prefabs.json');
+const prefabsDir = path.join(worldDir, 'prefabs');
+let prefabs = [];
+try {
+  prefabs = JSON.parse(fs.readFileSync(prefabsFile, 'utf8'));
+} catch {
+  prefabs = [];
+}
+if (fs.existsSync(prefabsDir)) {
+  for (const f of fs.readdirSync(prefabsDir).filter((n) => n.endsWith('.json'))) {
+    try {
+      const prefab = JSON.parse(fs.readFileSync(path.join(prefabsDir, f), 'utf8'));
+      const idx = prefabs.findIndex((p) => p.name === prefab.name);
+      if (idx >= 0) prefabs[idx] = prefab;
+      else prefabs.push(prefab);
+    } catch {
+      console.warn(`[gaia] unreadable prefab: ${f}`);
+    }
+  }
+}
+
+// ---- material library: named looks, referenced by mesh parts as data ----
+// world/materials.json — `{"obsidian": {color, roughness, …}}`. A part says
+// `"material": "obsidian"` and may override any field locally. The `material`
+// op edits the library live (and every client rebuilds what references it).
+const materialsFile = path.join(worldDir, 'materials.json');
+let materials = {};
+try {
+  materials = JSON.parse(fs.readFileSync(materialsFile, 'utf8'));
+} catch {
+  materials = {};
+}
+
+// ---- scene files: the world's single source of truth (the scene IS a file) ----
+// A zone may own world/zones/<name>/scene.json — entity documents keyed by id,
+// world-space, kept in memory here and written back on every dev edit (Unity
+// semantics: change a thing in the editor, the scene file changes). Entries
+// with a `prefab` key are instances: the prefab's components deep-merged
+// under the entry's own (the entry stores only its deltas).
+// Worlds with no scene files keep the legacy model: seed.json ops generated
+// once + world.json as the whole truth.
+const scenes = new Map(); // zone name -> { file, docs, timer }
+for (const zone of manifest?.zones ?? []) {
+  const file = path.join(worldDir, 'zones', zone.name, 'scene.json');
+  if (!fs.existsSync(file)) continue;
+  try {
+    scenes.set(zone.name, { file, docs: JSON.parse(fs.readFileSync(file, 'utf8')), timer: null });
+  } catch (err) {
+    console.warn(`[gaia] unreadable scene for zone ${zone.name}: ${err.message}`);
+  }
+}
+const sceneMode = scenes.size > 0;
+
+function deepMerge(base, over) {
+  if (!base || !over || Array.isArray(base) || Array.isArray(over) || typeof base !== 'object' || typeof over !== 'object') {
+    return structuredClone(over);
+  }
+  const out = structuredClone(base);
+  for (const [key, value] of Object.entries(over)) {
+    out[key] = key in out ? deepMerge(out[key], value) : structuredClone(value);
+  }
+  return out;
+}
+
+function expandDoc(doc, zoneName) {
+  let comps = doc;
+  const prefabName = typeof doc.prefab === 'string' ? doc.prefab : doc.prefab?.name;
+  if (prefabName) {
+    const base = prefabs.find((p) => p.name === prefabName)?.components;
+    const { prefab, ...own } = doc;
+    comps = base ? deepMerge(base, own) : own;
+    // instances keep their link as a component — write-back diffs against
+    // the prefab, so a moved torch stays three lines in the scene file
+    comps.prefab = { name: prefabName };
+  } else {
+    comps = structuredClone(comps);
+  }
+  comps.zone = comps.zone ?? { name: zoneName };
+  return comps;
+}
+
+function loadZoneSceneOps(zone) {
+  const scene = scenes.get(zone.name);
+  if (!scene) return [];
+  return Object.entries(scene.docs).map(([id, doc]) => ({ op: 'spawn', id, components: expandDoc(doc, zone.name) }));
+}
+
+function scheduleSceneSave(name) {
+  const scene = scenes.get(name);
+  if (!scene) return;
+  clearTimeout(scene.timer);
+  scene.timer = setTimeout(() => {
+    fs.writeFileSync(scene.file, JSON.stringify(scene.docs, null, 2) + '\n');
+  }, 400);
+}
+
+// the scene file may change OUTSIDE the server (a generator re-run, a hand
+// edit) — `reset` re-reads it from disk, so the op is the official "pick up
+// my file changes" gesture. Pending write-backs for the zone are dropped:
+// the disk is newer truth than the memory that scheduled them.
+function reloadScene(name) {
+  const scene = scenes.get(name);
+  if (!scene) return;
+  clearTimeout(scene.timer);
+  scene.timer = null;
+  try {
+    scene.docs = JSON.parse(fs.readFileSync(scene.file, 'utf8'));
+  } catch (err) {
+    console.warn(`[gaia] scene reload failed for ${name}: ${err.message}`);
+  }
+}
+
+// zone seeds (legacy model) are read at boot and again by the `reset` op —
+// placed into world-space and stamped with their zone every time
 function loadZoneSeedOps(zone) {
+  if (sceneMode) return loadZoneSceneOps(zone);
   const zoneSeed = path.join(worldDir, 'zones', zone.name, 'seed.json');
   if (!fs.existsSync(zoneSeed)) return [];
   return JSON.parse(fs.readFileSync(zoneSeed, 'utf8')).map((op) =>
@@ -67,8 +183,35 @@ function loadLegacySeedOps() {
   return fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) : [];
 }
 
-const world = new World(worldFile);
-if (!world.load()) {
+// the player layer: what belongs to a SAVE, not a scene — presences, things
+// players made (`persist`), and unzoned world state (quest flags etc.)
+const playerLayer = (id, comps) => !!(comps.presence || comps.persist || !comps.zone);
+
+// scene-model worlds split state like a shipped game: the scenes are the
+// world, the save file is the player. world.json stays the whole truth for
+// legacy worlds only.
+const saveName = process.env.GAIA_SAVE ?? 'default';
+const saveFile = sceneMode ? path.join(worldDir, 'saves', `player_${saveName}_state.json`) : worldFile;
+
+const world = new World(saveFile, { saveFilter: sceneMode ? playerLayer : null });
+const hadSave = world.load();
+if (sceneMode) {
+  // scenes are ALWAYS the truth for the world itself — every boot reads them
+  // fresh (a scene edited while the server was down just appears). The save
+  // only overlays the player layer on top.
+  let seeded = 0;
+  for (const zone of manifest.zones) {
+    for (const op of loadZoneSceneOps(zone)) {
+      if (world.entities.has(op.id)) continue;
+      world.applyOp(op);
+      seeded += 1;
+    }
+  }
+  console.log(
+    `[gaia] scene model: ${seeded} entities from ${scenes.size} scenes` +
+      (hadSave ? ` + save '${saveName}' (${world.entities.size - seeded} player-layer)` : ''),
+  );
+} else if (!hadSave) {
   if (manifest) {
     for (const zone of manifest.zones) world.applyOps(loadZoneSeedOps(zone));
     console.log(`[gaia] seeded ${world.entities.size} entities from ${manifest.zones.length} zones`);
@@ -87,6 +230,7 @@ function expandReset(op) {
     : manifest?.zones ?? [null];
   const ops = [{ op: 'event', name: 'reset', data: { zone: op.zone ?? null } }];
   for (const zone of zones) {
+    if (zone && sceneMode) reloadScene(zone.name);
     for (const [id, comps] of world.entities) {
       if (comps.persist || comps.presence) continue;
       if (zone && comps.zone?.name !== zone.name) continue;
@@ -107,17 +251,15 @@ const worldTime = () => (Date.now() - bootTime) / 1000;
 
 const sense = new Sense(world, worldTime, manifest);
 
-// ---- prefab library: brushes for the palette, addable by agents at runtime ----
-const prefabsFile = path.join(worldDir, 'prefabs.json');
-let prefabs = [];
-try {
-  prefabs = JSON.parse(fs.readFileSync(prefabsFile, 'utf8'));
-} catch {
-  prefabs = [];
-}
-
-function savePrefabs() {
-  fs.writeFileSync(prefabsFile, JSON.stringify(prefabs, null, 2));
+// new/updated prefabs land one-per-file in prefabs/ (scene-model home);
+// worlds that only ever had the legacy prefabs.json list keep using it
+function savePrefab(prefab) {
+  if (sceneMode || fs.existsSync(prefabsDir)) {
+    fs.mkdirSync(prefabsDir, { recursive: true });
+    fs.writeFileSync(path.join(prefabsDir, `${prefab.name}.json`), JSON.stringify(prefab, null, 2) + '\n');
+  } else {
+    fs.writeFileSync(prefabsFile, JSON.stringify(prefabs, null, 2));
+  }
 }
 
 // ---- op journal: the world's nervous system ----
@@ -148,7 +290,58 @@ function applyZoneOp(op) {
   return true;
 }
 
-function applyAndBroadcast(ops, from) {
+// the `material` op edits the shared library: merge into the named entry
+// (value null deletes it), persist materials.json, broadcast — clients
+// rebuild whatever references the name
+function applyMaterialOp(op) {
+  if (!op.name) return false;
+  if (op.value === null) delete materials[op.name];
+  else materials[op.name] = { ...(materials[op.name] ?? {}), ...op.value };
+  fs.writeFileSync(materialsFile, JSON.stringify(materials, null, 2) + '\n');
+  console.log(`[gaia] material ${op.name} ${op.value === null ? 'deleted' : 'updated'}`);
+  return true;
+}
+
+// dev edits write through to the scene files — the single source of truth.
+// The op itself carries no scene knowledge: the entity's zone stamp picks the
+// file. The player layer (presences, persist, unzoned) never lands here.
+function writeBackScenes(applied) {
+  for (const op of applied) {
+    if (op.op === 'spawn' || op.op === 'set') {
+      const comps = world.entities.get(op.id);
+      if (!comps || playerLayer(op.id, comps)) continue;
+      const zoneName = comps.zone?.name;
+      if (!scenes.has(zoneName)) continue;
+      scenes.get(zoneName).docs[op.id] = sceneDoc(comps);
+      scheduleSceneSave(zoneName);
+    } else if (op.op === 'despawn') {
+      for (const [name, scene] of scenes) {
+        if (!(op.id in scene.docs)) continue;
+        delete scene.docs[op.id];
+        scheduleSceneSave(name);
+      }
+    }
+  }
+}
+
+// a prefab instance is stored as its deltas: `prefab` plus whichever
+// components differ from the prefab's. Everything else is the full document.
+// The zone stamp is the file it sits in — never stored.
+function sceneDoc(comps) {
+  const doc = structuredClone(comps);
+  delete doc.zone;
+  const base = prefabs.find((p) => p.name === doc.prefab?.name)?.components;
+  if (!base) return doc;
+  const out = { prefab: doc.prefab.name };
+  for (const [key, value] of Object.entries(doc)) {
+    if (key === 'prefab') continue;
+    if (key in base && JSON.stringify(base[key]) === JSON.stringify(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function applyAndBroadcast(ops, from, { dev = false } = {}) {
   if (ops.some((op) => op.op === 'reset')) {
     ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
   }
@@ -158,6 +351,11 @@ function applyAndBroadcast(ops, from) {
   if (ops.some((op) => op.op === 'zone')) {
     zoneOps = ops.filter((op) => op.op === 'zone' && applyZoneOp(op));
     ops = ops.filter((op) => op.op !== 'zone');
+  }
+  // material ops target the library, same treatment
+  if (ops.some((op) => op.op === 'material')) {
+    zoneOps = zoneOps.concat(ops.filter((op) => op.op === 'material' && applyMaterialOp(op)));
+    ops = ops.filter((op) => op.op !== 'material');
   }
   // `use` expands server-side like `reset`: the interact component decides
   // what actually happens (and whether it happens at all)
@@ -192,6 +390,7 @@ function applyAndBroadcast(ops, from) {
   if (applied.length) {
     record(applied, from);
     broadcast({ type: 'ops', ops: applied, from });
+    if (dev && sceneMode) writeBackScenes(applied);
   }
   return applied;
 }
@@ -282,7 +481,7 @@ const server = http.createServer(async (req, res) => {
   const q = Object.fromEntries(url.searchParams);
   try {
     if (req.method === 'GET' && url.pathname === '/world') {
-      return json(res, { ...world.snapshot(), manifest: manifestRaw });
+      return json(res, { ...world.snapshot(), manifest: manifestRaw, materials });
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       const since = Number(q.since ?? 0);
@@ -355,7 +554,7 @@ const server = http.createServer(async (req, res) => {
       const idx = prefabs.findIndex((p) => p.name === prefab.name);
       if (idx >= 0) prefabs[idx] = prefab;
       else prefabs.push(prefab);
-      savePrefabs();
+      savePrefab(prefab);
       applyAndBroadcast([{ op: 'event', name: 'prefabs-changed', data: { name: prefab.name } }], 'http');
       console.log(`[gaia] prefab ${idx >= 0 ? 'updated' : 'added'}: ${prefab.name}`);
       return json(res, { ok: true, count: prefabs.length });
@@ -363,7 +562,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/op') {
       const parsed = await body(req);
       const ops = Array.isArray(parsed) ? parsed : parsed.ops ?? [parsed];
-      const applied = applyAndBroadcast(ops, parsed.from ?? 'http');
+      const applied = applyAndBroadcast(ops, parsed.from ?? 'http', { dev: parsed.dev === true });
       for (const op of applied) console.log(`[gaia] ${describe(op)}`);
       return json(res, { ok: true, applied });
     }
@@ -441,11 +640,11 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (socket) => {
   // clients get the RAW manifest — they normalize themselves, and the editor
   // edits the authored form (the `zone` op round-trips through it)
-  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest: manifestRaw, game, ...world.snapshot() }));
+  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest: manifestRaw, game, materials, ...world.snapshot() }));
   socket.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
-      if (msg.type === 'ops') applyAndBroadcast(msg.ops ?? [], msg.from ?? 'ws');
+      if (msg.type === 'ops') applyAndBroadcast(msg.ops ?? [], msg.from ?? 'ws', { dev: msg.dev === true });
       else if (msg.type === 'hello') socket.presenceId = msg.presence;
       else if (msg.type === 'screenshot') {
         const res = shots.get(msg.id);
@@ -479,6 +678,7 @@ function describe(op) {
   if (op.op === 'despawn') return `despawn ${op.id}`;
   if (op.op === 'event') return `event ${op.name}`;
   if (op.op === 'zone') return `zone ${op.name} [${Object.keys(op.value ?? {}).join(', ')}]`;
+  if (op.op === 'material') return `material ${op.name}`;
   return op.op;
 }
 

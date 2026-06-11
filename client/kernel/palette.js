@@ -135,6 +135,9 @@ export class Palette {
 
   stamp() {
     const components = structuredClone(this.armed.components);
+    // the stamp stays an INSTANCE: the scene file stores `prefab` + deltas,
+    // and editing the prefab later updates every torch placed from it
+    components.prefab = { name: this.armed.name };
     const p = this.ghost.position;
     components.transform = components.transform ?? {};
     components.transform.position = [r2(p.x), components.ground ? 0 : r2(p.y), r2(p.z)];

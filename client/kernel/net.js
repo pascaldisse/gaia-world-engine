@@ -19,7 +19,7 @@ export function connect({ url, presence, onSnapshot, onOps, onStatus, onScreensh
     };
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {}, msg.time ?? 0, msg.manifest ?? null, msg.game ?? null);
+      if (msg.type === 'snapshot') onSnapshot?.(msg.entities ?? {}, msg.time ?? 0, msg.manifest ?? null, msg.game ?? null, msg.materials ?? null);
       else if (msg.type === 'ops') onOps?.(msg.ops ?? [], msg.from);
       else if (msg.type === 'screenshot-request') onScreenshot?.(msg.id, msg.from);
     };
@@ -33,12 +33,18 @@ export function connect({ url, presence, onSnapshot, onOps, onStatus, onScreensh
 
   open();
 
+  const send = (ops, dev = false) => {
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'ops', ops, from: clientId, ...(dev ? { dev: true } : {}) }));
+    }
+  };
+
   return {
-    send: (ops) => {
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'ops', ops, from: clientId }));
-      }
-    },
+    send,
+    // dev edits: same ops, but the server writes them through to the scene
+    // files (the source of truth). Every editing surface sends through this;
+    // gameplay (presence moves, use, weather) stays plain.
+    sendDev: (ops) => send(ops, true),
     sendRaw: (msg) => {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
     },

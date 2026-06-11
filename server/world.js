@@ -2,8 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export class World {
-  constructor(file) {
+  // saveFilter (scene-model worlds): which entities belong to the SAVE FILE —
+  // the player layer. Everything else lives in the zone scene files and is
+  // re-seeded from them on every boot, so persisting it here would shadow
+  // the source of truth.
+  constructor(file, { saveFilter = null } = {}) {
     this.file = file;
+    this.saveFilter = saveFilter;
     this.entities = new Map();
     this.counter = 1;
     this.saveTimer = null;
@@ -14,11 +19,25 @@ export class World {
     const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     this.counter = data.counter ?? 1;
     this.entities = new Map(Object.entries(data.entities ?? {}));
+    if (this.saveFilter) {
+      for (const [id, comps] of [...this.entities]) {
+        if (!this.saveFilter(id, comps)) this.entities.delete(id);
+      }
+    }
     return this.entities.size > 0;
   }
 
   snapshot() {
     return { counter: this.counter, entities: Object.fromEntries(this.entities) };
+  }
+
+  saveSnapshot() {
+    if (!this.saveFilter) return this.snapshot();
+    const entities = {};
+    for (const [id, comps] of this.entities) {
+      if (this.saveFilter(id, comps)) entities[id] = comps;
+    }
+    return { counter: this.counter, entities };
   }
 
   applyOps(ops) {
@@ -82,7 +101,7 @@ export class World {
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, JSON.stringify(this.snapshot(), null, 2));
+      fs.writeFileSync(this.file, JSON.stringify(this.saveSnapshot(), null, 2));
     }, 300);
   }
 }

@@ -17,6 +17,7 @@ import { Environment } from './kernel/environment.js';
 import { Zones } from './kernel/zones.js';
 import { Shading } from './kernel/shading.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
+import { setMaterialLibrary } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
 
 const statusEl = document.getElementById('status');
@@ -47,12 +48,17 @@ const behaviors = new Behaviors({ store, view, clock });
 const presenceId = `player-${clientId}`;
 view.ownPresence = presenceId;
 let pendingShot = null;
+let materialLib = {};
 
 const net = connect({
   url: `ws://${location.hostname}:${__GAIA_PORT__}`,
   presence: presenceId,
-  onSnapshot: (entities, time, manifest, game) => {
+  onSnapshot: (entities, time, manifest, game, materials) => {
     clock.offset = time - performance.now() / 1000;
+    // named materials resolve at mesh build — the library must be known
+    // before the snapshot turns into meshes
+    materialLib = materials ?? {};
+    setMaterialLibrary(materialLib);
     let spawnComp = null;
     for (const comps of Object.values(entities)) {
       if (comps.spawn) {
@@ -133,6 +139,16 @@ const net = connect({
         zones.applyZoneOp(op);
         zones.update(player.position);
         gizmos.dirty = true;
+      } else if (op.op === 'material') {
+        // library edit: re-resolve and rebuild whatever references the name —
+        // shared caches make untouched parts free
+        if (op.value === null) delete materialLib[op.name];
+        else materialLib[op.name] = { ...(materialLib[op.name] ?? {}), ...op.value };
+        setMaterialLibrary(materialLib);
+        for (const [id, comps] of store.entities) {
+          const parts = comps.mesh?.parts ?? (comps.mesh ? [comps.mesh] : []);
+          if (parts.some((p) => p.material === op.name)) view.applyComponent(id, 'mesh');
+        }
       }
     }
     store.applyOps(ops);
@@ -385,9 +401,9 @@ debugKnob('flame', (v) => {
     net.send([{ op: 'merge', id: presenceId, component: 'light', value: { distance: v, intensity } }]);
   }, 150);
 }, (v) => `${v.toFixed(0)}m`);
-// rain submenu: LOCAL look-dev over the streaked rain systems — slant the
+// rain submenu: live look-dev over the streaked rain systems — slant the
 // fall (the streaks lean to match), scale its speed, thin or thicken the
-// sheet. Tune here, then bake the keepers into the zone data.
+// sheet. `save` bakes the multipliers into the specs they multiplied.
 debugKnob('rain-angle', (v) => (rainDebug.angle = (v * Math.PI) / 180), (v) => `${v.toFixed(0)}°`);
 debugKnob('rain-speed', (v) => (rainDebug.speed = v));
 debugKnob('rain-intensity', (v) => {
@@ -453,37 +469,62 @@ const debugPages = {
 let debugPage = 'main';
 let debugSelected = 0;
 
-// save: the dev override layer. Saved knob values live in localStorage and
-// re-apply on every boot — they survive restarts AND level resets, and they
-// win over whatever the world data (the editor) says. Storm and flame are
-// world writes, not local overrides, so they are not saved.
-const DEBUG_SAVED = ['exposure', 'skylight', 'fog', 'rain-angle', 'rain-speed', 'rain-intensity'];
+// save: bake the knobs into the world itself — no override layer. Look knobs
+// (exposure/skylight/fog) merge into the current zone's environment entity;
+// rain knobs bake into every streaked rain system's spec. The ops are
+// dev-tagged, so the server writes them through to the scene files: the debug
+// menu edits the same single state as the editor. After the bake the knobs
+// return to neutral — the world now IS the look. Storm and flame already
+// write the world live, so they have nothing to save.
 function saveDebug() {
-  const data = {};
-  for (const name of DEBUG_SAVED) data[name] = Number(document.getElementById(`debug-${name}`).value);
-  localStorage.setItem('gaia-debug', JSON.stringify(data));
+  const ops = [];
+  const knob = (name) => Number(document.getElementById(`debug-${name}`).value);
+  let envId = null;
+  for (const [id, comps] of store.entities) {
+    if (comps.environment && comps.zone?.name === zones.current) {
+      envId = id;
+      break;
+    }
+  }
+  if (envId) {
+    const env = store.get(envId).environment ?? {};
+    const value = {};
+    if (knob('exposure') !== 1) value.exposure = r2((env.exposure ?? environment.defaults.exposure) * knob('exposure'));
+    if (knob('skylight') !== 0) value.ambient = { ...(env.ambient ?? {}), intensity: r2((env.ambient?.intensity ?? 0) + knob('skylight')) };
+    // the fog knob scales density — linear fog never moved with it, so skip
+    if (knob('fog') !== 1 && env.fog?.density) value.fog = { ...env.fog, density: Math.round(env.fog.density * knob('fog') * 1e5) / 1e5 };
+    if (Object.keys(value).length) ops.push({ op: 'merge', id: envId, component: 'environment', value });
+  }
+  if (rainDebug.speed !== 1 || rainDebug.angle !== 0 || rainIntensity !== 1) {
+    for (const [id, comps] of store.entities) {
+      const spec = comps.particles;
+      if (!spec?.streak) continue;
+      const motion = { ...(spec.motion ?? {}) };
+      motion.speed = r2((motion.speed ?? 1) * rainDebug.speed);
+      const tilt = [...(motion.tilt ?? [0, 0])];
+      tilt[0] = r2((tilt[0] ?? 0) + Math.tan(rainDebug.angle));
+      motion.tilt = tilt;
+      const value = { motion };
+      if (rainIntensity !== 1) value.count = Math.max(0, Math.round((spec.count ?? 400) * rainIntensity));
+      ops.push({ op: 'merge', id, component: 'particles', value });
+    }
+  }
+  if (ops.length) net.sendDev(ops);
+  // baked in — the round-tripped world data re-applies the exact same look
+  const neutral = { exposure: 1, skylight: 0, fog: 1, 'rain-angle': 0, 'rain-speed': 1, 'rain-intensity': 1 };
+  for (const [name, v] of Object.entries(neutral)) {
+    const input = document.getElementById(`debug-${name}`);
+    input.value = String(v);
+    input.dispatchEvent(new Event('input'));
+  }
   for (const id of ['debug-save', 'debug-rain-save']) {
     const el = document.getElementById(id);
-    el.textContent = 'saved ✓';
+    el.textContent = ops.length ? 'saved → world ✓' : 'nothing to save';
     setTimeout(() => (el.textContent = 'save'), 1600);
   }
 }
-function loadDebug() {
-  let data = null;
-  try {
-    data = JSON.parse(localStorage.getItem('gaia-debug') ?? 'null');
-  } catch {
-    data = null;
-  }
-  if (!data) return;
-  for (const name of DEBUG_SAVED) {
-    if (typeof data[name] !== 'number') continue;
-    const input = document.getElementById(`debug-${name}`);
-    input.value = String(data[name]);
-    input.dispatchEvent(new Event('input'));
-  }
-}
-loadDebug();
+// the old localStorage override layer is gone — clear any stale residue
+localStorage.removeItem('gaia-debug');
 
 const debugLinks = {
   'rain-link': () => showDebugPage('rain'),
@@ -569,14 +610,18 @@ player.onEvent = (name, data) => {
 const econsole = new EventConsole({ el: document.getElementById('console') });
 if (new URLSearchParams(location.search).has('log')) econsole.toggle();
 
-const history = new History(net.send);
-const interact = new Interact({ camera, scene, store, view, send: net.send, player, hintEl, history, presence: presenceId });
+// everything that AUTHORS the world sends dev-tagged ops: the server writes
+// them through to the scene files (single state — the editor edits the world's
+// actual files). Gameplay traffic (presence moves, use, carry streams) stays
+// plain and lands only in the runtime world / the save.
+const history = new History(net.sendDev);
+const interact = new Interact({ camera, scene, store, view, send: net.send, sendDev: net.sendDev, player, hintEl, history, presence: presenceId });
 const panel = new Panel({
   el: document.getElementById('panel'),
   store,
   view,
   zones,
-  send: net.send,
+  send: net.sendDev,
   history,
   onDuplicate: (id) => editor.duplicate(id),
   onDelete: (id) => editor.delete(id),
@@ -586,7 +631,7 @@ const palette = new Palette({
   el: document.getElementById('palette'),
   store,
   view,
-  send: net.send,
+  send: net.sendDev,
   history,
   camera,
   renderer,
@@ -616,7 +661,7 @@ const editor = new Editor({
   renderer,
   store,
   view,
-  send: net.send,
+  send: net.sendDev,
   player,
   history,
   panel,

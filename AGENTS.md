@@ -56,6 +56,27 @@ Screenshot discipline:
   deletes a field). In the editor, the `zones` gizmo chip draws bounds +
   dashed load cages, and the ⛭ on a zone's outliner group opens its
   manifest entry as editable JSON in the inspector.
+- THE SCENE MODEL (single state, M19): a world whose zones own
+  `world/zones/<name>/scene.json` runs scene-first. The scene file is entity
+  docs keyed by id, world-space — THE source of truth, read at boot and on
+  `reset`, and every dev edit writes back into it (gizmo drags, panel
+  fields, palette stamps, deletes, debug-menu save). Ops count as dev edits
+  when their batch carries `dev: true` — the client's authoring surfaces use
+  `gaia.net.sendDev`, and over HTTP it's `{"dev": true, "ops": [...]}`.
+  Gameplay traffic (presence moves, `use`, trigger output, weather) stays
+  runtime-only. The player layer — presences, `persist` entities, unzoned
+  state — lives in `world/saves/player_<GAIA_SAVE>_state.json` (gitignore
+  it): scenes always win on boot, the save only overlays the player's own.
+  Scene entries may be prefab INSTANCES: `{"prefab": "torch", ...deltas}`
+  deep-merges `world/prefabs/torch.json` under the deltas; write-back diffs
+  against the prefab, so instances stay tiny. `world/materials.json` holds
+  named looks — a part says `"material": "obsidian"` and may override any
+  field locally; the `material` op (`{op, name, value}`, null deletes)
+  edits the library live and clients rebuild what references it. EDITING
+  scene.json on disk (by hand or a generator re-run) while the server runs:
+  send a `reset` op for that zone — reset re-reads the file from disk and
+  is the official pickup gesture. Worlds with no scene.json (the demos)
+  keep the legacy seed.json + world.json model exactly as before.
 - Creator mode has a viewbar (top center): `lit / unlit / wire` draw modes
   and a `■ stop` toggle. Unlit shows floored albedo with fog and exposure
   neutral — edit a midnight zone in daylight; wire shows the geometry.
@@ -159,8 +180,9 @@ Screenshot discipline:
   enums. Read it before inventing values.
 - Deep-link extras: `&log=1` opens the world log drawer (the op stream,
   visible in screenshots), `&mute=1` keeps your tab silent.
-- Kill the dev server BEFORE deleting `world.json` — its debounced save
-  (weather merges dirty it every ~1s) resurrects old state.
+- LEGACY worlds only: kill the dev server BEFORE deleting `world.json` — its
+  debounced save (weather merges dirty it every ~1s) resurrects old state.
+  Scene-model worlds have no world.json; regenerate scene.json + `reset`.
 - A `use` op expands against the world as it was BEFORE its batch — send it
   in its own request, after the ops that position the user, or the range
   check reads stale state and silently refuses.

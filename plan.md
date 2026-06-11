@@ -407,6 +407,53 @@ A lot of caves are coming (Agartha). A cave is now one mesh part:
       can ever see the bridge (every such sightline crosses the solid
       band); the ledge door IS that reveal, by the crater's design.
 
+## M19 — Scene files: one single state (DONE)
+
+The user's rule, verbatim: "any change the dev does are changes to the actual
+world, the actual files that generate it. only things the player does while in
+game mode should be local." The engine already WAS data everywhere except the
+authoring layer — builder scripts computed data and threw it away into a
+runtime world.json that reseeds erased. M19 makes the computed data the file.
+
+- [x] `world/zones/<name>/scene.json` — entity docs keyed by id, world-space.
+      THE source of truth: read at boot and on `reset`, written back on every
+      dev edit. Presence of any scene.json switches the world to scene model;
+      worlds without (the demos) keep the legacy seed.json/world.json path.
+- [x] Dev write-back: ws/http op batches carry `dev: true` (client: every
+      authoring surface — gizmos, panel, palette, delete, undo/redo, grab-drop,
+      debug save — sends via `net.sendDev`; gameplay traffic stays plain).
+      The entity's zone stamp picks the file; 400ms debounce per zone.
+- [x] The save is the player layer ONLY: presences, `persist` entities,
+      unzoned state → `world/saves/player_<GAIA_SAVE>_state.json`. Zoned
+      world entities never enter it — scenes always win on boot. world.json
+      retired for scene-model worlds.
+- [x] Prefabs as instances: scene entry `{prefab: "torch", ...deltas}` deep-
+      merges the prefab's components under its own; write-back DIFFS against
+      the prefab so a moved torch stays three lines. Expanded entities carry
+      a `prefab: {name}` component (the link survives edits). Prefab library
+      lives one-file-per-prefab in `world/prefabs/` (legacy prefabs.json
+      still reads). Palette stamps keep their prefab link.
+- [x] Material library: `world/materials.json` named looks; a part says
+      `"material": "obsidian"` and overrides locally (resolution happens
+      before the shared-material cache key, in makePartMaterial — covers
+      meshes, scatter, ghosts). The `material` op merges/deletes entries,
+      persists, broadcasts; clients rebuild exactly the meshes that
+      reference the name. Verified live: box re-rendered green on library
+      edit, no entity op.
+- [x] Debug save bakes into the world: look knobs merge into the current
+      zone's environment entity, rain knobs bake into every streaked spec
+      (then the knobs snap back to neutral — the world now IS the look).
+      The localStorage override layer is gone.
+- [x] `reset` re-reads scene files from disk first — the official "pick up
+      my external edits" gesture (generator re-runs, hand edits). LESSON:
+      the in-memory docs and the disk WILL diverge under out-of-band writes;
+      pending write-back timers must be dropped on reload, disk is newer.
+- [x] Game migrated: build.mjs emits scene.json per zone (builders demoted
+      to generators — re-running one overwrites hand edits in that zone,
+      check git diff first), seed.json files deleted, world.json deleted,
+      saves/ gitignored. 177 entities from 5 scenes, screenshot-verified;
+      frozen Tomb demo (43) and engine GAIA demo (42) still boot legacy.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

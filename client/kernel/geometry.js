@@ -259,7 +259,23 @@ function buildTubeGeometry(part) {
   return geometry;
 }
 
+// the material library: named looks from world/materials.json. A part that
+// says `"material": "obsidian"` resolves to the library entry with its own
+// fields layered on top (local overrides win — Unity's per-renderer override).
+// Resolution happens BEFORE the cache key, so a library edit naturally maps
+// to new shared materials.
+let materialLibrary = {};
+export function setMaterialLibrary(lib) {
+  materialLibrary = lib ?? {};
+}
+
+function resolveMaterial(part) {
+  const doc = typeof part.material === 'string' ? materialLibrary[part.material] : null;
+  return doc ? { ...doc, ...part } : part;
+}
+
 export function makePartMaterial(part) {
+  part = resolveMaterial(part);
   const key = recipeKey(part, MATERIAL_FIELDS);
   let material = materialCache.get(key);
   if (!material) {

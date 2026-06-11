@@ -42,6 +42,7 @@ export const SCHEMA = {
       wobble: { doc: 'tube wall lumpiness as a fraction of radius (deterministic)', range: [0, 0.5] },
       wobbleScale: { doc: 'tube lumpiness frequency along the run', range: [0.1, 4] },
       carve: { doc: 'boolean subtraction, evaluated once at build and cached: [{shape, position, rotation, size/radius/…}] in PART-local space — real holes (windows in a cave wall, doorways)' },
+      material: { doc: 'named look from world/materials.json — the part inherits its fields and may override any locally (the `material` op edits the library live)' },
       color: { doc: 'base color' },
       emissive: { doc: 'self-lit color' },
       emissiveIntensity: { doc: 'how hard the emissive burns', range: [0, 6] },
@@ -280,6 +281,10 @@ export const SCHEMA = {
   zone: {
     doc: 'stamped by the server in zoned worlds — which level owns this entity',
     fields: { name: { doc: 'zone name from the manifest' } },
+  },
+  prefab: {
+    doc: 'this entity is an INSTANCE of world/prefabs/<name>.json — the scene file stores only its deltas, and editing the prefab updates every instance',
+    fields: { name: { doc: 'prefab name' } },
   },
   presence: {
     doc: 'a connected player or embodied agent (published, not authored)',

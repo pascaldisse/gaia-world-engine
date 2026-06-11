@@ -5,12 +5,16 @@ import * as THREE from 'three/webgpu';
 // Entities with an `interact` component answer E differently: a `use` op goes
 // to the server, which decides what happens — the only hands a game world has.
 export class Interact {
-  constructor({ camera, scene, store, view, send, player, hintEl, history, presence }) {
+  constructor({ camera, scene, store, view, send, sendDev, player, hintEl, history, presence }) {
     this.camera = camera;
     this.scene = scene;
     this.store = store;
     this.view = view;
     this.send = send;
+    // grabs only exist outside game mode, so a drop is a dev edit — the final
+    // position writes through to the scene file. The carry STREAM stays plain
+    // (gameplay traffic), as does `use`.
+    this.sendDev = sendDev ?? send;
     this.player = player;
     this.hintEl = hintEl;
     this.history = history;
@@ -101,7 +105,7 @@ export class Interact {
     if (group && this.store.get(id)) {
       const p = group.position;
       const position = [r2(p.x), r2(p.y), r2(p.z)];
-      this.send([{ op: 'merge', id, component: 'transform', value: { position } }]);
+      this.sendDev([{ op: 'merge', id, component: 'transform', value: { position } }]);
       this.history?.push(
         [{ op: 'set', id, component: 'transform', value: this.grabStart }],
         [{ op: 'set', id, component: 'transform', value: { ...(this.grabStart ?? {}), position } }],

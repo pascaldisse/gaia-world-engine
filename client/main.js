@@ -195,14 +195,21 @@ debugKnob('storm', (v) => {
     }
   }, 250);
 });
-// flame: reach (falloff distance) of the light YOUR presence carries —
-// does nothing until a world has granted you one
+// flame: reach of the light YOUR presence carries — does nothing until a
+// world has granted you one. distance alone is only a cutoff (inverse-square
+// decay has long faded by then), so intensity scales with the square of the
+// reach — that's what actually grows or shrinks the lit area. Scaling off the
+// current spec makes the mapping round-trip: 30→60→30 lands back on the
+// granted intensity exactly.
 let flameTimer = null;
 debugKnob('flame', (v) => {
   clearTimeout(flameTimer);
   flameTimer = setTimeout(() => {
-    if (!store.get(presenceId)?.light) return;
-    net.send([{ op: 'merge', id: presenceId, component: 'light', value: { distance: v } }]);
+    const light = store.get(presenceId)?.light;
+    if (!light) return;
+    const d = light.distance || 30;
+    const intensity = (light.intensity ?? 10) * (v / d) ** 2;
+    net.send([{ op: 'merge', id: presenceId, component: 'light', value: { distance: v, intensity } }]);
   }, 150);
 }, (v) => `${v.toFixed(0)}m`);
 

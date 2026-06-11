@@ -357,7 +357,7 @@ until the approach actually reveals it.
       merges need the body to exist). The overlay ships empty; a titled
       game never flashes the GAIA defaults.
 
-## M18 — caves as splines (tube shape DONE; carve proposed)
+## M18 — caves as splines + carve (DONE)
 
 A lot of caves are coming (Agartha). A cave is now one mesh part:
 
@@ -385,17 +385,27 @@ A lot of caves are coming (Agartha). A cave is now one mesh part:
 - [ ] CAVEAT for long caves: `surfaceAt` culls candidate meshes whose
       entity sits >60m away in xz — author long systems as SEGMENTS
       (~100m each, own origins). Segments also stream better.
-- [ ] PROPOSED — `carve`: boolean holes as data. Dreams runs on pure
-      SDF/CSG trees evaluated by a GPU splatting renderer — gorgeous, not
-      portable to a three.js triangle pipeline. The portable lesson is
-      AUTHOR as CSG, EVALUATE ONCE: add `carve: [{shape, position,
-      rotation, …}]` to mesh parts, evaluated at geometry-build time with
-      three-bvh-csg (SUBTRACTION; ~100× faster than BSP CSG libs, ms-scale
-      for our vertex counts), result cached by recipe exactly like every
-      other geometry — zero per-frame cost. Doorways/windows/cracks stop
-      needing thetaLength lattice tricks or rock-pile concealment. Until
-      then: cylinder arcs (crater mouth) and tube mouths plugged with
-      rocks remain the cheap path.
+- [x] `carve`: boolean holes as data. Dreams runs on pure SDF/CSG trees
+      evaluated by a GPU splatting renderer — gorgeous, not portable to a
+      three.js triangle pipeline. The portable lesson, implemented: AUTHOR
+      as CSG, EVALUATE ONCE — `carve: [{shape, position, rotation, …}]`
+      on any mesh part (shapes in PART-local space), evaluated at
+      geometry-build time with three-bvh-csg, result cached by recipe like
+      every other geometry — zero per-frame cost. Verified on the WebGPU
+      renderer (a 'three'-built BufferGeometry renders fine).
+- [x] THE SHELL LESSON: a tube is a surface, not a solid — to CSG its
+      enclosed volume is rock, so plain SUBTRACTION walls the cut off with
+      the tool's own faces (a sealed notch, not a window). Tube parts
+      carve with HOLLOW_SUBTRACTION (clip shell faces, add none): a true
+      hole. Solids (boxes, spheres…) keep SUBTRACTION — bores and bites
+      cap correctly. Inward-wound tubes carve while still outward, then
+      flip winding + recompute normals (CSG classifies by winding).
+- [x] First real use: the Tomb's tunnels1 climb is one cave-shell tube
+      (chambers at bends, squeezes between, wobbled walls) with carved
+      dead-end mouths and a carved lookout window aimed through the crater
+      mouth gap — plus the geometric truth that no interior wall window
+      can ever see the bridge (every such sightline crosses the solid
+      band); the ledge door IS that reveal, by the crater's design.
 
 ## Later
 

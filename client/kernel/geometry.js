@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { Brush, Evaluator, SUBTRACTION, HOLLOW_SUBTRACTION } from 'three-bvh-csg';
 import { makePresetMaterial } from './presets.js';
 
 // Shared mesh-recipe builders: entity meshes, scatter instances, palette ghosts.
@@ -17,6 +18,7 @@ const GEOMETRY_FIELDS = [
   'shape', 'size', 'radius', 'radiusTop', 'radiusBottom', 'height', 'open', 'tube', 'segments',
   'thetaStart', 'thetaLength', 'radialSegments',
   'path', 'radii', 'tubularSegments', 'closed', 'inside', 'wobble', 'wobbleScale',
+  'carve',
 ];
 const MATERIAL_FIELDS = [
   'preset', 'color', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
@@ -46,7 +48,83 @@ export function makeGeometry(part) {
   return geometry;
 }
 
+// `carve`: boolean subtraction as data — the Dreams lesson made portable.
+// Author the part as CSG (`carve: [{shape, position, rotation, …}]`, shapes
+// in PART-LOCAL space), evaluate ONCE at geometry-build time with
+// three-bvh-csg, cache by recipe: real holes, zero per-frame cost. Inward-
+// wound tubes are carved while still outward (the evaluator classifies
+// solids by winding) and flipped after — so a cave wall gets a real window.
 function buildGeometry(part) {
+  if (!Array.isArray(part.carve) || !part.carve.length) return buildBaseGeometry(part);
+  const flip = part.shape === 'tube' && (part.inside ?? false);
+  let geometry = buildBaseGeometry(flip ? { ...part, inside: false } : part);
+  // a tube is a SHELL, not a solid: plain subtraction would wall the cut
+  // off with the tool's own faces (CSG sees the enclosed volume as rock).
+  // HOLLOW_SUBTRACTION clips shell faces and adds none — a true hole.
+  geometry = carveGeometry(geometry, part.carve, part.shape === 'tube');
+  if (flip) {
+    flipWinding(geometry);
+    geometry.computeVertexNormals();
+  }
+  return geometry;
+}
+
+let evaluator = null;
+function carveGeometry(base, carves, hollow = false) {
+  if (!evaluator) {
+    evaluator = new Evaluator();
+    evaluator.useGroups = false; // one material per part — no group splits
+    evaluator.attributes = ['position', 'normal', 'uv'];
+  }
+  if (!base.attributes.uv) {
+    // CSG interpolates the attribute set across both operands — give
+    // primitives without uvs a zero channel rather than dropping uvs
+    base.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(base.attributes.position.count * 2), 2));
+  }
+  let target = new Brush(base);
+  target.updateMatrixWorld();
+  for (const c of carves) {
+    const tool = new Brush(buildBaseGeometry(c));
+    tool.position.set(...(c.position ?? [0, 0, 0]));
+    if (c.rotation) tool.rotation.set(...c.rotation);
+    tool.updateMatrixWorld();
+    const next = evaluator.evaluate(target, tool, hollow ? HOLLOW_SUBTRACTION : SUBTRACTION);
+    tool.geometry.dispose();
+    target.geometry.dispose();
+    target = next;
+  }
+  return target.geometry;
+}
+
+function flipWinding(geometry) {
+  if (geometry.index) {
+    const idx = geometry.index.array;
+    for (let i = 0; i < idx.length; i += 3) {
+      const t = idx[i + 1];
+      idx[i + 1] = idx[i + 2];
+      idx[i + 2] = t;
+    }
+    geometry.index.needsUpdate = true;
+    return;
+  }
+  for (const name of Object.keys(geometry.attributes)) {
+    const attr = geometry.attributes[name];
+    const arr = attr.array;
+    const sz = attr.itemSize;
+    for (let t = 0; t + 2 < attr.count; t += 3) {
+      for (let k = 0; k < sz; k++) {
+        const a = (t + 1) * sz + k;
+        const b = (t + 2) * sz + k;
+        const tmp = arr[a];
+        arr[a] = arr[b];
+        arr[b] = tmp;
+      }
+    }
+    attr.needsUpdate = true;
+  }
+}
+
+function buildBaseGeometry(part) {
   switch (part.shape) {
     case 'sphere':
       return new THREE.SphereGeometry(part.radius ?? 0.5, 24, 16);

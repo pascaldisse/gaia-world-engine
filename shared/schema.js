@@ -41,6 +41,7 @@ export const SCHEMA = {
       inside: { doc: 'tube faces wind inward: a cave you walk THROUGH (floor is raycast-walkable)' },
       wobble: { doc: 'tube wall lumpiness as a fraction of radius (deterministic)', range: [0, 0.5] },
       wobbleScale: { doc: 'tube lumpiness frequency along the run', range: [0.1, 4] },
+      carve: { doc: 'boolean subtraction, evaluated once at build and cached: [{shape, position, rotation, size/radius/…}] in PART-local space — real holes (windows in a cave wall, doorways)' },
       color: { doc: 'base color' },
       emissive: { doc: 'self-lit color' },
       emissiveIntensity: { doc: 'how hard the emissive burns', range: [0, 6] },

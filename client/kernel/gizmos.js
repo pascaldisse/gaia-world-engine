@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { heightAt } from './terrain.js';
 
 // Gizmos draw the invisible data: collider boxes, trigger volumes, water
-// areas, light and sound ranges, ferry routes, zone bounds. X-ray lines
+// areas, light and sound ranges, ferry routes, scene bounds. X-ray lines
 // (no depth test) so a trigger inside a dark cave still reads. The selected
 // entity always shows its own; the outliner chips switch whole categories on.
 
@@ -16,20 +16,20 @@ const COLORS = {
   path: '#ffa94d',
   scatter: '#9be8c0',
   particles: '#e8b4f0',
-  zone: '#51708f',
-  zoneCurrent: '#7df9ff',
-  zoneLoad: '#74c7a8',
+  scene: '#51708f',
+  sceneCurrent: '#7df9ff',
+  sceneLoad: '#74c7a8',
   spawn: '#7dffb0',
 };
 
 const RELEVANT = new Set(['collider', 'trigger', 'interact', 'water', 'light', 'sound', 'behavior', 'scatter', 'particles', 'spawn', 'mesh']);
 
 export class Gizmos {
-  constructor({ scene, store, view, zones }) {
+  constructor({ scene, store, view, scenes }) {
     this.scene = scene;
     this.store = store;
     this.view = view;
-    this.zones = zones;
+    this.worldScenes = scenes;
     this.root = new THREE.Group();
     this.root.visible = false;
     scene.add(this.root);
@@ -43,13 +43,13 @@ export class Gizmos {
       { key: 'sounds', label: 'sounds' },
       { key: 'paths', label: 'paths' },
       { key: 'areas', label: 'areas' },
-      { key: 'zones', label: 'zones' },
+      { key: 'scenes', label: 'scenes' },
     ];
     this.selected = null;
     this.tracked = []; // wrappers that follow a (possibly moving) entity
     this.dirty = false;
     this.lastBuild = 0;
-    this.zoneSeen = null;
+    this.sceneSeen = null;
     store.onChange((event) => {
       if (event.kind !== 'set') this.dirty = true;
       else if (RELEVANT.has(event.component)) this.dirty = true;
@@ -77,8 +77,8 @@ export class Gizmos {
 
   update() {
     if (!this.enabled) return;
-    if (this.view.currentZone !== this.zoneSeen) {
-      this.zoneSeen = this.view.currentZone;
+    if (this.view.currentScene !== this.sceneSeen) {
+      this.sceneSeen = this.view.currentScene;
       this.dirty = true;
     }
     if (this.dirty && performance.now() - this.lastBuild > 250) this.rebuild();
@@ -133,9 +133,9 @@ export class Gizmos {
         if (comps.scatter) this.addArea(comps.scatter.area ?? { center: [0, 0], radius: 60 }, COLORS.scatter);
         if (comps.particles) this.addArea(comps.particles.area ?? { center: [0, 0], radius: 20 }, COLORS.particles);
       }
-      if (comps.spawn && this.want('zones', id)) this.addSpawn(comps.spawn);
+      if (comps.spawn && this.want('scenes', id)) this.addSpawn(comps.spawn);
     }
-    if (this.show.has('zones')) this.addZones();
+    if (this.show.has('scenes')) this.addScenes();
   }
 
   // ---- attached gizmos: a wrapper that mirrors the entity's pose ----
@@ -392,15 +392,15 @@ export class Gizmos {
     this.root.add(ring);
   }
 
-  addZones() {
-    const manifest = this.zones?.manifest;
-    if (!manifest) return;
-    for (const zone of manifest.zones) {
-      if (!zone.bounds) continue;
-      const [cx, cz] = zone.bounds.center ?? [0, 0];
-      const r = zone.bounds.radius ?? 0;
-      const current = zone.name === this.view.currentZone;
-      const color = current ? COLORS.zoneCurrent : COLORS.zone;
+  addScenes() {
+    const index = this.worldScenes?.index;
+    if (!index) return;
+    for (const scene of index.scenes) {
+      if (!scene.bounds) continue;
+      const [cx, cz] = scene.bounds.center ?? [0, 0];
+      const r = scene.bounds.radius ?? 0;
+      const current = scene.name === this.view.currentScene;
+      const color = current ? COLORS.sceneCurrent : COLORS.scene;
       const points = [];
       for (let i = 0; i < 128; i++) {
         const a = (i / 128) * Math.PI * 2;
@@ -422,8 +422,8 @@ export class Gizmos {
     }
     // load volumes: the explicit streaming triggers — a capped cylinder cage
     // (dashed: "condition", not "place"). Drawn at their authored y range.
-    for (const zone of manifest.zones) {
-      for (const volume of zone.load ?? []) {
+    for (const scene of index.scenes) {
+      for (const volume of scene.load ?? []) {
         const [cx, cz] = volume.center ?? [0, 0];
         const r = volume.radius ?? 0;
         const [y0, y1] = volume.y ?? [this.surfaceY(cx, cz) - 4, this.surfaceY(cx, cz) + 30];
@@ -431,7 +431,7 @@ export class Gizmos {
         const holder = new THREE.Group();
         holder.position.set(cx, 0, cz);
         for (const y of [y0, top]) {
-          const ring = new THREE.Line(circleGeometry(r), dashedMaterial(COLORS.zoneLoad, 0.85));
+          const ring = new THREE.Line(circleGeometry(r), dashedMaterial(COLORS.sceneLoad, 0.85));
           ring.computeLineDistances();
           ring.position.y = y;
           mark(ring);
@@ -445,7 +445,7 @@ export class Gizmos {
             new THREE.Vector3(Math.cos(a) * r, top, Math.sin(a) * r),
           );
         }
-        const verticals = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), dashedMaterial(COLORS.zoneLoad, 0.5));
+        const verticals = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), dashedMaterial(COLORS.sceneLoad, 0.5));
         verticals.computeLineDistances();
         mark(verticals);
         holder.add(verticals);

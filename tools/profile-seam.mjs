@@ -1,4 +1,4 @@
-// One-off: CPU-profile the page across a zone seam and print the hottest
+// One-off: CPU-profile the page across a scene seam and print the hottest
 // functions by self time. Reuses the cdp.mjs connection pattern.
 import WebSocket from 'ws';
 

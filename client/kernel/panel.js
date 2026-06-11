@@ -27,18 +27,18 @@ const RANGES = {
 const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, view, zones, send, history, onDuplicate, onDelete, onEditPath }) {
+  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditPath }) {
     this.el = el;
     this.store = store;
     this.view = view;
-    this.zones = zones;
+    this.scenes = scenes;
     this.send = send;
     this.history = history;
     this.onDuplicate = onDuplicate;
     this.onDelete = onDelete;
     this.onEditPath = onEditPath;
     this.id = null;
-    this.zoneName = null;
+    this.sceneName = null;
     this.tab = 'fields';
     this.interacting = false;
     this.commitTimer = null;
@@ -48,30 +48,30 @@ export class Panel {
 
   show(id) {
     this.id = id;
-    this.zoneName = null;
+    this.sceneName = null;
     this.el.style.display = 'flex';
     this.render();
   }
 
-  // a manifest zone in the inspector: not an entity — its document is the
-  // streaming geography (bounds disc, load volumes, neighbors), edited as
-  // JSON and committed as a `zone` op the server persists to manifest.json
-  showZone(name) {
+  // a scene in the inspector: not an entity — its document is the streaming
+  // geography (bounds disc, load volumes, neighbors), edited as JSON and
+  // committed as a `scene` op the server persists to world.json
+  showScene(name) {
     this.id = null;
-    this.zoneName = name;
+    this.sceneName = name;
     this.el.style.display = 'flex';
-    this.renderZone();
+    this.renderScene();
   }
 
   hide() {
     this.id = null;
-    this.zoneName = null;
+    this.sceneName = null;
     this.el.style.display = 'none';
   }
 
   refresh() {
-    if (this.zoneName) {
-      if (!this.interacting && !this.el.contains(document.activeElement)) this.renderZone();
+    if (this.sceneName) {
+      if (!this.interacting && !this.el.contains(document.activeElement)) this.renderScene();
       return;
     }
     if (!this.id) return;
@@ -83,31 +83,31 @@ export class Panel {
     this.render();
   }
 
-  renderZone() {
-    const raw = this.zones?.rawZone(this.zoneName);
+  renderScene() {
+    const raw = this.scenes?.rawScene(this.sceneName);
     if (!raw) {
       this.hide();
       return;
     }
     this.el.innerHTML = '';
     const head = div('panel-head');
-    head.append(span('panel-title', `zone · ${this.zoneName}`));
+    head.append(span('panel-title', `scene · ${this.sceneName}`));
     head.append(button('×', () => this.hide()));
     this.el.append(head);
 
     const state =
-      this.view?.currentZone === this.zoneName
+      this.view?.currentScene === this.sceneName
         ? 'current'
-        : this.view?.activeZones?.has(this.zoneName)
+        : this.view?.activeScenes?.has(this.sceneName)
           ? 'resident'
           : 'streamed out';
     this.el.append(div('runtime', raw.always ? `${state} · always-loaded` : state));
     this.el.append(
       div(
         'section-doc',
-        'bounds: the disc this zone claims. load: volumes that stream it in — ' +
-          '{center:[x,z], radius, y:[min,max]}; a zone WITH load volumes no longer ' +
-          'loads with its neighbors. Apply persists to manifest.json.',
+        'bounds: the disc this scene claims. load: volumes that stream it in — ' +
+          '{center:[x,z], radius, y:[min,max]}; a scene WITH load volumes no longer ' +
+          'loads with its neighbors. Apply persists to world.json.',
       ),
     );
 
@@ -135,9 +135,9 @@ export class Panel {
           undoValue[key] = prev[key] ?? null;
         }
         if (Object.keys(value).length) {
-          const redo = [{ op: 'zone', name: this.zoneName, value }];
+          const redo = [{ op: 'scene', name: this.sceneName, value }];
           this.send(redo);
-          this.history.push([{ op: 'zone', name: this.zoneName, value: undoValue }], redo, `zone.${this.zoneName}`);
+          this.history.push([{ op: 'scene', name: this.sceneName, value: undoValue }], redo, `scene.${this.sceneName}`);
         }
         error.textContent = '';
       } catch (err) {
@@ -186,12 +186,12 @@ export class Panel {
     this.el.append(head);
 
     // runtime: what the kernel KNOWS vs what the data says — streamed-in or
-    // data-only, which zone owns it, where it actually is right now
+    // data-only, which scene owns it, where it actually is right now
     if (this.view) {
       const group = this.view.getGroup(this.id);
-      const built = group ? 'built' : this.view.isActive(comps) ? 'building…' : 'data-only (zone not streamed)';
+      const built = group ? 'built' : this.view.isActive(comps) ? 'building…' : 'data-only (scene not streamed)';
       const pos = group ? group.position.toArray() : comps.transform?.position;
-      const bits = [comps.zone?.name ? `zone ${comps.zone.name}` : 'unzoned', built];
+      const bits = [comps.scene?.name ? `scene ${comps.scene.name}` : 'unclaimed', built];
       // a bodiless entity's group sits at the origin — that's not a position
       if (pos && (comps.transform?.position || pos.some((v) => v !== 0))) {
         bits.push(`at ${pos.map((v) => (Math.round(v * 10) / 10).toFixed(1)).join(', ')}`);

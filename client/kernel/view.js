@@ -16,7 +16,7 @@ import { buildParticles } from './particles.js';
 // mid-play.)
 // 16 is the M13-verified budget — 24 measurably hurt frame rate (every
 // pooled light is in every lit fragment's loop, used or not). The pool must
-// stay LARGER than any zone's live spec set: a smaller pool means per-frame
+// stay LARGER than any scene's live spec set: a smaller pool means per-frame
 // sort/slice churn and starved lights — a burning candle casting nothing.
 // Worlds keep within it by FAKING small sources (emissive glow cards +
 // flicker), Cyberpunk-style: real lights are for the player and heroes.
@@ -41,9 +41,9 @@ export class View {
     this.sounds = new Map();
     this.particleSystems = new Map();
     this.suppressed = new Set();
-    // zone streaming: null = no manifest, everything builds (single-zone worlds)
-    this.activeZones = null;
-    this.currentZone = null;
+    // scene streaming: null = no index yet, everything builds
+    this.activeScenes = null;
+    this.currentScene = null;
     this.buildQueue = [];
     this.buildSet = new Set();
     this.hideQueue = [];
@@ -60,20 +60,20 @@ export class View {
     store.onChange((event) => this.handle(event));
   }
 
-  // entities outside the active zone set stay data-only — no meshes, no
-  // sounds, no lights; they build when their zone streams in
+  // entities outside the active scene set stay data-only — no meshes, no
+  // sounds, no lights; they build when their scene streams in
   isActive(comps) {
-    if (!this.activeZones) return true;
-    const zone = comps?.zone?.name;
-    return !zone || this.activeZones.has(zone);
+    if (!this.activeScenes) return true;
+    const scene = comps?.scene?.name;
+    return !scene || this.activeScenes.has(scene);
   }
 
-  // streamed-out zones HIDE rather than tear down (the Dark Souls model: the
+  // streamed-out scenes HIDE rather than tear down (the Dark Souls model: the
   // world stays resident, geometry never lies). Hidden groups keep their
-  // meshes, render objects and compiled pipelines — re-entering a zone is a
+  // meshes, render objects and compiled pipelines — re-entering a scene is a
   // visibility flip, not a rebuild. Only sounds and light slots let go.
-  setActiveZones(set) {
-    this.activeZones = set;
+  setActiveScenes(set) {
+    this.activeScenes = set;
     for (const [id, comps] of this.store.entities) {
       const group = this.groups.get(id);
       const want = this.isActive(comps);
@@ -108,7 +108,7 @@ export class View {
     this.buildQueue.push(id);
   }
 
-  // time-sliced streaming: a zone coming in never drops a frame — builds run
+  // time-sliced streaming: a scene coming in never drops a frame — builds run
   // against a per-frame millisecond deadline, and each built entity attaches
   // only after its pipelines pre-compiled off-frame (buildDeferred)
   update() {
@@ -121,7 +121,7 @@ export class View {
     }
     // builds are weighted by mesh-part count: each part attached this frame
     // costs the NEXT render first-draw setup (render object, bind groups,
-    // buffers), so a zone streams in a few parts per frame, never a burst
+    // buffers), so a scene streams in a few parts per frame, never a burst
     let parts = 6;
     while (this.buildQueue.length && parts > 0 && performance.now() < deadline) {
       const id = this.buildQueue.shift();
@@ -142,13 +142,13 @@ export class View {
     else if (event.kind === 'set') this.applyComponent(event.id, event.component);
   }
 
-  // every material recipe in the snapshot — including zones not yet active,
+  // every material recipe in the snapshot — including scenes not yet active,
   // and the mesh values hiding inside interact ops — gets drawn ONCE here,
   // on tiny probe meshes pushed through the REAL render path (post chain,
   // shadow pass and all) for two frames at load, behind the entry overlay.
   // compileAsync would warm the wrong context: the world renders through
   // the bloom pass, whose target needs different pipelines than the canvas.
-  // After the warm-up, no streamed zone, spawn or lantern flame ever meets
+  // After the warm-up, no streamed scene, spawn or lantern flame ever meets
   // a cold shader. (Playdead's INSIDE warm-up: draw every variant before
   // play, then never compile again.)
   warmMaterials() {
@@ -215,7 +215,7 @@ export class View {
     this.build(id);
     const group = this.groups.get(id);
     const components = this.store.get(id);
-    // hidden builds (spawn into a streamed-out zone) materialize silently
+    // hidden builds (spawn into a streamed-out scene) materialize silently
     if (!group || group.userData.hidden || !this.effects || components?.terrain || id === this.ownPresence) return;
     group.visible = false;
     this.effects.wispTo(group.position.clone(), () => {
@@ -233,7 +233,7 @@ export class View {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
     this.effects.scaleOut(group, () => {
-      // the id may have respawned while the shrink played (a zone reset
+      // the id may have respawned while the shrink played (a scene reset
       // despawns and respawns in one batch) — never remove the replacement
       if (this.groups.get(id) === group) this.remove(id);
     });
@@ -250,7 +250,7 @@ export class View {
 
   // the whole world builds at load — and renders, ALL of it visible, for a
   // few frames behind the entry overlay, so every pipeline compiles and
-  // every render object exists before play begins. Then the zones the
+  // every render object exists before play begins. Then the scenes the
   // player isn't in go to sleep. After that, streaming is pure visibility —
   // nothing is ever built, compiled or torn down mid-play (the Dark Souls
   // model: the world stays resident; INSIDE's rule: warm everything, then
@@ -295,8 +295,8 @@ export class View {
     group.name = id;
     if (id === this.ownPresence) group.visible = false; // don't render your own head
     if (!this.warming && !this.isActive(components)) {
-      // out-of-zone entities build resident-but-asleep: no draw, no sound,
-      // no light slot — show() wakes them when their zone streams in
+      // out-of-scene entities build resident-but-asleep: no draw, no sound,
+      // no light slot — show() wakes them when their scene streams in
       group.visible = false;
       group.userData.hidden = true;
     }
@@ -337,8 +337,8 @@ export class View {
         this.applyParticles(id, group, value);
         break;
       case 'environment':
-        // in a zoned world, only the current zone's mood applies
-        if (!this.activeZones || !components.zone || components.zone.name === this.currentZone) {
+        // in a multi-scene world, only the current scene's mood applies
+        if (!this.activeScenes || !components.scene || components.scene.name === this.currentScene) {
           this.environment?.apply(value);
         }
         break;
@@ -503,7 +503,7 @@ export class View {
         if (!slot) continue;
         this.assignSlot(slot, c.id, c.spec);
       }
-      // zone lightScale, re-applied per frame (it crossfades at seams): a
+      // scene lightScale, re-applied per frame (it crossfades at seams): a
       // flame authored against the dark washes out under a daylight env.
       // baseIntensity too, so flicker behaviors compose with the scale.
       const scaled = (c.spec.intensity ?? 10) * (this.environment?.lightScale ?? 1);
@@ -533,12 +533,12 @@ export class View {
   applySound(id, group, value) {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
-    if (!value || group.userData.hidden) return; // hidden zones are silent
+    if (!value || group.userData.hidden) return; // hidden scenes are silent
     const handle = this.audio.attach(group, value);
     this.sounds.set(id, handle);
-    // an ambient sound built for a non-current zone starts silent
-    const zone = this.store.get(id)?.zone?.name;
-    if (handle.ambient && this.activeZones && zone && zone !== this.currentZone) handle.fade?.(0, 0.01);
+    // an ambient sound built for a non-current scene starts silent
+    const scene = this.store.get(id)?.scene?.name;
+    if (handle.ambient && this.activeScenes && scene && scene !== this.currentScene) handle.fade?.(0, 0.01);
   }
 
   applyTerrain(group, value) {
@@ -671,14 +671,14 @@ export class View {
     }
   }
 
-  // ambient sounds belong to their zone's mood: fade them with the player's
-  // current zone (positional sounds attenuate by distance on their own)
+  // ambient sounds belong to their scene's mood: fade them with the player's
+  // current scene (positional sounds attenuate by distance on their own)
   updateAmbience() {
     for (const [id, handle] of this.sounds) {
       if (!handle.ambient || !handle.fade) continue;
-      const zone = this.store.get(id)?.zone?.name;
-      if (!this.activeZones || !zone) continue;
-      handle.fade(zone === this.currentZone ? 1 : 0, 1.8);
+      const scene = this.store.get(id)?.scene?.name;
+      if (!this.activeScenes || !scene) continue;
+      handle.fade(scene === this.currentScene ? 1 : 0, 1.8);
     }
   }
 

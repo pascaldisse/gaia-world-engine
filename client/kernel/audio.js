@@ -114,7 +114,7 @@ export class AudioEngine {
     this.ensureGraph();
     const ctx = this.listener.context;
 
-    // ambient sounds get a zone gain so the current zone's mood can fade
+    // ambient sounds get a scene gain so the current scene's mood can fade
     // them in and out (positional sounds attenuate by distance on their own)
     const makeFade = (gainNode) => (mul, seconds = 1.5) => {
       const g = gainNode.gain;
@@ -157,13 +157,13 @@ export class AudioEngine {
     const timers = [];
     let sink;
     let audio = null;
-    let zoneGain = null;
+    let sceneGain = null;
     if (spec.ambient) {
       sink = ctx.createGain();
-      zoneGain = ctx.createGain();
-      sink.connect(zoneGain);
-      zoneGain.connect(this.master);
-      nodes.push(sink, zoneGain);
+      sceneGain = ctx.createGain();
+      sink.connect(sceneGain);
+      sceneGain.connect(this.master);
+      nodes.push(sink, sceneGain);
     } else {
       audio = rampOnlyWhenMoved(new THREE.PositionalAudio(this.listener));
       audio.setRefDistance(spec.refDistance ?? 4);
@@ -201,7 +201,7 @@ export class AudioEngine {
 
     return {
       ambient: !!spec.ambient,
-      fade: zoneGain ? makeFade(zoneGain) : null,
+      fade: sceneGain ? makeFade(sceneGain) : null,
       dispose: () => {
         timers.forEach(clearInterval);
         for (const node of nodes) {

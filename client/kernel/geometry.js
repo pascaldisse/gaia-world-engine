@@ -313,7 +313,7 @@ function buildPartMaterial(part) {
     material.opacity = part.opacity;
   }
   // fog: false — for backdrop scenery whose colors already ARE the
-  // atmosphere (skybox content); zone fog would erase it at distance
+  // atmosphere (skybox content); scene fog would erase it at distance
   if (part.fog === false) material.fog = false;
   // doubleSide: shells seen from both worlds (the crater: pale rock outside,
   // near-black inside — the ZONE lighting does the painting, not the part)

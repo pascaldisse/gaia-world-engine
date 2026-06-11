@@ -1,0 +1,30 @@
+{
+  "name": "stone",
+  "components": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.5,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  }
+}

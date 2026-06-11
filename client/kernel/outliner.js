@@ -1,5 +1,5 @@
 // The outliner is the answer to "what exists here?": every entity in the
-// world, grouped by zone, selectable even when it has no body to click —
+// world, grouped by scene, selectable even when it has no body to click —
 // triggers, water volumes, ambience patches, the environment itself.
 // Searchable; doubles as the gizmo-category switchboard.
 
@@ -26,22 +26,22 @@ function iconFor(comps) {
 }
 
 export class Outliner {
-  constructor({ el, store, view, zones, gizmos, onPick, onFocus, onZone }) {
+  constructor({ el, store, view, scenes, gizmos, onPick, onFocus, onScene }) {
     this.el = el;
     this.store = store;
     this.view = view;
-    this.zones = zones;
+    this.scenes = scenes;
     this.gizmos = gizmos;
     this.onPick = onPick;
     this.onFocus = onFocus;
-    this.onZone = onZone;
+    this.onScene = onScene;
     this.collapsed = new Set();
     this.search = '';
     this.selected = null;
     this.visible = false;
     this.dirty = true;
     this.lastRender = 0;
-    this.zoneSeen = null;
+    this.sceneSeen = null;
     this.rows = new Map();
     // presence pose merges arrive constantly — only structural changes
     // (spawn/despawn/snapshot, or a component appearing/changing kind)
@@ -114,37 +114,37 @@ export class Outliner {
 
   update() {
     if (!this.visible) return;
-    if (this.view.currentZone !== this.zoneSeen) {
-      this.zoneSeen = this.view.currentZone;
+    if (this.view.currentScene !== this.sceneSeen) {
+      this.sceneSeen = this.view.currentScene;
       this.dirty = true;
     }
     if (this.dirty && performance.now() - this.lastRender > 600) this.renderList();
   }
 
-  // groups: unzoned world entities first (environment, state, spawn…), then
-  // zones in manifest order with the current one marked, presences last
+  // groups: unclaimed world entities first (environment, state, spawn…), then
+  // scenes in world-file order with the current one marked, presences last
   groupsOf() {
     const presences = [];
-    const unzoned = [];
-    const byZone = new Map();
+    const unclaimed = [];
+    const byScene = new Map();
     for (const [id, comps] of this.store.entities) {
       if (comps.presence) presences.push([id, comps]);
-      else if (comps.zone?.name) {
-        if (!byZone.has(comps.zone.name)) byZone.set(comps.zone.name, []);
-        byZone.get(comps.zone.name).push([id, comps]);
-      } else unzoned.push([id, comps]);
+      else if (comps.scene?.name) {
+        if (!byScene.has(comps.scene.name)) byScene.set(comps.scene.name, []);
+        byScene.get(comps.scene.name).push([id, comps]);
+      } else unclaimed.push([id, comps]);
     }
     const groups = [];
-    if (unzoned.length) groups.push({ name: 'world', rows: unzoned });
-    const manifest = this.zones?.manifest;
-    const ordered = manifest ? manifest.zones.map((z) => z.name) : [];
+    if (unclaimed.length) groups.push({ name: 'world', rows: unclaimed });
+    const index = this.scenes?.index;
+    const ordered = index ? index.scenes.map((s) => s.name) : [];
     for (const name of ordered) {
-      if (byZone.has(name)) {
-        groups.push({ name, rows: byZone.get(name), current: name === this.view.currentZone });
-        byZone.delete(name);
+      if (byScene.has(name)) {
+        groups.push({ name, rows: byScene.get(name), current: name === this.view.currentScene });
+        byScene.delete(name);
       }
     }
-    for (const [name, rows] of byZone) groups.push({ name, rows });
+    for (const [name, rows] of byScene) groups.push({ name, rows });
     if (presences.length) groups.push({ name: 'presences', rows: presences });
     for (const group of groups) group.rows.sort((a, b) => a[0].localeCompare(b[0]));
     return groups;
@@ -172,14 +172,14 @@ export class Outliner {
         else this.collapsed.add(group.name);
         this.renderList();
       };
-      // manifest zones are themselves editable: bounds, load volumes,
+      // scenes are themselves editable: bounds, load volumes,
       // neighbors — the streaming geography, inspected like an entity
-      if (this.onZone && this.zones?.rawZone?.(group.name)) {
-        const gear = span('o-zone-edit', '⛭');
-        gear.title = 'edit zone streaming (bounds, load volumes)';
+      if (this.onScene && this.scenes?.rawScene?.(group.name)) {
+        const gear = span('o-scene-edit', '⛭');
+        gear.title = 'edit scene streaming (bounds, load volumes)';
         gear.onclick = (e) => {
           e.stopPropagation();
-          this.onZone(group.name);
+          this.onScene(group.name);
         };
         head.append(gear);
       }

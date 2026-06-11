@@ -32,7 +32,7 @@ export class Shading {
   }
 
   // runs after environment.update (which writes the exposure every frame):
-  // override modes render through a neutral tone map, so a dark zone's
+  // override modes render through a neutral tone map, so a dark scene's
   // authored exposure can't re-darken the unlit view
   update() {
     if (this.mode === 'lit') return;

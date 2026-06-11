@@ -52,7 +52,7 @@ export const SCHEMA = {
       visible: { doc: 'false: collides but never renders' },
       solid: { doc: 'false: renders but never collides; true: collides even as a preset (a stone tube floor)' },
       castShadow: { doc: 'shadows cost; turn off for clutter' },
-      fog: { doc: 'false: zone fog never dims it (backdrop silhouettes)' },
+      fog: { doc: 'false: scene fog never dims it (backdrop silhouettes)' },
       flatShading: { doc: 'faceted look (rocks, low-poly)' },
       glowStrength: { doc: 'glow preset brightness', range: [0, 4] },
       beamStrength: { doc: 'beam preset brightness', range: [0, 2] },
@@ -73,7 +73,7 @@ export const SCHEMA = {
       distance: { doc: 'falloff range in meters (0 = infinite). Also the pool priority: nearer-than-reach lights win slots', range: [0, 120] },
       offset: { doc: 'entity-local [x, y, z] of the bulb', range: [-10, 10] },
       angle: { doc: 'spot cone half-angle (radians)', range: [0, 1.57] },
-      castShadow: { doc: 'expensive, bypasses the pool (recompiles all shaders when toggled) — a few per zone, build time only' },
+      castShadow: { doc: 'expensive, bypasses the pool (recompiles all shaders when toggled) — a few per scene, build time only' },
     },
   },
   sound: {
@@ -81,7 +81,7 @@ export const SCHEMA = {
     default: { kind: 'hum', freq: 110, level: 0.2 },
     fields: {
       kind: { doc: 'what makes the sound', enum: ['hum', 'chime', 'patch', 'sample'] },
-      ambient: { doc: 'true: everywhere (zone-faded); false: positional' },
+      ambient: { doc: 'true: everywhere (scene-faded); false: positional' },
       level: { doc: 'volume', range: [0, 1] },
       refDistance: { doc: 'meters at full volume before falloff', range: [1, 60] },
       freq: { doc: 'hum pitch (Hz)', range: [20, 1200] },
@@ -134,7 +134,7 @@ export const SCHEMA = {
     },
   },
   terrain: {
-    doc: 'procedural ground; one per zone, registered for heightAt',
+    doc: 'procedural ground; one per scene, registered for heightAt',
     default: { seed: 7, size: 220, segments: 96, amplitude: 6, frequency: 0.02, color: '#2c4a33' },
     fields: {
       seed: { doc: 'same seed = same hills everywhere', range: [1, 99] },
@@ -194,7 +194,7 @@ export const SCHEMA = {
     },
   },
   persist: {
-    doc: 'survives the reset op — keeps its truth while the zone re-seeds',
+    doc: 'survives the reset op — keeps its truth while the scene re-seeds',
     default: {},
     fields: {},
   },
@@ -278,9 +278,9 @@ export const SCHEMA = {
       rainBase: { doc: 'rain floor 0–1 — the cycle swells above this, never below (a storm that never quite stops)', range: [0, 1] },
     },
   },
-  zone: {
-    doc: 'stamped by the server in zoned worlds — which level owns this entity',
-    fields: { name: { doc: 'zone name from the manifest' } },
+  scene: {
+    doc: 'stamped by the server — which scene file owns this entity',
+    fields: { name: { doc: 'scene name (world/scenes/<name>.json)' } },
   },
   prefab: {
     doc: 'this entity is an INSTANCE of world/prefabs/<name>.json — the scene file stores only its deltas, and editing the prefab updates every instance',

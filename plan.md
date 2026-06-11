@@ -454,6 +454,47 @@ runtime world.json that reseeds erased. M19 makes the computed data the file.
       saves/ gitignored. 177 entities from 5 scenes, screenshot-verified;
       frozen Tomb demo (43) and engine GAIA demo (42) still boot legacy.
 
+## M20 — One name, one model: zones become scenes, world.json the superscene (DONE)
+
+The user, on hearing "zone vs scene": "it's basically the same? … don't use
+2 different names for the same concept. just call it scene." And on legacy:
+port everything, delete the branch. A fork (same conversation) endorsed the
+follow-up insight: composition data (where scenes load) belongs to the thing
+that owns the scenes — a master "world" file, Unity's bootstrap-scene
+pattern — NOT inside each scene file.
+
+- [x] Full rename, no aliases: `zone` op → `scene` op, `zone` component →
+      `scene`, manifest → world.json, shared/zones.js → shared/scenes.js
+      (normalizeScenes/sceneAt/activeScenes), client kernel/zones.js →
+      kernel/scenes.js (gaia.zones → gaia.scenes), gizmo chip `zones` →
+      `scenes`, panel showScene, outliner onScene, reset op field `zone` →
+      `scene`. placeEntity (zone-local authoring) deleted — scene files are
+      world-space, full stop.
+- [x] world/world.json = the SUPERSCENE: `{ voidY?, scenes: { name:
+      {bounds, neighbors, load, always, voidY} } }`. Scene files stay PURE
+      entities (the flat M19 shape). Load volumes describe where the PLAYER
+      stands, not what the scene contains — they're world choreography;
+      entity churn (huge diffs, generator-overwritten) and composition
+      edits (rare, tiny) no longer share a file. The `scene` op edits a
+      world.json entry; ⛭ inspector shows it; reset re-reads both files.
+- [x] Blank page: no world.json + no scenes/ = one implicit always-loaded
+      scene `main`, created on first write. A scene file world.json doesn't
+      list still seeds (always, with a warning) — content never silently
+      vanishes. sceneAt: a single-scene world claims everywhere.
+- [x] LEGACY DELETED: no seed.json, no runtime world.json, no dual branch.
+      All three worlds ported and screenshot-verified: engine hub (38
+      entities, scenes/main.json, single implicit scene), Tomb-root demo
+      (32 entities + 12 stale presences dropped), the game (manifest →
+      world.json superscene, world/zones/*/scene.json → world/scenes/*.json,
+      generators game/zones/ → game/scenes/, stale saves dropped).
+      CAUTION inherited from the fork: world.json used to MEAN the runtime
+      snapshot — docs and memory rewritten in the same commit so the old
+      meaning doesn't haunt future sessions ("kill server before rm
+      world.json" is dead advice; reseed = generator + reset op).
+- [x] .gitignore flip: world.json went from ignored (runtime) to COMMITTED
+      (source) — the old ignore line would have silently uncommitted the
+      superscene.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

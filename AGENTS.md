@@ -31,8 +31,8 @@ Screenshot discipline:
   the machine, and your verification session must not make noise.
 - You cannot press keys in the browser. To screenshot the EDITOR (outliner,
   gizmos, selection) open a deep-link instead:
-  `?create=1&select=<id>&gizmos=colliders,triggers,water,lights,sounds,paths,areas,zones&pos=x,y,z&yaw=r&pitch=r`
-- A world with `game.json` (next to its manifest) gets a TITLE SCREEN: the
+  `?create=1&select=<id>&gizmos=colliders,triggers,water,lights,sounds,paths,areas,scenes&pos=x,y,z&yaw=r&pitch=r`
+- A world with `game.json` (in its world dir) gets a TITLE SCREEN: the
   default overlay becomes `{ title, subtitle, levels: [...] }` with NEW GAME /
   LEVEL SELECT. A level entry is pure data — `{ id, name, spawn: {position,
   yaw}, reset, ops }`; its ops run with `"$id"` resolved to the choosing
@@ -46,40 +46,43 @@ Screenshot discipline:
   the boot menu then holds that shot over the LIVE world (player frozen, NO
   presence spawned until a level is picked; `gaia.player.frozen` is the
   flag, and setting `gaia.player.position` while frozen makes a free
-  streaming/screenshot probe — zones stream around the menu camera).
-- Zone streaming is data, editable live: manifest zones may carry
-  `load: [{ center: [x,z], radius, y: [min,max] }]` volumes (Dark Souls
-  style) — such a zone streams in ONLY while the observer is inside a
-  volume (or the zone is current); it no longer rides the neighbor rule.
-  The `zone` op edits the manifest at runtime and persists it:
-  `{ "op": "zone", "name": "<zone>", "value": { "load": [...] } }` (null
-  deletes a field). In the editor, the `zones` gizmo chip draws bounds +
-  dashed load cages, and the ⛭ on a zone's outliner group opens its
-  manifest entry as editable JSON in the inspector.
-- THE SCENE MODEL (single state, M19): a world whose zones own
-  `world/zones/<name>/scene.json` runs scene-first. The scene file is entity
-  docs keyed by id, world-space — THE source of truth, read at boot and on
-  `reset`, and every dev edit writes back into it (gizmo drags, panel
+  streaming/screenshot probe — scenes stream around the menu camera).
+- THE SCENE MODEL (single state — there is no other model): a world is
+  `world/world.json` (the SUPERSCENE: which scenes exist and how they
+  compose — bounds discs, neighbors, `load` volumes, world defaults like
+  voidY) plus `world/scenes/<name>.json` (pure entity docs keyed by id,
+  world-space) — THE source of truth, read at boot and on `reset`, and
+  every dev edit writes back into the scene file (gizmo drags, panel
   fields, palette stamps, deletes, debug-menu save). Ops count as dev edits
-  when their batch carries `dev: true` — the client's authoring surfaces use
-  `gaia.net.sendDev`, and over HTTP it's `{"dev": true, "ops": [...]}`.
+  when their batch carries `dev: true` — the client's authoring surfaces
+  use `gaia.net.sendDev`, and over HTTP it's `{"dev": true, "ops": [...]}`.
   Gameplay traffic (presence moves, `use`, trigger output, weather) stays
-  runtime-only. The player layer — presences, `persist` entities, unzoned
-  state — lives in `world/saves/player_<GAIA_SAVE>_state.json` (gitignore
-  it): scenes always win on boot, the save only overlays the player's own.
-  Scene entries may be prefab INSTANCES: `{"prefab": "torch", ...deltas}`
+  runtime-only. The player layer — presences, `persist` entities, entities
+  no scene claims — lives in `world/saves/player_<GAIA_SAVE>_state.json`
+  (gitignored): scenes always win on boot, the save only overlays the
+  player's own. A world with NO world.json and one scene file (or none) is
+  the blank page: a single implicit always-loaded scene named `main`.
+- Streaming is data, editable live: a scene's world.json entry may carry
+  `load: [{ center: [x,z], radius, y: [min,max] }]` volumes (Dark Souls
+  style) — such a scene streams in ONLY while the observer is inside a
+  volume (or the scene is current); it no longer rides the neighbor rule.
+  The `scene` op edits world.json at runtime and persists it:
+  `{ "op": "scene", "name": "<scene>", "value": { "load": [...] } }` (null
+  deletes a key). In the editor, the `scenes` gizmo chip draws bounds +
+  dashed load cages, and the ⛭ on a scene's outliner group opens its
+  world.json entry as editable JSON in the inspector.
+- Scene entries may be prefab INSTANCES: `{"prefab": "torch", ...deltas}`
   deep-merges `world/prefabs/torch.json` under the deltas; write-back diffs
   against the prefab, so instances stay tiny. `world/materials.json` holds
   named looks — a part says `"material": "obsidian"` and may override any
   field locally; the `material` op (`{op, name, value}`, null deletes)
   edits the library live and clients rebuild what references it. EDITING
-  scene.json on disk (by hand or a generator re-run) while the server runs:
-  send a `reset` op for that zone — reset re-reads the file from disk and
-  is the official pickup gesture. Worlds with no scene.json (the demos)
-  keep the legacy seed.json + world.json model exactly as before.
+  scene files or world.json on disk (by hand or a generator re-run) while
+  the server runs: send a `reset` op (`{"op":"reset","scene":"<name>"}`) —
+  reset re-reads the files from disk and is the official pickup gesture.
 - Creator mode has a viewbar (top center): `lit / unlit / wire` draw modes
   and a `■ stop` toggle. Unlit shows floored albedo with fog and exposure
-  neutral — edit a midnight zone in daylight; wire shows the geometry.
+  neutral — edit a midnight scene in daylight; wire shows the geometry.
   ■ stop freezes behaviors, particles, triggers and sound (the default
   edit-mode rest state) while movement, streaming and edits keep working.
   Leaving create mode always restores lit + running. Programmatic:
@@ -142,11 +145,11 @@ Screenshot discipline:
   lanterns is free — but adding a `spot`/`directional`/`castShadow` light,
   at runtime, recompiles every pipeline in the scene. Author those at build
   time only.
-- Zone fogs must stay in one family: exp↔exp crossfades mutate the existing
+- Scene fogs must stay in one family: exp↔exp crossfades mutate the existing
   fog object (free); switching linear↔exp replaces it and re-keys every
-  pipeline. Every zone env should use `density` (exp) fog.
+  pipeline. Every scene env should use `density` (exp) fog.
 - The whole world builds AND renders once at load (three warm frames,
-  unculled, behind the entry overlay); after that zones stream by pure
+  unculled, behind the entry overlay); after that scenes stream by pure
   visibility. If a fresh material variant appears ONLY in op payloads the
   warm-up can't see (beyond `interact.ops` / `triggers.*.ops` mesh values,
   which it probes), its first draw compiles mid-play — prefer pre-seeding a
@@ -159,17 +162,17 @@ Screenshot discipline:
   page over CDP and prints the hottest functions — use it before guessing,
   and verify hitches with a rAF frame-time probe
   (`window.__t=performance.now()` … measure deltas), not by feel.
-- Teleporting a player/agent ACROSS zones in one jump can trip the OLD
-  zone's `voidY` for one frame (the player respawns at the world spawn).
+- Teleporting a player/agent ACROSS scenes in one jump can trip the OLD
+  scene's `voidY` for one frame (the player respawns at the world spawn).
   Real movement never does this; for tests, teleport in two steps or check
-  `gaia.zones.current` after.
+  `gaia.scenes.current` after.
 - A `light` component ON a presence entity is a carried light. For its own
   client it rides the camera (offset in the camera's flat frame, z < 0 =
   ahead); interact/trigger ops grant it with `id: '$id'` (the presence that
   fired). The server reaps presences on disconnect — worlds that grant
   carried things re-grant them from world state (see the Tomb's
   flame-keeper trigger pattern).
-- Presence `zone` stamps update server-side as they move — senses scope by
+- Presence `scene` stamps update server-side as they move — senses scope by
   where the player actually IS, not where they connected.
 
 ## Other ground rules
@@ -180,9 +183,10 @@ Screenshot discipline:
   enums. Read it before inventing values.
 - Deep-link extras: `&log=1` opens the world log drawer (the op stream,
   visible in screenshots), `&mute=1` keeps your tab silent.
-- LEGACY worlds only: kill the dev server BEFORE deleting `world.json` — its
-  debounced save (weather merges dirty it every ~1s) resurrects old state.
-  Scene-model worlds have no world.json; regenerate scene.json + `reset`.
+- NAMING WATCH: `world.json` is the SUPERSCENE (composition/meta) — it has
+  NOT been the runtime snapshot since the scene model landed. Runtime player
+  state lives in `saves/`; never delete world.json to "reseed". To apply
+  regenerated or hand-edited files to a running server: `reset` op.
 - A `use` op expands against the world as it was BEFORE its batch — send it
   in its own request, after the ops that position the user, or the range
   check reads stale state and silently refuses.

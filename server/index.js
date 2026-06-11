@@ -7,7 +7,7 @@ import { World } from './world.js';
 import { Sense } from './sense.js';
 import { Intents } from './intents.js';
 import { Triggers } from './triggers.js';
-import { normalizeManifest, placeEntity, zoneAt } from '../shared/zones.js';
+import { normalizeScenes, sceneAt } from '../shared/scenes.js';
 import { SCHEMA } from '../shared/schema.js';
 
 // GAIA_PORT moves the whole stack (vite injects the same value into the
@@ -18,27 +18,12 @@ const PORT = Number(process.env.GAIA_PORT ?? 8420);
 const worldDir = process.env.GAIA_WORLD
   ? path.resolve(process.env.GAIA_WORLD)
   : fileURLToPath(new URL('../world', import.meta.url));
-const worldFile = path.join(worldDir, 'world.json');
-const seedFile = path.join(worldDir, 'seed.json');
 const assetsDir = path.join(worldDir, 'assets');
+const scenesDir = path.join(worldDir, 'scenes');
 // debug snapshots land NEXT TO the world dir (game/debug, not game/world/debug)
 // so they sit at the project's top level — gitignored, never committed
 const debugDir = path.join(worldDir, '..', 'debug');
 console.log(`[gaia] world dir: ${worldDir}`);
-
-// zoned world: manifest.json assembles independently authored zone seeds
-// into one world-space; without it the world is a single implicit zone.
-// The raw form is kept: the `zone` op edits it live and persists it back.
-const manifestFile = path.join(worldDir, 'manifest.json');
-let manifestRaw = null;
-let manifest = null;
-try {
-  manifestRaw = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
-  manifest = normalizeManifest(manifestRaw);
-} catch {
-  manifestRaw = null;
-  manifest = null;
-}
 
 // game.json: a world can declare itself a titled game — title screen text
 // plus level-select entries (spawn pose, setup ops with `$id` standing for
@@ -87,25 +72,57 @@ try {
   materials = {};
 }
 
-// ---- scene files: the world's single source of truth (the scene IS a file) ----
-// A zone may own world/zones/<name>/scene.json — entity documents keyed by id,
-// world-space, kept in memory here and written back on every dev edit (Unity
-// semantics: change a thing in the editor, the scene file changes). Entries
-// with a `prefab` key are instances: the prefab's components deep-merged
-// under the entry's own (the entry stores only its deltas).
-// Worlds with no scene files keep the legacy model: seed.json ops generated
-// once + world.json as the whole truth.
-const scenes = new Map(); // zone name -> { file, docs, timer }
-for (const zone of manifest?.zones ?? []) {
-  const file = path.join(worldDir, 'zones', zone.name, 'scene.json');
-  if (!fs.existsSync(file)) continue;
-  try {
-    scenes.set(zone.name, { file, docs: JSON.parse(fs.readFileSync(file, 'utf8')), timer: null });
-  } catch (err) {
-    console.warn(`[gaia] unreadable scene for zone ${zone.name}: ${err.message}`);
+// ---- the world file: the superscene ----
+// world/world.json — the composition: which scenes exist, where each sits
+// and streams (bounds, neighbors, load volumes), world defaults (voidY).
+// Unity's master-scene pattern: scenes are subscenes loaded by position,
+// the world file owns them. The `scene` op edits an entry here live.
+const worldFile = path.join(worldDir, 'world.json');
+let worldMeta = null;
+try {
+  worldMeta = JSON.parse(fs.readFileSync(worldFile, 'utf8'));
+} catch {
+  worldMeta = null;
+}
+worldMeta = worldMeta ?? {};
+worldMeta.scenes = worldMeta.scenes ?? {};
+
+// ---- scene files: the world's single source of truth for content ----
+// world/scenes/<name>.json — pure entity documents `{ id: {components…} }`,
+// world-space, written back on every dev edit (Unity semantics: change a
+// thing in the editor, the scene file changes). Entries with a `prefab` key
+// are instances: the prefab's components deep-merged under the entry's own
+// (the entry stores only its deltas). A world with no scenes/ dir gets one
+// implicit scene, `main`, created on the first write — the blank page.
+const scenes = new Map(); // scene name -> { file, entities, timer }
+if (fs.existsSync(scenesDir)) {
+  for (const f of fs.readdirSync(scenesDir).filter((n) => n.endsWith('.json')).sort()) {
+    const name = f.slice(0, -5);
+    try {
+      const entities = JSON.parse(fs.readFileSync(path.join(scenesDir, f), 'utf8'));
+      scenes.set(name, { file: path.join(scenesDir, f), entities, timer: null });
+    } catch (err) {
+      console.warn(`[gaia] unreadable scene ${name}: ${err.message}`);
+    }
   }
 }
-const sceneMode = scenes.size > 0;
+if (!scenes.size) {
+  scenes.set('main', { file: path.join(scenesDir, 'main.json'), entities: {}, timer: null });
+}
+// every scene file gets a world entry; a file the world doesn't list still
+// seeds (always-loaded) so content never silently vanishes
+for (const name of scenes.keys()) {
+  if (!worldMeta.scenes[name]) {
+    worldMeta.scenes[name] = scenes.size > 1 ? { always: true } : {};
+    if (scenes.size > 1) console.warn(`[gaia] scene ${name} missing from world.json — loading it always`);
+  }
+}
+
+let index = normalizeScenes(worldMeta);
+
+function saveWorldMeta() {
+  fs.writeFileSync(worldFile, JSON.stringify(worldMeta, null, 2) + '\n');
+}
 
 function deepMerge(base, over) {
   if (!base || !over || Array.isArray(base) || Array.isArray(over) || typeof base !== 'object' || typeof over !== 'object') {
@@ -118,7 +135,7 @@ function deepMerge(base, over) {
   return out;
 }
 
-function expandDoc(doc, zoneName) {
+function expandDoc(doc, sceneName) {
   let comps = doc;
   const prefabName = typeof doc.prefab === 'string' ? doc.prefab : doc.prefab?.name;
   if (prefabName) {
@@ -131,14 +148,14 @@ function expandDoc(doc, zoneName) {
   } else {
     comps = structuredClone(comps);
   }
-  comps.zone = comps.zone ?? { name: zoneName };
+  comps.scene = comps.scene ?? { name: sceneName };
   return comps;
 }
 
-function loadZoneSceneOps(zone) {
-  const scene = scenes.get(zone.name);
+function sceneSeedOps(name) {
+  const scene = scenes.get(name);
   if (!scene) return [];
-  return Object.entries(scene.docs).map(([id, doc]) => ({ op: 'spawn', id, components: expandDoc(doc, zone.name) }));
+  return Object.entries(scene.entities).map(([id, doc]) => ({ op: 'spawn', id, components: expandDoc(doc, name) }));
 }
 
 function scheduleSceneSave(name) {
@@ -146,99 +163,88 @@ function scheduleSceneSave(name) {
   if (!scene) return;
   clearTimeout(scene.timer);
   scene.timer = setTimeout(() => {
-    fs.writeFileSync(scene.file, JSON.stringify(scene.docs, null, 2) + '\n');
+    fs.mkdirSync(scenesDir, { recursive: true });
+    fs.writeFileSync(scene.file, JSON.stringify(scene.entities, null, 2) + '\n');
   }, 400);
 }
 
 // the scene file may change OUTSIDE the server (a generator re-run, a hand
 // edit) — `reset` re-reads it from disk, so the op is the official "pick up
-// my file changes" gesture. Pending write-backs for the zone are dropped:
+// my file changes" gesture. Pending write-backs for the scene are dropped:
 // the disk is newer truth than the memory that scheduled them.
 function reloadScene(name) {
   const scene = scenes.get(name);
-  if (!scene) return;
+  if (!scene || !fs.existsSync(scene.file)) return;
   clearTimeout(scene.timer);
   scene.timer = null;
   try {
-    scene.docs = JSON.parse(fs.readFileSync(scene.file, 'utf8'));
+    scene.entities = JSON.parse(fs.readFileSync(scene.file, 'utf8'));
   } catch (err) {
     console.warn(`[gaia] scene reload failed for ${name}: ${err.message}`);
   }
 }
 
-// zone seeds (legacy model) are read at boot and again by the `reset` op —
-// placed into world-space and stamped with their zone every time
-function loadZoneSeedOps(zone) {
-  if (sceneMode) return loadZoneSceneOps(zone);
-  const zoneSeed = path.join(worldDir, 'zones', zone.name, 'seed.json');
-  if (!fs.existsSync(zoneSeed)) return [];
-  return JSON.parse(fs.readFileSync(zoneSeed, 'utf8')).map((op) =>
-    op.op === 'spawn'
-      ? { ...op, components: { ...placeEntity(op.components ?? {}, zone), zone: { name: zone.name } } }
-      : op,
-  );
-}
-
-function loadLegacySeedOps() {
-  return fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) : [];
+// the world file may change outside the server too — reset re-reads it
+function reloadWorldMeta() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(worldFile, 'utf8'));
+    worldMeta = raw ?? {};
+    worldMeta.scenes = worldMeta.scenes ?? {};
+    for (const name of scenes.keys()) worldMeta.scenes[name] = worldMeta.scenes[name] ?? {};
+    index = normalizeScenes(worldMeta);
+    sense.index = index;
+  } catch {
+    // no world file on disk yet — keep the in-memory composition
+  }
 }
 
 // the player layer: what belongs to a SAVE, not a scene — presences, things
-// players made (`persist`), and unzoned world state (quest flags etc.)
-const playerLayer = (id, comps) => !!(comps.presence || comps.persist || !comps.zone);
+// players made (`persist`), and entities no scene claims (quest flags etc.)
+const playerLayer = (id, comps) => !!(comps.presence || comps.persist || !comps.scene);
 
-// scene-model worlds split state like a shipped game: the scenes are the
-// world, the save file is the player. world.json stays the whole truth for
-// legacy worlds only.
+// state splits like a shipped game: the scenes are the world, the save file
+// is the player
 const saveName = process.env.GAIA_SAVE ?? 'default';
-const saveFile = sceneMode ? path.join(worldDir, 'saves', `player_${saveName}_state.json`) : worldFile;
+const saveFile = path.join(worldDir, 'saves', `player_${saveName}_state.json`);
 
-const world = new World(saveFile, { saveFilter: sceneMode ? playerLayer : null });
+const world = new World(saveFile, { saveFilter: playerLayer });
 const hadSave = world.load();
-if (sceneMode) {
+{
   // scenes are ALWAYS the truth for the world itself — every boot reads them
   // fresh (a scene edited while the server was down just appears). The save
   // only overlays the player layer on top.
   let seeded = 0;
-  for (const zone of manifest.zones) {
-    for (const op of loadZoneSceneOps(zone)) {
+  for (const name of scenes.keys()) {
+    for (const op of sceneSeedOps(name)) {
       if (world.entities.has(op.id)) continue;
       world.applyOp(op);
       seeded += 1;
     }
   }
   console.log(
-    `[gaia] scene model: ${seeded} entities from ${scenes.size} scenes` +
+    `[gaia] ${seeded} entities from ${scenes.size} scene${scenes.size === 1 ? '' : 's'}` +
       (hadSave ? ` + save '${saveName}' (${world.entities.size - seeded} player-layer)` : ''),
   );
-} else if (!hadSave) {
-  if (manifest) {
-    for (const zone of manifest.zones) world.applyOps(loadZoneSeedOps(zone));
-    console.log(`[gaia] seeded ${world.entities.size} entities from ${manifest.zones.length} zones`);
-  } else {
-    world.applyOps(loadLegacySeedOps());
-    console.log(`[gaia] seeded world with ${world.entities.size} entities`);
-  }
 }
 
-// the Braid rule as a primitive: `reset` re-seeds a zone (or the world), but
-// `persist`-tagged entities, presences, and unzoned entities (world state)
-// keep their current truth
+// the Braid rule as a primitive: `reset` re-seeds a scene (or the world), but
+// `persist`-tagged entities, presences, and unclaimed entities (world state)
+// keep their current truth. Reset re-reads the scene files from disk first,
+// so it also picks up external edits (and re-shares refreshed meta).
 function expandReset(op) {
-  const zones = op.zone
-    ? manifest?.zones.filter((z) => z.name === op.zone) ?? []
-    : manifest?.zones ?? [null];
-  const ops = [{ op: 'event', name: 'reset', data: { zone: op.zone ?? null } }];
-  for (const zone of zones) {
-    if (zone && sceneMode) reloadScene(zone.name);
+  const names = op.scene ? [op.scene].filter((n) => scenes.has(n)) : [...scenes.keys()];
+  const ops = [{ op: 'event', name: 'reset', data: { scene: op.scene ?? null } }];
+  reloadWorldMeta();
+  for (const name of names) {
+    reloadScene(name);
+    ops.push({ op: 'scene', name, value: worldMeta.scenes[name] });
     for (const [id, comps] of world.entities) {
       if (comps.persist || comps.presence) continue;
-      if (zone && comps.zone?.name !== zone.name) continue;
+      if (comps.scene?.name !== name) continue;
       ops.push({ op: 'despawn', id });
     }
-    const seedOps = zone ? loadZoneSeedOps(zone) : loadLegacySeedOps();
-    for (const sop of seedOps) {
-      if (sop.op === 'spawn' && world.entities.get(sop.id)?.persist) continue;
+    for (const sop of sceneSeedOps(name)) {
+      if (world.entities.get(sop.id)?.persist) continue;
       ops.push(sop);
     }
   }
@@ -249,17 +255,13 @@ function expandReset(op) {
 const bootTime = Date.now();
 const worldTime = () => (Date.now() - bootTime) / 1000;
 
-const sense = new Sense(world, worldTime, manifest);
+const sense = new Sense(world, worldTime, index);
 
-// new/updated prefabs land one-per-file in prefabs/ (scene-model home);
-// worlds that only ever had the legacy prefabs.json list keep using it
+// new/updated prefabs land one-per-file in prefabs/; a legacy single
+// prefabs.json list still reads in (and stays untouched)
 function savePrefab(prefab) {
-  if (sceneMode || fs.existsSync(prefabsDir)) {
-    fs.mkdirSync(prefabsDir, { recursive: true });
-    fs.writeFileSync(path.join(prefabsDir, `${prefab.name}.json`), JSON.stringify(prefab, null, 2) + '\n');
-  } else {
-    fs.writeFileSync(prefabsFile, JSON.stringify(prefabs, null, 2));
-  }
+  fs.mkdirSync(prefabsDir, { recursive: true });
+  fs.writeFileSync(path.join(prefabsDir, `${prefab.name}.json`), JSON.stringify(prefab, null, 2) + '\n');
 }
 
 // ---- op journal: the world's nervous system ----
@@ -272,21 +274,22 @@ function record(applied, from) {
   if (journal.length > 2000) journal.splice(0, journal.length - 2000);
 }
 
-// the `zone` op: streaming geography (bounds, load volumes, neighbors…)
-// edited like everything else — merged into the raw manifest, persisted to
-// manifest.json, broadcast so every client re-derives its streaming live
-function applyZoneOp(op) {
-  const zone = manifestRaw?.zones?.find((z) => z.name === op.name);
-  if (!zone) return false;
+// the `scene` op: a scene's entry in the world file (bounds, load volumes,
+// neighbors…) edited like everything else — merged into world.json,
+// broadcast so every client re-derives its streaming live (value null
+// deletes a key)
+function applySceneOp(op) {
+  if (!scenes.has(op.name)) return false;
+  const meta = (worldMeta.scenes[op.name] = worldMeta.scenes[op.name] ?? {});
   for (const [key, value] of Object.entries(op.value ?? {})) {
     if (key === 'name') continue;
-    if (value === null) delete zone[key];
-    else zone[key] = value;
+    if (value === null) delete meta[key];
+    else meta[key] = value;
   }
-  manifest = normalizeManifest(manifestRaw);
-  sense.manifest = manifest;
-  fs.writeFileSync(manifestFile, JSON.stringify(manifestRaw, null, 2) + '\n');
-  console.log(`[gaia] zone ${op.name} updated (${Object.keys(op.value ?? {}).join(', ')})`);
+  index = normalizeScenes(worldMeta);
+  sense.index = index;
+  saveWorldMeta();
+  console.log(`[gaia] scene ${op.name} updated in world.json (${Object.keys(op.value ?? {}).join(', ')})`);
   return true;
 }
 
@@ -303,21 +306,21 @@ function applyMaterialOp(op) {
 }
 
 // dev edits write through to the scene files — the single source of truth.
-// The op itself carries no scene knowledge: the entity's zone stamp picks the
-// file. The player layer (presences, persist, unzoned) never lands here.
+// The op itself carries no file knowledge: the entity's scene stamp picks the
+// file. The player layer (presences, persist, unclaimed) never lands here.
 function writeBackScenes(applied) {
   for (const op of applied) {
     if (op.op === 'spawn' || op.op === 'set') {
       const comps = world.entities.get(op.id);
       if (!comps || playerLayer(op.id, comps)) continue;
-      const zoneName = comps.zone?.name;
-      if (!scenes.has(zoneName)) continue;
-      scenes.get(zoneName).docs[op.id] = sceneDoc(comps);
-      scheduleSceneSave(zoneName);
+      const sceneName = comps.scene?.name;
+      if (!scenes.has(sceneName)) continue;
+      scenes.get(sceneName).entities[op.id] = sceneDoc(comps);
+      scheduleSceneSave(sceneName);
     } else if (op.op === 'despawn') {
       for (const [name, scene] of scenes) {
-        if (!(op.id in scene.docs)) continue;
-        delete scene.docs[op.id];
+        if (!(op.id in scene.entities)) continue;
+        delete scene.entities[op.id];
         scheduleSceneSave(name);
       }
     }
@@ -326,10 +329,10 @@ function writeBackScenes(applied) {
 
 // a prefab instance is stored as its deltas: `prefab` plus whichever
 // components differ from the prefab's. Everything else is the full document.
-// The zone stamp is the file it sits in — never stored.
+// The scene stamp is the file it sits in — never stored.
 function sceneDoc(comps) {
   const doc = structuredClone(comps);
-  delete doc.zone;
+  delete doc.scene;
   const base = prefabs.find((p) => p.name === doc.prefab?.name)?.components;
   if (!base) return doc;
   const out = { prefab: doc.prefab.name };
@@ -345,16 +348,16 @@ function applyAndBroadcast(ops, from, { dev = false } = {}) {
   if (ops.some((op) => op.op === 'reset')) {
     ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
   }
-  // zone ops target the manifest, not an entity — peel them off, apply, and
-  // re-attach the applied ones so they broadcast and journal like the rest
-  let zoneOps = [];
-  if (ops.some((op) => op.op === 'zone')) {
-    zoneOps = ops.filter((op) => op.op === 'zone' && applyZoneOp(op));
-    ops = ops.filter((op) => op.op !== 'zone');
+  // scene ops target the world file, not an entity — peel them off, apply,
+  // and re-attach the applied ones so they broadcast and journal like the rest
+  let metaOps = [];
+  if (ops.some((op) => op.op === 'scene')) {
+    metaOps = ops.filter((op) => op.op === 'scene' && applySceneOp(op));
+    ops = ops.filter((op) => op.op !== 'scene');
   }
   // material ops target the library, same treatment
   if (ops.some((op) => op.op === 'material')) {
-    zoneOps = zoneOps.concat(ops.filter((op) => op.op === 'material' && applyMaterialOp(op)));
+    metaOps = metaOps.concat(ops.filter((op) => op.op === 'material' && applyMaterialOp(op)));
     ops = ops.filter((op) => op.op !== 'material');
   }
   // `use` expands server-side like `reset`: the interact component decides
@@ -362,16 +365,16 @@ function applyAndBroadcast(ops, from, { dev = false } = {}) {
   if (ops.some((op) => op.op === 'use')) {
     ops = ops.flatMap((op) => (op.op === 'use' ? triggers.use(op.id, op.by) : [op]));
   }
-  // runtime spawns inherit the zone their position lands in (presences,
+  // runtime spawns inherit the scene their position lands in (presences,
   // editor stamps, agent avatars) so streaming clients know what to build
-  if (manifest) {
+  if (index) {
     for (const op of ops) {
-      if (op.op !== 'spawn' || !op.components || op.components.zone) continue;
+      if (op.op !== 'spawn' || !op.components || op.components.scene) continue;
       const p = op.components.transform?.position;
-      const zone = p ? zoneAt(manifest, p[0], p[2]) : null;
-      if (zone) op.components.zone = { name: zone };
+      const scene = p ? sceneAt(index, p[0], p[2]) : null;
+      if (scene) op.components.scene = { name: scene };
     }
-    // presences move: re-stamp their zone as they cross bounds, so senses
+    // presences move: re-stamp their scene as they cross bounds, so senses
     // scope correctly and a client never streams out its own body (or the
     // light it carries)
     const stamps = [];
@@ -381,16 +384,16 @@ function applyAndBroadcast(ops, from, { dev = false } = {}) {
       if (!p) continue;
       const comps = world.entities.get(op.id);
       if (!comps?.presence) continue;
-      const zone = zoneAt(manifest, p[0], p[2]);
-      if (zone && comps.zone?.name !== zone) stamps.push({ op: 'merge', id: op.id, component: 'zone', value: { name: zone } });
+      const scene = sceneAt(index, p[0], p[2]);
+      if (scene && comps.scene?.name !== scene) stamps.push({ op: 'merge', id: op.id, component: 'scene', value: { name: scene } });
     }
     ops = ops.concat(stamps);
   }
-  const applied = world.applyOps(ops).concat(zoneOps);
+  const applied = world.applyOps(ops).concat(metaOps);
   if (applied.length) {
     record(applied, from);
     broadcast({ type: 'ops', ops: applied, from });
-    if (dev && sceneMode) writeBackScenes(applied);
+    if (dev) writeBackScenes(applied);
   }
   return applied;
 }
@@ -481,7 +484,7 @@ const server = http.createServer(async (req, res) => {
   const q = Object.fromEntries(url.searchParams);
   try {
     if (req.method === 'GET' && url.pathname === '/world') {
-      return json(res, { ...world.snapshot(), manifest: manifestRaw, materials });
+      return json(res, { ...world.snapshot(), world: worldMeta, materials });
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       const since = Number(q.since ?? 0);
@@ -638,9 +641,9 @@ function nums(q, keys) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (socket) => {
-  // clients get the RAW manifest — they normalize themselves, and the editor
-  // edits the authored form (the `zone` op round-trips through it)
-  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest: manifestRaw, game, materials, ...world.snapshot() }));
+  // clients get the RAW world file — they normalize themselves, and the
+  // editor edits the authored form (the `scene` op round-trips through it)
+  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), world: worldMeta, game, materials, ...world.snapshot() }));
   socket.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
@@ -677,7 +680,7 @@ function describe(op) {
   if (op.op === 'set') return `set ${op.id}.${op.component}`;
   if (op.op === 'despawn') return `despawn ${op.id}`;
   if (op.op === 'event') return `event ${op.name}`;
-  if (op.op === 'zone') return `zone ${op.name} [${Object.keys(op.value ?? {}).join(', ')}]`;
+  if (op.op === 'scene') return `scene ${op.name} [${Object.keys(op.value ?? {}).join(', ')}]`;
   if (op.op === 'material') return `material ${op.name}`;
   return op.op;
 }

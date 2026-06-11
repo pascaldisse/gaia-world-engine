@@ -101,7 +101,7 @@ export function makePresetMaterial(part) {
       }
       case 'sky': {
         // the bright outside as geometry: scene.background is ONE color per
-        // zone, so a sunny world seen from inside a dark zone must physically
+        // scene, so a sunny world seen from inside a dark scene must physically
         // exist. A vertical gradient wall — warm glow at the horizon, cooler
         // tone up high, faint drifting banding so it never reads as a card.
         const material = new THREE.MeshBasicNodeMaterial();
@@ -156,7 +156,7 @@ export function makePresetMaterial(part) {
         // displaced swell (give the plane `segments`), normals rebuilt FLAT
         // per facet from screen-space derivatives — conchoidal glass, not
         // smooth water. Dark but never black: fresnel sheen, crest tint, and
-        // hand-painted aerial haze (fog:false, so zone fog can't wash it out).
+        // hand-painted aerial haze (fog:false, so scene fog can't wash it out).
         const material = new THREE.MeshStandardNodeMaterial({
           roughness: part.roughness ?? 0.22,
           metalness: part.metalness ?? 0.75,
@@ -176,7 +176,7 @@ export function makePresetMaterial(part) {
         const sheen = color(part.glint ?? '#46557a').mul(fres.mul(0.55))
           .add(color(part.crest ?? '#222a3d').mul(crest.mul(0.6)));
         // aerial haze is EMISSIVE, not albedo — painted light survives any
-        // zone's darkness (albedo would multiply to black under a dark env)
+        // scene's darkness (albedo would multiply to black under a dark env)
         const hazeK = smoothstep(550, 1900, length(positionWorld.sub(cameraPosition)));
         material.colorNode = color(part.color ?? '#0b0d14');
         material.emissiveNode = sheen.mul(hazeK.oneMinus()).add(color(part.haze ?? '#8d9ba1').mul(hazeK));

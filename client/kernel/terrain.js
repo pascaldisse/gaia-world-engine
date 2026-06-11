@@ -37,7 +37,7 @@ export function heightAt(x, z) {
 }
 
 // heightfields are deterministic from their params, and big (160²+ verts) —
-// cache them so a zone streaming back in costs nothing to re-bake
+// cache them so a scene streaming back in costs nothing to re-bake
 const geometryCache = new Map();
 
 export function buildTerrainMesh(params) {

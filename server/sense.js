@@ -1,32 +1,32 @@
 import { animatedPosition } from '../shared/motion.js';
 import { routeHeight, terrainEntries } from '../shared/terrainmap.js';
-import { zoneAt, activeZones } from '../shared/zones.js';
+import { sceneAt, activeScenes } from '../shared/scenes.js';
 
 // Perception without pixels: the same world documents the renderer draws are
 // summarized into compact text frames, queries, maps, and sanity checks.
 export class Sense {
-  constructor(world, now = () => 0, manifest = null) {
+  constructor(world, now = () => 0, index = null) {
     this.world = world;
     this.now = now;
-    this.manifest = manifest;
+    this.index = index;
   }
 
   groundAt(x, z) {
     return routeHeight(terrainEntries(this.world.entities), x, z);
   }
 
-  // agents stream the same way players do: a zoned world scopes perception
-  // to the active zone set around the observer. With a y, load volumes gate
-  // exactly as they do for a player; without one (top-down senses), zones
-  // with load volumes fall back to the neighbor rule.
-  zoneSetAt(x, z, y) {
-    if (!this.manifest) return null;
-    const current = zoneAt(this.manifest, x, z);
-    return activeZones(this.manifest, current, y === undefined ? null : [x, y, z]);
+  // agents stream the same way players do: a multi-scene world scopes
+  // perception to the active scene set around the observer. With a y, load
+  // volumes gate exactly as they do for a player; without one (top-down
+  // senses), scenes with load volumes fall back to the neighbor rule.
+  sceneSetAt(x, z, y) {
+    if (!this.index) return null;
+    const current = sceneAt(this.index, x, z);
+    return activeScenes(this.index, current, y === undefined ? null : [x, y, z]);
   }
 
-  inZoneSet(set, comps) {
-    return !set || !comps.zone || set.has(comps.zone.name);
+  inSceneSet(set, comps) {
+    return !set || !comps.scene || set.has(comps.scene.name);
   }
 
   positionOf(comps) {
@@ -50,11 +50,11 @@ export class Sense {
     const fz = -Math.cos(yaw);
     const seen = [];
     const heard = [];
-    const zset = this.zoneSetAt(x, z, y);
+    const zset = this.sceneSetAt(x, z, y);
 
     for (const [id, comps] of this.world.entities) {
       if (id === as || comps.terrain) continue;
-      if (!this.inZoneSet(zset, comps)) continue;
+      if (!this.inSceneSet(zset, comps)) continue;
       const [ex, ey, ez] = this.positionOf(comps);
       const dx = ex - x;
       const dy = ey - y;
@@ -185,10 +185,10 @@ export class Sense {
       );
     }
     const legend = {};
-    const zset = this.zoneSetAt(x, z);
+    const zset = this.sceneSetAt(x, z);
     for (const [id, comps] of this.world.entities) {
       if (comps.terrain) continue;
-      if (!this.inZoneSet(zset, comps)) continue;
+      if (!this.inSceneSet(zset, comps)) continue;
       const [ex, , ez] = this.positionOf(comps);
       const col = Math.round((ex - (x - radius)) / step);
       const row = Math.round((ez - (z - radius)) / step);

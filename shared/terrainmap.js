@@ -3,7 +3,7 @@ import { terrainHeight } from './noise.js';
 // One ground function over many terrains. A point inside a terrain's square
 // samples that terrain; a point outside every terrain extrapolates the
 // nearest one — so single-terrain worlds behave exactly as they always have,
-// and multi-zone worlds route to the right ground. Interiors that need NO
+// and multi-scene worlds route to the right ground. Interiors that need NO
 // ground (caverns over a void) are an M8 concern (blocking volumes), not a
 // height concern.
 // NOTE: client/kernel/terrain.js duplicates this routing against live

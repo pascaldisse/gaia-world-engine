@@ -1,0 +1,1604 @@
+{
+  "terra": {
+    "terrain": {
+      "seed": 11,
+      "size": 420,
+      "segments": 180,
+      "amplitude": 7,
+      "frequency": 0.013,
+      "color": "#41682f"
+    }
+  },
+  "crystal": {
+    "transform": {
+      "position": [
+        0.62,
+        1.64,
+        1.57
+      ]
+    },
+    "ground": {
+      "offset": 0
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "octahedron",
+          "radius": 1.4,
+          "position": [
+            0,
+            2.4,
+            0
+          ],
+          "color": "#aef4ff",
+          "emissive": "#7df9ff",
+          "emissiveIntensity": 2.2,
+          "roughness": 0.15,
+          "metalness": 0.1,
+          "flatShading": true
+        },
+        {
+          "shape": "cylinder",
+          "radiusTop": 1,
+          "radiusBottom": 1.5,
+          "height": 0.6,
+          "position": [
+            0,
+            0.3,
+            0
+          ],
+          "color": "#5b6770",
+          "roughness": 0.9
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#7df9ff",
+      "intensity": 60,
+      "distance": 60,
+      "offset": [
+        0,
+        2.4,
+        0
+      ]
+    },
+    "sound": {
+      "kind": "hum",
+      "freq": 96,
+      "level": 0.16,
+      "refDistance": 5
+    },
+    "behavior": [
+      {
+        "type": "spin",
+        "speed": 0.4
+      },
+      {
+        "type": "pulse",
+        "speed": 1.6,
+        "amount": 0.06
+      }
+    ]
+  },
+  "moon": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 6,
+          "color": "#dfe6ff",
+          "emissive": "#cfd8ff",
+          "emissiveIntensity": 1.2,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        0,
+        64,
+        0
+      ],
+      "radius": 120,
+      "speed": 0.04
+    }
+  },
+  "stone-1": {
+    "transform": {
+      "position": [
+        7.1,
+        0.11,
+        2.1
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.6,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-2": {
+    "transform": {
+      "position": [
+        5.91,
+        1.06,
+        8.37
+      ],
+      "rotation": [
+        0,
+        -0.78,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "ground": {
+      "offset": 2
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.4,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-3": {
+    "transform": {
+      "position": [
+        -4.74,
+        0.3,
+        8.54
+      ],
+      "rotation": [
+        0,
+        -1.57,
+        0
+      ],
+      "scale": [
+        1.31,
+        1.58,
+        1
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.7,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-4": {
+    "transform": {
+      "position": [
+        -4.42,
+        0.22,
+        10.49
+      ],
+      "rotation": [
+        0,
+        -2.36,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.5,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-5": {
+    "transform": {
+      "position": [
+        -10.24,
+        2.02,
+        0.9
+      ],
+      "rotation": [
+        0,
+        -3.142,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.6,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-6": {
+    "transform": {
+      "position": [
+        -6.36,
+        0,
+        -6.36
+      ],
+      "rotation": [
+        0,
+        -3.927,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.4,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-7": {
+    "transform": {
+      "position": [
+        0.62,
+        2.2,
+        -11.11
+      ],
+      "rotation": [
+        0,
+        -4.712,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.8,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "stone-8": {
+    "transform": {
+      "position": [
+        5.37,
+        -1.37,
+        -4.42
+      ],
+      "rotation": [
+        0,
+        -5.498,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "box",
+          "size": [
+            1.2,
+            2.5,
+            0.8
+          ],
+          "color": "#6e7681",
+          "roughness": 0.95,
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-1": {
+    "transform": {
+      "position": [
+        18,
+        0,
+        -12
+      ],
+      "scale": 1.1
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.1,
+          "position": [
+            0.9,
+            3.2,
+            0.7
+          ],
+          "color": "#356b2c",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.2,
+          "position": [
+            -0.8,
+            3.4,
+            -0.6
+          ],
+          "color": "#2a5424",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-2": {
+    "transform": {
+      "position": [
+        -22,
+        0,
+        8
+      ],
+      "scale": 1.3
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.1,
+          "position": [
+            0.9,
+            3.2,
+            0.7
+          ],
+          "color": "#356b2c",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-3": {
+    "transform": {
+      "position": [
+        10,
+        0,
+        25
+      ],
+      "scale": 0.9
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.2,
+          "position": [
+            -0.8,
+            3.4,
+            -0.6
+          ],
+          "color": "#2a5424",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-4": {
+    "transform": {
+      "position": [
+        -5.02,
+        -1.23,
+        -19.89
+      ],
+      "scale": 1.2
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.1,
+          "position": [
+            0.9,
+            3.2,
+            0.7
+          ],
+          "color": "#356b2c",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-5": {
+    "transform": {
+      "position": [
+        30,
+        0,
+        5
+      ],
+      "scale": 1
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-6": {
+    "transform": {
+      "position": [
+        -30,
+        0,
+        -8
+      ],
+      "scale": 1.15
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.1,
+          "position": [
+            0.9,
+            3.2,
+            0.7
+          ],
+          "color": "#356b2c",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-7": {
+    "transform": {
+      "position": [
+        25,
+        0,
+        -25
+      ],
+      "scale": 0.95
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-8": {
+    "transform": {
+      "position": [
+        -8,
+        0,
+        30
+      ],
+      "scale": 1.25
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.2,
+          "position": [
+            -0.8,
+            3.4,
+            -0.6
+          ],
+          "color": "#2a5424",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-9": {
+    "transform": {
+      "position": [
+        12,
+        0,
+        -30
+      ],
+      "scale": 1.05
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "tree-10": {
+    "transform": {
+      "position": [
+        -25,
+        0,
+        22
+      ],
+      "scale": 1
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.25,
+          "radiusBottom": 0.45,
+          "height": 3.2,
+          "position": [
+            0,
+            1.6,
+            0
+          ],
+          "color": "#5a4030",
+          "roughness": 0.9
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.8,
+          "position": [
+            0,
+            3.9,
+            0
+          ],
+          "color": "#2f5d28",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.1,
+          "position": [
+            0.9,
+            3.2,
+            0.7
+          ],
+          "color": "#356b2c",
+          "flatShading": true
+        }
+      ]
+    }
+  },
+  "firefly-1": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "color": "#fff2b0",
+          "emissive": "#ffe066",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        3,
+        0,
+        2
+      ],
+      "radius": 2.4,
+      "speed": 0.7,
+      "height": 1.6,
+      "ground": true,
+      "phase": 0
+    }
+  },
+  "firefly-2": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "color": "#fff2b0",
+          "emissive": "#ffe066",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        -4,
+        0,
+        3
+      ],
+      "radius": 3.1,
+      "speed": 0.9,
+      "height": 2.2,
+      "ground": true,
+      "phase": 1.3
+    }
+  },
+  "firefly-3": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "color": "#fff2b0",
+          "emissive": "#ffe066",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        2,
+        0,
+        -4
+      ],
+      "radius": 2.8,
+      "speed": 0.55,
+      "height": 1.9,
+      "ground": true,
+      "phase": 2.6
+    }
+  },
+  "firefly-4": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "color": "#fff2b0",
+          "emissive": "#ffe066",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        -3,
+        0,
+        -3
+      ],
+      "radius": 3.5,
+      "speed": 1.1,
+      "height": 2.6,
+      "ground": true,
+      "phase": 3.9
+    }
+  },
+  "firefly-5": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "color": "#fff2b0",
+          "emissive": "#ffe066",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        5,
+        0,
+        -1
+      ],
+      "radius": 2,
+      "speed": 0.8,
+      "height": 1.4,
+      "ground": true,
+      "phase": 5.1
+    }
+  },
+  "firefly-6": {
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "color": "#fff2b0",
+          "emissive": "#ffe066",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "behavior": {
+      "type": "orbit",
+      "center": [
+        0,
+        0,
+        5
+      ],
+      "radius": 2.6,
+      "speed": 0.65,
+      "height": 2,
+      "ground": true,
+      "phase": 0.7
+    }
+  },
+  "windchime": {
+    "transform": {
+      "position": [
+        17,
+        0,
+        -10
+      ]
+    },
+    "ground": {
+      "offset": 2.2
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "icosahedron",
+          "radius": 0.3,
+          "color": "#ffe9c4",
+          "emissive": "#ffd9a0",
+          "emissiveIntensity": 0.8,
+          "flatShading": true
+        }
+      ]
+    },
+    "sound": {
+      "kind": "chime",
+      "notes": [
+        659.25,
+        783.99,
+        987.77,
+        1318.5
+      ],
+      "interval": 3.2,
+      "level": 0.2,
+      "refDistance": 6
+    },
+    "behavior": {
+      "type": "bob",
+      "amplitude": 0.15,
+      "speed": 0.8
+    }
+  },
+  "spooky-tree-1": {
+    "transform": {
+      "position": [
+        -1.54,
+        0,
+        11.07
+      ],
+      "scale": 1.2
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.12,
+          "radiusBottom": 0.35,
+          "height": 4.2,
+          "position": [
+            0,
+            2.1,
+            0
+          ],
+          "color": "#241a14",
+          "roughness": 1
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.3,
+          "position": [
+            0.3,
+            4.4,
+            0
+          ],
+          "color": "#1a2418",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "position": [
+            0.1,
+            3.1,
+            0.4
+          ],
+          "color": "#caffd0",
+          "emissive": "#9dffae",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9dffae",
+      "intensity": 6,
+      "distance": 10,
+      "offset": [
+        0,
+        3,
+        0
+      ]
+    },
+    "behavior": {
+      "type": "bob",
+      "amplitude": 0.05,
+      "speed": 0.5
+    }
+  },
+  "spooky-tree-2": {
+    "transform": {
+      "position": [
+        4.25,
+        0.56,
+        14.6
+      ],
+      "scale": 1.2
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.12,
+          "radiusBottom": 0.35,
+          "height": 4.2,
+          "position": [
+            0,
+            2.1,
+            0
+          ],
+          "color": "#241a14",
+          "roughness": 1
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.3,
+          "position": [
+            0.3,
+            4.4,
+            0
+          ],
+          "color": "#1a2418",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "position": [
+            0.1,
+            3.1,
+            0.4
+          ],
+          "color": "#caffd0",
+          "emissive": "#9dffae",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9dffae",
+      "intensity": 6,
+      "distance": 10,
+      "offset": [
+        0,
+        3,
+        0
+      ]
+    },
+    "behavior": {
+      "type": "bob",
+      "amplitude": 0.05,
+      "speed": 0.5
+    }
+  },
+  "spooky-tree-3": {
+    "transform": {
+      "position": [
+        2.8,
+        0,
+        10.96
+      ],
+      "scale": 1.2
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.12,
+          "radiusBottom": 0.35,
+          "height": 4.2,
+          "position": [
+            0,
+            2.1,
+            0
+          ],
+          "color": "#241a14",
+          "roughness": 1
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.3,
+          "position": [
+            0.3,
+            4.4,
+            0
+          ],
+          "color": "#1a2418",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "position": [
+            0.1,
+            3.1,
+            0.4
+          ],
+          "color": "#caffd0",
+          "emissive": "#9dffae",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9dffae",
+      "intensity": 6,
+      "distance": 10,
+      "offset": [
+        0,
+        3,
+        0
+      ]
+    },
+    "behavior": {
+      "type": "bob",
+      "amplitude": 0.05,
+      "speed": 0.5
+    }
+  },
+  "spooky-tree-4": {
+    "transform": {
+      "position": [
+        -6.17,
+        0,
+        12.78
+      ],
+      "scale": 1.2
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.12,
+          "radiusBottom": 0.35,
+          "height": 4.2,
+          "position": [
+            0,
+            2.1,
+            0
+          ],
+          "color": "#241a14",
+          "roughness": 1
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.3,
+          "position": [
+            0.3,
+            4.4,
+            0
+          ],
+          "color": "#1a2418",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "position": [
+            0.1,
+            3.1,
+            0.4
+          ],
+          "color": "#caffd0",
+          "emissive": "#9dffae",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9dffae",
+      "intensity": 6,
+      "distance": 10,
+      "offset": [
+        0,
+        3,
+        0
+      ]
+    },
+    "behavior": {
+      "type": "bob",
+      "amplitude": 0.05,
+      "speed": 0.5
+    }
+  },
+  "spooky-tree-5": {
+    "transform": {
+      "position": [
+        -3.1,
+        0,
+        13.43
+      ],
+      "scale": 1.2
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.12,
+          "radiusBottom": 0.35,
+          "height": 4.2,
+          "position": [
+            0,
+            2.1,
+            0
+          ],
+          "color": "#241a14",
+          "roughness": 1
+        },
+        {
+          "shape": "sphere",
+          "radius": 1.3,
+          "position": [
+            0.3,
+            4.4,
+            0
+          ],
+          "color": "#1a2418",
+          "flatShading": true
+        },
+        {
+          "shape": "sphere",
+          "radius": 0.07,
+          "position": [
+            0.1,
+            3.1,
+            0.4
+          ],
+          "color": "#caffd0",
+          "emissive": "#9dffae",
+          "emissiveIntensity": 3,
+          "castShadow": false
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9dffae",
+      "intensity": 6,
+      "distance": 10,
+      "offset": [
+        0,
+        3,
+        0
+      ]
+    },
+    "behavior": {
+      "type": "bob",
+      "amplitude": 0.05,
+      "speed": 0.5
+    }
+  },
+  "crystal-1": {
+    "transform": {
+      "position": [
+        -5.89,
+        0.92,
+        27.92
+      ]
+    },
+    "ground": {},
+    "mesh": {
+      "parts": [
+        {
+          "shape": "octahedron",
+          "radius": 0.8,
+          "position": [
+            0,
+            1.3,
+            0
+          ],
+          "color": "#aef4ff",
+          "emissive": "#7df9ff",
+          "emissiveIntensity": 2,
+          "roughness": 0.15,
+          "flatShading": true
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#7df9ff",
+      "intensity": 18,
+      "distance": 24,
+      "offset": [
+        0,
+        1.3,
+        0
+      ]
+    },
+    "sound": {
+      "kind": "hum",
+      "freq": 128,
+      "level": 0.12
+    },
+    "behavior": [
+      {
+        "type": "spin",
+        "speed": 0.6
+      },
+      {
+        "type": "pulse",
+        "speed": 1.6,
+        "amount": 0.05
+      }
+    ]
+  },
+  "env": {
+    "environment": {
+      "background": "#101c30",
+      "fog": {
+        "color": "#101c30",
+        "near": 60,
+        "far": 280
+      },
+      "exposure": 1,
+      "hemisphere": {
+        "sky": "#8fb3ff",
+        "ground": "#2c241a",
+        "intensity": 0.6
+      },
+      "sun": {
+        "color": "#ffe2b0",
+        "intensity": 1.2,
+        "position": [
+          60,
+          90,
+          30
+        ]
+      },
+      "bloom": {
+        "strength": 0.35,
+        "radius": 0.4,
+        "threshold": 0.85
+      }
+    },
+    "weather": {
+      "lightning": true,
+      "minGap": 15,
+      "maxGap": 50
+    }
+  },
+  "forest": {
+    "scatter": {
+      "seed": 21,
+      "count": 250,
+      "area": {
+        "shape": "circle",
+        "center": [
+          0,
+          0
+        ],
+        "radius": 180
+      },
+      "density": {
+        "noise": 0.02,
+        "bias": 0.1
+      },
+      "scale": [
+        0.7,
+        1.6
+      ],
+      "tilt": 0.06,
+      "offsetY": -0.1,
+      "instance": {
+        "parts": [
+          {
+            "shape": "cylinder",
+            "radiusTop": 0.2,
+            "radiusBottom": 0.4,
+            "height": 3,
+            "position": [
+              0,
+              1.5,
+              0
+            ],
+            "color": "#54402e",
+            "roughness": 0.95
+          },
+          {
+            "shape": "sphere",
+            "radius": 1.6,
+            "position": [
+              0,
+              3.6,
+              0
+            ],
+            "color": "#2c5526",
+            "flatShading": true
+          },
+          {
+            "shape": "sphere",
+            "radius": 1,
+            "position": [
+              0.8,
+              3,
+              0.6
+            ],
+            "color": "#33642c",
+            "flatShading": true
+          }
+        ]
+      }
+    }
+  },
+  "firefly-swarm": {
+    "particles": {
+      "seed": 5,
+      "count": 120,
+      "size": 0.06,
+      "color": "#ffe066",
+      "area": {
+        "center": [
+          0,
+          0
+        ],
+        "radius": 35
+      },
+      "motion": {
+        "type": "drift",
+        "speed": 0.8,
+        "radius": 3,
+        "height": 1.8,
+        "bob": 0.7
+      }
+    }
+  },
+  "pond": {
+    "transform": {
+      "position": [
+        21.49,
+        0.28,
+        27.47
+      ]
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "plane",
+          "size": [
+            26,
+            20
+          ],
+          "rotation": [
+            -1.5708,
+            0,
+            0
+          ],
+          "preset": "water",
+          "color": "#0a1420",
+          "sky": "#27405e",
+          "castShadow": false
+        }
+      ]
+    }
+  }
+}

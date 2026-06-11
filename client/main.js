@@ -14,7 +14,7 @@ import { Gizmos } from './kernel/gizmos.js';
 import { EventConsole } from './kernel/console.js';
 import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
-import { Zones } from './kernel/zones.js';
+import { Scenes } from './kernel/scenes.js';
 import { Shading } from './kernel/shading.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { setMaterialLibrary } from './kernel/geometry.js';
@@ -33,7 +33,7 @@ const effects = new Effects({ scene, audio });
 const environment = new Environment({ renderer, scene, hemi, sun, post, audio });
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
-const zones = new Zones({ store, view, environment });
+const scenes = new Scenes({ store, view, environment });
 const shading = new Shading({ view, renderer });
 
 // ■ stop — the editor's rest state, like any game editor's edit mode: world
@@ -53,7 +53,7 @@ let materialLib = {};
 const net = connect({
   url: `ws://${location.hostname}:${__GAIA_PORT__}`,
   presence: presenceId,
-  onSnapshot: (entities, time, manifest, game, materials) => {
+  onSnapshot: (entities, time, world, game, materials) => {
     clock.offset = time - performance.now() / 1000;
     // named materials resolve at mesh build — the library must be known
     // before the snapshot turns into meshes
@@ -122,10 +122,10 @@ const net = connect({
         }
       }
     }
-    // zone set must be known before the snapshot builds, so only the
-    // player's surroundings (plus backdrops) turn into meshes
-    zones.setManifest(manifest);
-    zones.update(player.position);
+    // the active scene set must be known before the snapshot builds, so only
+    // the player's surroundings (plus backdrops) turn into meshes
+    scenes.setWorld(world);
+    scenes.update(player.position);
     store.applySnapshot(entities);
     countEl.textContent = store.entities.size;
     // while the title menu is up there is no body in the world — the
@@ -133,11 +133,11 @@ const net = connect({
     if (!overlay.dataset.menu) ensurePresence();
   },
   onOps: (ops, from) => {
-    // zone ops edit the manifest, not an entity — streaming re-derives live
+    // scene ops edit the world file, not an entity — streaming re-derives live
     for (const op of ops) {
-      if (op.op === 'zone') {
-        zones.applyZoneOp(op);
-        zones.update(player.position);
+      if (op.op === 'scene') {
+        scenes.applySceneOp(op);
+        scenes.update(player.position);
         gizmos.dirty = true;
       } else if (op.op === 'material') {
         // library edit: re-resolve and rebuild whatever references the name —
@@ -367,7 +367,7 @@ function debugKnob(name, onChange, format = (v) => `${v.toFixed(2)}×`) {
   });
 }
 debugKnob('exposure', (v) => (environment.debugMul = v));
-// skylight ADDS a global ambient — zone hemispheres are often near-black on
+// skylight ADDS a global ambient — scene hemispheres are often near-black on
 // purpose, so a multiplier would do nothing
 debugKnob('skylight', (v) => (environment.debugAmbient = v), (v) => `+${v.toFixed(2)}`);
 debugKnob('fog', (v) => (environment.debugFog = v));
@@ -440,7 +440,7 @@ function captureSnapshot() {
               position: [r2(player.position.x), r2(player.position.y), r2(player.position.z)],
               yaw: r2(player.yaw),
               pitch: r2(player.pitch),
-              zone: zones.current,
+              scene: scenes.current,
             },
           }),
         });
@@ -470,7 +470,7 @@ let debugPage = 'main';
 let debugSelected = 0;
 
 // save: bake the knobs into the world itself — no override layer. Look knobs
-// (exposure/skylight/fog) merge into the current zone's environment entity;
+// (exposure/skylight/fog) merge into the current scene's environment entity;
 // rain knobs bake into every streaked rain system's spec. The ops are
 // dev-tagged, so the server writes them through to the scene files: the debug
 // menu edits the same single state as the editor. After the bake the knobs
@@ -481,7 +481,7 @@ function saveDebug() {
   const knob = (name) => Number(document.getElementById(`debug-${name}`).value);
   let envId = null;
   for (const [id, comps] of store.entities) {
-    if (comps.environment && comps.zone?.name === zones.current) {
+    if (comps.environment && comps.scene?.name === scenes.current) {
       envId = id;
       break;
     }
@@ -620,7 +620,7 @@ const panel = new Panel({
   el: document.getElementById('panel'),
   store,
   view,
-  zones,
+  scenes,
   send: net.sendDev,
   history,
   onDuplicate: (id) => editor.duplicate(id),
@@ -636,23 +636,23 @@ const palette = new Palette({
   camera,
   renderer,
 });
-const gizmos = new Gizmos({ scene, store, view, zones });
+const gizmos = new Gizmos({ scene, store, view, scenes });
 const outliner = new Outliner({
   el: document.getElementById('outliner'),
   store,
   view,
-  zones,
+  scenes,
   gizmos,
   onPick: (id) => editor.select(id),
   onFocus: (id) => {
     editor.select(id);
     editor.frameSelected();
   },
-  // the streaming geography is editable like everything else: the zone's
-  // manifest entry opens in the inspector, commits as `zone` ops
-  onZone: (name) => {
+  // the streaming geography is editable like everything else: the scene's
+  // world.json entry opens in the inspector, commits as `scene` ops
+  onScene: (name) => {
     editor.select(null);
-    panel.showZone(name);
+    panel.showScene(name);
   },
 });
 const editor = new Editor({
@@ -677,7 +677,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = { store, view, zones, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, sim, setDrawMode, setStopped };
+window.gaia = { store, view, scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, sim, setDrawMode, setStopped };
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };
@@ -724,13 +724,13 @@ renderer.setAnimationLoop(() => {
   environment.update(dt);
   if (!sim.stopped) {
     for (const [id, state] of view.particleSystems) {
-      if (view.getGroup(id)?.userData.hidden) continue; // streamed-out zones sleep
+      if (view.getGroup(id)?.userData.hidden) continue; // streamed-out scenes sleep
       updateParticles(state, t);
     }
   }
   player.update(dt);
-  zones.update(player.position);
-  player.voidY = zones.currentVoidY;
+  scenes.update(player.position);
+  player.voidY = scenes.currentVoidY;
   view.update();
   shading.update();
   if (!sim.stopped) {

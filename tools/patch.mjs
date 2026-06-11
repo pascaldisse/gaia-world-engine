@@ -49,7 +49,7 @@ switch (cmd) {
     break;
   }
   case 'reset':
-    await post([{ op: 'reset', ...(rest[0] ? { zone: rest[0] } : {}) }]);
+    await post([{ op: 'reset', ...(rest[0] ? { scene: rest[0] } : {}) }]);
     break;
   case 'load': {
     const fs = await import('node:fs');
@@ -76,5 +76,5 @@ switch (cmd) {
     break;
   }
   default:
-    console.log('usage: patch.mjs spawn <components-json> [id] | set <id> <component> <json|null> | merge <id> <component> <json> | despawn <id> | clear | state <key> <value> | reset [zone] | load <ops-file> | snapshot | prefabs | prefab <name> <components-json>');
+    console.log('usage: patch.mjs spawn <components-json> [id] | set <id> <component> <json|null> | merge <id> <component> <json> | despawn <id> | clear | state <key> <value> | reset [scene] | load <ops-file> | snapshot | prefabs | prefab <name> <components-json>');
 }

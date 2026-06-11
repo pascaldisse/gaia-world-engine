@@ -1,0 +1,50 @@
+{
+  "name": "glow-orb",
+  "components": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 1.6
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "sphere",
+          "radius": 0.45,
+          "color": "#ffe8c0",
+          "emissive": "#ffc46b",
+          "emissiveIntensity": 2,
+          "castShadow": false
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#ffc46b",
+      "intensity": 28,
+      "distance": 26
+    },
+    "sound": {
+      "kind": "hum",
+      "freq": 160,
+      "level": 0.1
+    },
+    "behavior": [
+      {
+        "type": "bob",
+        "amplitude": 0.25,
+        "speed": 1.1
+      },
+      {
+        "type": "pulse",
+        "speed": 1.8,
+        "amount": 0.07
+      }
+    ]
+  }
+}

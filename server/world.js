@@ -3,7 +3,7 @@ import path from 'node:path';
 
 export class World {
   // saveFilter (scene-model worlds): which entities belong to the SAVE FILE —
-  // the player layer. Everything else lives in the zone scene files and is
+  // the player layer. Everything else lives in the scene files and is
   // re-seeded from them on every boot, so persisting it here would shadow
   // the source of truth.
   constructor(file, { saveFilter = null } = {}) {

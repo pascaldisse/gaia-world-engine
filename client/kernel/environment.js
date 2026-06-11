@@ -15,9 +15,9 @@ export class Environment {
     this.exposure = renderer.toneMappingExposure;
     this.fogDensity = scene.fog.isFogExp2 ? scene.fog.density : null;
     // pooled point lights × this — a flame authored for the dark (intensity
-    // 48) must wash out in a daylight zone, not paint it orange
+    // 48) must wash out in a daylight scene, not paint it orange
     this.lightScale = 1;
-    // skylight: a true global light (the zone hemisphere is often nearly
+    // skylight: a true global light (the scene hemisphere is often nearly
     // black on purpose — multiplying it does nothing, so this adds instead)
     this.ambient = new THREE.AmbientLight('#b8c6e6', 0);
     scene.add(this.ambient);
@@ -98,7 +98,7 @@ export class Environment {
     };
   }
 
-  // crossfade into another mood — zone seams use this so a boundary is a
+  // crossfade into another mood — scene seams use this so a boundary is a
   // slow change of air, never a cut. Snaps anything that can't interpolate.
   applyFaded(params, seconds = 2.5) {
     const from = {

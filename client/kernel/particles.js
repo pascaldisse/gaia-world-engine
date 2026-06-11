@@ -39,11 +39,30 @@ export function buildParticles(spec) {
 }
 
 const m = new THREE.Matrix4();
+const _pos = new THREE.Vector3();
+const _one = new THREE.Vector3(1, 1, 1);
+const _down = new THREE.Vector3(0, -1, 0);
+const _dir = new THREE.Vector3();
+const _quat = new THREE.Quaternion();
+
+// live look-dev multipliers for STREAKED rain only (the debug panel's rain
+// submenu writes these) — souls and fireflies ride the same motion type but
+// never the knobs. angle is the slant in radians, applied along world x.
+export const rainDebug = { speed: 1, angle: 0 };
 
 export function updateParticles(state, time) {
   const { mesh, anchors, phases, spec, count } = state;
   const motion = spec.motion ?? { type: 'drift' };
-  const speed = motion.speed ?? 1;
+  const dbg = spec.streak ? rainDebug : null;
+  const speed = (motion.speed ?? 1) * (dbg?.speed ?? 1);
+  // wind: horizontal drift per meter fallen — authored motion.tilt [tx, tz]
+  // plus the debug slant; the streak itself leans to match the velocity
+  const tx = (motion.tilt?.[0] ?? 0) + (dbg ? Math.tan(dbg.angle) : 0);
+  const tz = motion.tilt?.[1] ?? 0;
+  let quat = null;
+  if (spec.streak && (tx || tz)) {
+    quat = _quat.setFromUnitVectors(_down, _dir.set(tx, -1, tz).normalize());
+  }
   for (let i = 0; i < count; i++) {
     const ax = anchors[i * 2];
     const az = anchors[i * 2 + 1];
@@ -54,6 +73,8 @@ export function updateParticles(state, time) {
     if (motion.type === 'rain') {
       const h = motion.height ?? 30;
       const fall = (time * speed * 10 + ph * h * 7) % h;
+      x += tx * fall;
+      z += tz * fall;
       y = heightAt(x, z) + h - fall;
     } else {
       const r = motion.radius ?? 2.5;

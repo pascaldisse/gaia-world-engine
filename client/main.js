@@ -15,7 +15,7 @@ import { EventConsole } from './kernel/console.js';
 import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
 import { Zones } from './kernel/zones.js';
-import { updateParticles } from './kernel/particles.js';
+import { updateParticles, rainDebug } from './kernel/particles.js';
 import { connect, clientId } from './kernel/net.js';
 
 const statusEl = document.getElementById('status');
@@ -234,13 +234,24 @@ function buildTitleScreen(game) {
   }
 }
 
+// rain particle counts: the world's weather level × the local debug
+// intensity knob (knob applies only to streaked rain — souls ride the
+// same motion type but belong to the weather alone)
+let weatherRainLevel = 1;
+let rainIntensity = 1;
+function applyRainCounts() {
+  for (const state of view.particleSystems.values()) {
+    if (state.spec.motion?.type !== 'rain') continue;
+    const local = state.spec.streak ? rainIntensity : 1;
+    state.mesh.count = Math.max(0, Math.min(state.count, Math.round(state.count * weatherRainLevel * local)));
+  }
+}
+
 function handleEvents(ops) {
   for (const op of ops) {
     if (op.op === 'set' && op.component === 'weather') {
-      const rain = op.value?.rain ?? 0;
-      for (const state of view.particleSystems.values()) {
-        if (state.spec.motion?.type === 'rain') state.mesh.count = Math.round(state.count * rain);
-      }
+      weatherRainLevel = op.value?.rain ?? 0;
+      applyRainCounts();
     }
     if (op.op !== 'event') continue;
     if (op.name === 'prefabs-changed') palette.load();
@@ -324,6 +335,15 @@ debugKnob('flame', (v) => {
     net.send([{ op: 'merge', id: presenceId, component: 'light', value: { distance: v, intensity } }]);
   }, 150);
 }, (v) => `${v.toFixed(0)}m`);
+// rain submenu: LOCAL look-dev over the streaked rain systems — slant the
+// fall (the streaks lean to match), scale its speed, thin or thicken the
+// sheet. Tune here, then bake the keepers into the zone data.
+debugKnob('rain-angle', (v) => (rainDebug.angle = (v * Math.PI) / 180), (v) => `${v.toFixed(0)}°`);
+debugKnob('rain-speed', (v) => (rainDebug.speed = v));
+debugKnob('rain-intensity', (v) => {
+  rainIntensity = v;
+  applyRainCounts();
+});
 
 // '+' drops a debug snapshot: the rendered frame + a json of what the world
 // knew at that moment (pose, carried components, quest state, nearby ids,
@@ -373,27 +393,101 @@ function captureSnapshot() {
   }, 'image/png');
 }
 
-// the debug menu drives with arrow keys too: ↑/↓ pick a knob, ←/→ nudge it
-const debugKnobNames = ['exposure', 'skylight', 'fog', 'storm', 'flame'];
+// the debug menu drives with arrow keys: ↑/↓ pick a row, ←/→ nudge a
+// slider, Enter follows a link row (rain ▸ submenu, ◂ back, save),
+// Esc backs out of a submenu
+const debugPages = {
+  main: ['exposure', 'skylight', 'fog', 'storm', 'flame', 'rain-link', 'save'],
+  rain: ['rain-back', 'rain-angle', 'rain-speed', 'rain-intensity', 'rain-save'],
+};
+let debugPage = 'main';
 let debugSelected = 0;
+
+// save: the dev override layer. Saved knob values live in localStorage and
+// re-apply on every boot — they survive restarts AND level resets, and they
+// win over whatever the world data (the editor) says. Storm and flame are
+// world writes, not local overrides, so they are not saved.
+const DEBUG_SAVED = ['exposure', 'skylight', 'fog', 'rain-angle', 'rain-speed', 'rain-intensity'];
+function saveDebug() {
+  const data = {};
+  for (const name of DEBUG_SAVED) data[name] = Number(document.getElementById(`debug-${name}`).value);
+  localStorage.setItem('gaia-debug', JSON.stringify(data));
+  for (const id of ['debug-save', 'debug-rain-save']) {
+    const el = document.getElementById(id);
+    el.textContent = 'saved ✓';
+    setTimeout(() => (el.textContent = 'save'), 1600);
+  }
+}
+function loadDebug() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem('gaia-debug') ?? 'null');
+  } catch {
+    data = null;
+  }
+  if (!data) return;
+  for (const name of DEBUG_SAVED) {
+    if (typeof data[name] !== 'number') continue;
+    const input = document.getElementById(`debug-${name}`);
+    input.value = String(data[name]);
+    input.dispatchEvent(new Event('input'));
+  }
+}
+loadDebug();
+
+const debugLinks = {
+  'rain-link': () => showDebugPage('rain'),
+  'rain-back': () => showDebugPage('main'),
+  save: saveDebug,
+  'rain-save': saveDebug,
+};
+for (const [name, action] of Object.entries(debugLinks)) {
+  document.getElementById(`debug-${name}`).addEventListener('click', action);
+}
+
+function debugRowEl(name) {
+  const el = document.getElementById(`debug-${name}`);
+  return el.tagName === 'LABEL' ? el : el.parentElement;
+}
+function showDebugPage(name) {
+  debugPage = name;
+  debugSelected = 0;
+  for (const page of Object.keys(debugPages)) {
+    document.getElementById(`debug-page-${page}`).style.display = page === name ? 'flex' : 'none';
+  }
+  highlightDebugKnob();
+}
 function highlightDebugKnob() {
-  debugKnobNames.forEach((name, i) => {
-    document.getElementById(`debug-${name}`).parentElement.classList.toggle('selected', i === debugSelected);
-  });
+  for (const page of Object.keys(debugPages)) {
+    debugPages[page].forEach((name, i) => {
+      debugRowEl(name).classList.toggle('selected', page === debugPage && i === debugSelected);
+    });
+  }
 }
 document.addEventListener('keydown', (e) => {
   if (debugEl.style.display !== 'flex') return;
+  const names = debugPages[debugPage];
+  const current = names[debugSelected];
   if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
     e.preventDefault();
-    debugSelected = (debugSelected + (e.code === 'ArrowDown' ? 1 : debugKnobNames.length - 1)) % debugKnobNames.length;
+    debugSelected = (debugSelected + (e.code === 'ArrowDown' ? 1 : names.length - 1)) % names.length;
     highlightDebugKnob();
   } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+    const input = document.getElementById(`debug-${current}`);
+    if (input.tagName !== 'INPUT') return;
     e.preventDefault(); // ours, not the focused slider's — no double steps
-    const input = document.getElementById(`debug-${debugKnobNames[debugSelected]}`);
     const step = Number(input.step) || 1;
     const next = Number(input.value) + (e.code === 'ArrowRight' ? step : -step);
     input.value = String(Math.min(Number(input.max), Math.max(Number(input.min), next)));
     input.dispatchEvent(new Event('input'));
+  } else if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+    if (debugLinks[current]) {
+      e.preventDefault();
+      debugLinks[current]();
+    }
+  } else if (e.code === 'Escape' && debugPage !== 'main') {
+    e.preventDefault();
+    showDebugPage('main');
   }
 });
 

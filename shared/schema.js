@@ -242,6 +242,7 @@ export const SCHEMA = {
       bob: { doc: 'drift vertical wobble', range: [0, 5] },
       floor: { doc: 'drift: never below this world y' },
       streak: { doc: 'rain: draw each drop as a falling sliver this long (meters) instead of a ball — the velocity-stretched-billboard idiom', range: [0, 4] },
+      tilt: { doc: 'rain wind: horizontal drift [x, z] per meter fallen — streaks lean to match', range: [-1.5, 1.5] },
       opacity: { doc: 'mote translucency (rain reads best around 0.4–0.5)', range: [0.05, 1] },
     },
   },

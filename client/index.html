@@ -166,6 +166,45 @@
         background: rgba(125, 249, 255, 0.2);
         margin: 1px 3px;
       }
+      /* the view ▾ effects dropdown: Unity's scene-view toggles */
+      #vb-wrap {
+        position: relative;
+        display: flex;
+      }
+      #vb-menu {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        display: none;
+        flex-direction: column;
+        gap: 1px;
+        background: rgba(8, 14, 24, 0.92);
+        border: 1px solid rgba(125, 249, 255, 0.18);
+        border-radius: 10px;
+        padding: 6px 10px;
+        min-width: 96px;
+      }
+      #vb-menu label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: #9fb4d8;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        padding: 2px 0;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      #vb-menu label:hover {
+        color: #ffffff;
+      }
+      #vb-menu input {
+        accent-color: #7df9ff;
+        width: 11px;
+        height: 11px;
+        margin: 0;
+        cursor: pointer;
+      }
       #panel {
         position: fixed;
         top: 40px;
@@ -622,6 +661,19 @@
       <button id="vb-lit" class="active">lit</button>
       <button id="vb-unlit">unlit</button>
       <button id="vb-wireframe">wire</button>
+      <span class="vb-sep"></span>
+      <div id="vb-wrap">
+        <button id="vb-view" title="scene-view effects — what the editor draws, not the game">view &#9662;</button>
+        <div id="vb-menu">
+          <label><input type="checkbox" data-fx="skybox" checked />skybox</label>
+          <label><input type="checkbox" data-fx="fog" checked />fog</label>
+          <label><input type="checkbox" data-fx="particles" checked />particles</label>
+          <label><input type="checkbox" data-fx="post" checked />post fx</label>
+          <label title="the pooled point lights — sun and sky stay">
+            <input type="checkbox" data-fx="lights" checked />lights</label>
+          <label><input type="checkbox" data-fx="audio" checked />audio</label>
+        </div>
+      </div>
       <span class="vb-sep"></span>
       <button id="vb-stop" class="stop">&#9632; stop</button>
     </div>

@@ -25,6 +25,9 @@ export class Environment {
     this.debugMul = 1;
     this.debugAmbient = 0;
     this.debugFog = 1;
+    // the editor's post-fx gate: false suppresses lightning flashes and
+    // exposure dips (the view-options dropdown owns it)
+    this.effectsEnabled = true;
     this.current = {
       sunIntensity: sun.intensity,
       hemiIntensity: hemi.intensity,
@@ -87,7 +90,9 @@ export class Environment {
     const ambient = { ...this.defaults.ambient, ...(p.ambient ?? {}) };
     this.ambient.color.set(ambient.color);
     this.lightScale = p.lightScale ?? 1;
-    this.post?.setBloom({ ...this.defaults.bloom, ...(p.bloom ?? {}) });
+    // remembered so the editor's post toggle can hand bloom back exactly
+    this.currentBloom = { ...this.defaults.bloom, ...(p.bloom ?? {}) };
+    this.post?.setBloom(this.currentBloom);
     if (p.audio) this.audio?.applyBus(p.audio);
     this.current = {
       sunIntensity: sun.intensity,
@@ -171,9 +176,11 @@ export class Environment {
     // final pipeline: logical values × dip × the ~ debug knobs
     let exposure = this.exposure;
     if (this.dipDur) {
+      // the timer always advances — a dip queued while effects are gated
+      // must not wait, frozen, for them to come back
       this.dipT += dt;
       const p = Math.min(1, this.dipT / this.dipDur);
-      exposure *= 1 - 0.96 * Math.sin(p * Math.PI);
+      if (this.effectsEnabled) exposure *= 1 - 0.96 * Math.sin(p * Math.PI);
       if (p >= 1) this.dipDur = 0;
     }
     this.renderer.toneMappingExposure = exposure * this.debugMul;
@@ -183,6 +190,15 @@ export class Environment {
     }
 
     if (this.flashLevel <= 0) return;
+    if (!this.effectsEnabled) {
+      // gated mid-flash: settle everything the flash lifted, right now
+      this.flashLevel = 0;
+      this.sun.intensity = this.current.sunIntensity;
+      this.hemi.intensity = this.current.hemiIntensity;
+      this.scene.background.copy(this.current.background);
+      this.scene.fog.color.copy(this.current.fogColor);
+      return;
+    }
     this.flashLevel *= Math.exp(-dt * 4.5);
     if (this.flashLevel < 0.01) this.flashLevel = 0;
     const k = Math.min(1, this.flashLevel);

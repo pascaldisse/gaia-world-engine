@@ -16,6 +16,7 @@ import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
 import { Scenes } from './kernel/scenes.js';
 import { Shading } from './kernel/shading.js';
+import { ViewFx } from './kernel/viewfx.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { setMaterialLibrary } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
@@ -35,6 +36,7 @@ const view = new View({ scene, store, audio, effects, environment, camera, rende
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 const scenes = new Scenes({ store, view, environment });
 const shading = new Shading({ view, renderer });
+const viewFx = new ViewFx({ scene, view, environment, post });
 
 // ■ stop — the editor's rest state, like any game editor's edit mode: world
 // motion (behaviors), vfx (particles), interactions and sound hold still.
@@ -291,14 +293,17 @@ function handleEvents(ops) {
 
 // M mutes (persists per browser); ?mute=1 starts muted — agents open their
 // work tabs with it so verification never makes noise on the player's machine.
-// The user's mute and the editor's ■ stop are separate gates on one switch:
-// resuming the sim never unmutes a muted player, and M while stopped only
-// flips what the world will sound like once it runs again.
+// The user's mute, the editor's ■ stop, and the view-options audio toggle are
+// separate gates on one switch: resuming the sim (or re-enabling editor
+// audio) never unmutes a muted player.
 const mutedEl = document.getElementById('muted');
 let userMuted = false;
+function applyAudioGate() {
+  audio.setMuted(userMuted || sim.stopped || !viewFx.on.audio);
+}
 function applyMuted(on, persist = true) {
   userMuted = on;
-  audio.setMuted(on || sim.stopped);
+  applyAudioGate();
   mutedEl.style.display = on ? '' : 'none';
   if (persist) localStorage.setItem('gaia-muted', on ? '1' : '0');
 }
@@ -311,21 +316,34 @@ document.addEventListener('keydown', (e) => {
   applyMuted(!userMuted);
 });
 
-// the editor viewbar: lit / unlit / wire draw modes and the ■ stop toggle —
-// shown only in create mode, and leaving the editor always restores lit +
+// the editor viewbar: lit / unlit / wire draw modes, the ■ stop toggle, and
+// the `view ▾` effects dropdown (Unity's scene-view toggles) — shown only in
+// create mode, and leaving the editor always restores lit + everything on +
 // running (the GAME never plays through a scene-view lens)
 const viewbarEl = document.getElementById('viewbar');
 const drawModeButtons = new Map(
   ['lit', 'unlit', 'wireframe'].map((mode) => [mode, document.getElementById(`vb-${mode}`)]),
 );
 const stopBtn = document.getElementById('vb-stop');
+const vbViewBtn = document.getElementById('vb-view');
+const vbMenu = document.getElementById('vb-menu');
+function syncFxMenu() {
+  for (const input of vbMenu.querySelectorAll('input[data-fx]')) {
+    input.checked = viewFx.on[input.dataset.fx];
+  }
+}
 function setDrawMode(mode) {
   shading.setMode(mode);
+  // each mode brings its own toggle defaults (vfx off in unlit/wire, skybox
+  // off in wire); the dropdown can then override any of them
+  viewFx.applyDefaults(mode);
+  applyAudioGate();
+  syncFxMenu();
   for (const [m, btn] of drawModeButtons) btn.classList.toggle('active', m === mode);
 }
 function setStopped(on) {
   sim.stopped = on;
-  audio.setMuted(userMuted || on);
+  applyAudioGate();
   stopBtn.classList.toggle('active', on);
   stopBtn.innerHTML = on ? '&#9654; resume' : '&#9632; stop';
   if (on) hintEl.textContent = ''; // a frozen prompt would lie
@@ -340,11 +358,32 @@ stopBtn.addEventListener('click', () => {
   setStopped(!sim.stopped);
   stopBtn.blur();
 });
+vbViewBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  vbMenu.style.display = vbMenu.style.display === 'flex' ? 'none' : 'flex';
+  syncFxMenu();
+  vbViewBtn.blur();
+});
+vbMenu.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', () => {
+  vbMenu.style.display = 'none';
+});
+for (const input of vbMenu.querySelectorAll('input[data-fx]')) {
+  input.addEventListener('change', () => {
+    viewFx.on[input.dataset.fx] = input.checked;
+    if (input.dataset.fx === 'audio') applyAudioGate();
+  });
+}
 const viewbar = {
   show: () => (viewbarEl.style.display = 'flex'),
-  hide: () => (viewbarEl.style.display = 'none'),
+  hide: () => {
+    viewbarEl.style.display = 'none';
+    vbMenu.style.display = 'none';
+  },
   reset: () => {
     setDrawMode('lit');
+    viewFx.on.audio = true;
+    applyAudioGate();
     setStopped(false);
   },
 };
@@ -677,7 +716,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = { store, view, scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, sim, setDrawMode, setStopped };
+window.gaia = { store, view, scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, viewFx, sim, setDrawMode, setStopped };
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };
@@ -733,6 +772,7 @@ renderer.setAnimationLoop(() => {
   player.voidY = scenes.currentVoidY;
   view.update();
   shading.update();
+  viewFx.update();
   if (!sim.stopped) {
     interact.update(dt, now);
     // drowning overrides the interaction hint — the water is the message

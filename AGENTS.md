@@ -80,13 +80,21 @@ Screenshot discipline:
   scene files or world.json on disk (by hand or a generator re-run) while
   the server runs: send a `reset` op (`{"op":"reset","scene":"<name>"}`) —
   reset re-reads the files from disk and is the official pickup gesture.
-- Creator mode has a viewbar (top center): `lit / unlit / wire` draw modes
-  and a `■ stop` toggle. Unlit shows floored albedo with fog and exposure
-  neutral — edit a midnight scene in daylight; wire shows the geometry.
-  ■ stop freezes behaviors, particles, triggers and sound (the default
-  edit-mode rest state) while movement, streaming and edits keep working.
-  Leaving create mode always restores lit + running. Programmatic:
-  `gaia.setDrawMode('unlit'|'wireframe'|'lit')`, `gaia.setStopped(true)`.
+- Creator mode has a viewbar (top center): `lit / unlit / wire` draw modes,
+  a `view ▾` effects dropdown, and a `■ stop` toggle. Unlit shows floored
+  albedo with fog and exposure neutral — edit a midnight scene in daylight;
+  wire shows the geometry. The dropdown is Unity's scene-view toggles:
+  skybox (background color + sky/overcast/clouds preset sheets), fog,
+  particles, post fx (bloom + lightning flashes + exposure dips), lights
+  (the point-light pool; sun/sky stay), audio. Draw modes set defaults —
+  unlit/wire turn fog+particles+post OFF, wire also skybox OFF (so stepping
+  outside a mountain doesn't flood the wires with daylight) — and any
+  toggle can then be flipped per-feature. ■ stop freezes behaviors,
+  particles, triggers and sound (the default edit-mode rest state) while
+  movement, streaming and edits keep working. Leaving create mode always
+  restores lit + everything on + running. Programmatic:
+  `gaia.setDrawMode('unlit'|'wireframe'|'lit')`, `gaia.setStopped(true)`,
+  `gaia.viewFx.on` (the toggle state).
   — creator mode opens by itself, the entity is selected, the listed gizmo
   categories switch on, and the camera goes exactly where you said (editor
   mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so

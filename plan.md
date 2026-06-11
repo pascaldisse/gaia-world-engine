@@ -495,7 +495,30 @@ pattern — NOT inside each scene file.
       (source) — the old ignore line would have silently uncommitted the
       superscene.
 
-## Later
+## M20.1 — Scene-view effects toggles (DONE)
+
+User report: wireframe outside the mountain flooded the screen bright. The
+materials neutralize under wire/unlit but scene.background, bloom and the
+sky-sheet GEOMETRY kept rendering — invisible inside (near-black env),
+blinding once the daylight env crossfades in.
+
+- [x] `view ▾` dropdown on the viewbar (Unity's scene-view toggles):
+      skybox · fog · particles · post fx · lights · audio. kernel/viewfx.js
+      runs LAST each frame (after environment/view/shading) so it has the
+      final word and streamed-in builds obey on attach. Self-restoring by
+      design: environment rewrites fog density and the pool rewrites slot
+      intensities per frame, so re-enabling = just stop overriding.
+- [x] skybox toggle = background color (editor gray #15181d) + hiding parts
+      whose preset is sky/overcast/clouds (tagged userData.sky at build).
+      post toggle = bloom to 0 (restored from environment.currentBloom) +
+      gates lightning flashes and exposure dips (environment.effectsEnabled
+      — mid-flash gating settles sun/hemi/bg/fog immediately, and dip
+      timers keep advancing so a gated dip can't fire later). lights =
+      point-light pool only, sun/sky stay. audio = third mute gate
+      (user M-mute | ■stop | viewFx) — never unmutes a muted player.
+- [x] Mode defaults per the user's rule: unlit/wire → fog+particles+post
+      off; wire also skybox off. Each toggle then flippable individually;
+      leaving create mode restores lit + all on + running.
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)
 - Full TSL `shader.source` authoring

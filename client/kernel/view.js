@@ -402,6 +402,8 @@ export class View {
       // by default — but an explicit solid wins either way: architectural
       // presets (a stone tube's cave floor) can opt in with solid: true
       mesh.userData.solid = part.solid !== undefined ? !!part.solid : !part.preset;
+      // sky-as-geometry sheets — the editor's skybox toggle hides these
+      if (part.preset === 'sky' || part.preset === 'overcast' || part.preset === 'clouds') mesh.userData.sky = true;
       // invisible parts still collide — walkway/box colliders
       if (part.visible === false) mesh.visible = false;
       mesh.position.set(...(part.position ?? [0, 0, 0]));

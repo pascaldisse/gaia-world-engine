@@ -15,6 +15,7 @@ import { EventConsole } from './kernel/console.js';
 import { Editor } from './kernel/editor.js';
 import { Environment } from './kernel/environment.js';
 import { Zones } from './kernel/zones.js';
+import { Shading } from './kernel/shading.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { connect, clientId } from './kernel/net.js';
 
@@ -32,6 +33,12 @@ const environment = new Environment({ renderer, scene, hemi, sun, post, audio })
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 const zones = new Zones({ store, view, environment });
+const shading = new Shading({ view, renderer });
+
+// ■ stop — the editor's rest state, like any game editor's edit mode: world
+// motion (behaviors), vfx (particles), interactions and sound hold still.
+// You still move, streaming still streams, edits still apply and broadcast.
+const sim = { stopped: false };
 
 // world clock: synced from the server so motion agrees across all observers
 const clock = { offset: 0, now: () => clock.offset + performance.now() / 1000 };
@@ -255,7 +262,7 @@ function handleEvents(ops) {
     }
     if (op.op !== 'event') continue;
     if (op.name === 'prefabs-changed') palette.load();
-    if (op.name === 'lightning') {
+    if (op.name === 'lightning' && !sim.stopped) {
       environment.flash(op.data?.intensity ?? 0.8);
       audio.thunder(op.data?.intensity ?? 0.8, op.data?.delay ?? 1.4);
     }
@@ -267,10 +274,15 @@ function handleEvents(ops) {
 }
 
 // M mutes (persists per browser); ?mute=1 starts muted — agents open their
-// work tabs with it so verification never makes noise on the player's machine
+// work tabs with it so verification never makes noise on the player's machine.
+// The user's mute and the editor's ■ stop are separate gates on one switch:
+// resuming the sim never unmutes a muted player, and M while stopped only
+// flips what the world will sound like once it runs again.
 const mutedEl = document.getElementById('muted');
+let userMuted = false;
 function applyMuted(on, persist = true) {
-  audio.setMuted(on);
+  userMuted = on;
+  audio.setMuted(on || sim.stopped);
   mutedEl.style.display = on ? '' : 'none';
   if (persist) localStorage.setItem('gaia-muted', on ? '1' : '0');
 }
@@ -280,8 +292,46 @@ document.addEventListener('keydown', (e) => {
   if (e.code !== 'KeyM' || e.metaKey || e.ctrlKey || e.altKey) return;
   const el = document.activeElement;
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
-  applyMuted(!audio.muted);
+  applyMuted(!userMuted);
 });
+
+// the editor viewbar: lit / unlit / wire draw modes and the ■ stop toggle —
+// shown only in create mode, and leaving the editor always restores lit +
+// running (the GAME never plays through a scene-view lens)
+const viewbarEl = document.getElementById('viewbar');
+const drawModeButtons = new Map(
+  ['lit', 'unlit', 'wireframe'].map((mode) => [mode, document.getElementById(`vb-${mode}`)]),
+);
+const stopBtn = document.getElementById('vb-stop');
+function setDrawMode(mode) {
+  shading.setMode(mode);
+  for (const [m, btn] of drawModeButtons) btn.classList.toggle('active', m === mode);
+}
+function setStopped(on) {
+  sim.stopped = on;
+  audio.setMuted(userMuted || on);
+  stopBtn.classList.toggle('active', on);
+  stopBtn.innerHTML = on ? '&#9654; resume' : '&#9632; stop';
+  if (on) hintEl.textContent = ''; // a frozen prompt would lie
+}
+for (const [mode, btn] of drawModeButtons) {
+  btn.addEventListener('click', () => {
+    setDrawMode(mode);
+    btn.blur(); // keep Space/Enter for the world, not the button
+  });
+}
+stopBtn.addEventListener('click', () => {
+  setStopped(!sim.stopped);
+  stopBtn.blur();
+});
+const viewbar = {
+  show: () => (viewbarEl.style.display = 'flex'),
+  hide: () => (viewbarEl.style.display = 'none'),
+  reset: () => {
+    setDrawMode('lit');
+    setStopped(false);
+  },
+};
 
 // ~ toggles the debug panel: live look-dev knobs
 const debugEl = document.getElementById('debug');
@@ -573,6 +623,7 @@ const editor = new Editor({
   palette,
   outliner,
   gizmos,
+  viewbar,
   modeEl: document.getElementById('mode'),
 });
 
@@ -581,7 +632,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = { store, view, zones, gizmos, outliner, editor, panel, econsole, environment, player, audio, net };
+window.gaia = { store, view, zones, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, sim, setDrawMode, setStopped };
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };
@@ -619,22 +670,31 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const t = clock.now();
-  behaviors.update(dt);
+  // ■ stop skips the world's own motion — behaviors, particles, triggers —
+  // but not you (the body still answers), not the streaming, not edits.
+  // Effects keep running: spawn/despawn tweens are edit feedback, and a
+  // frozen scaleOut would leave deleted entities haunting the scene.
+  if (!sim.stopped) behaviors.update(dt);
   effects.update(dt);
   environment.update(dt);
-  for (const [id, state] of view.particleSystems) {
-    if (view.getGroup(id)?.userData.hidden) continue; // streamed-out zones sleep
-    updateParticles(state, t);
+  if (!sim.stopped) {
+    for (const [id, state] of view.particleSystems) {
+      if (view.getGroup(id)?.userData.hidden) continue; // streamed-out zones sleep
+      updateParticles(state, t);
+    }
   }
   player.update(dt);
   zones.update(player.position);
   player.voidY = zones.currentVoidY;
   view.update();
-  interact.update(dt, now);
-  // drowning overrides the interaction hint — the water is the message
-  if (player.sinking) hintEl.textContent = 'the water takes you…';
-  else if (player.swimming && player.swimTime > player.swimLimit * 0.5) {
-    hintEl.textContent = 'your strength fades — reach for the boat';
+  shading.update();
+  if (!sim.stopped) {
+    interact.update(dt, now);
+    // drowning overrides the interaction hint — the water is the message
+    if (player.sinking) hintEl.textContent = 'the water takes you…';
+    else if (player.swimming && player.swimTime > player.swimLimit * 0.5) {
+      hintEl.textContent = 'your strength fades — reach for the boat';
+    }
   }
   editor.update();
   gizmos.update();

@@ -275,6 +275,10 @@ function buildPartMaterial(part) {
     const preset = makePresetMaterial(part);
     if (preset) {
       if (part.fog === false) preset.fog = false;
+      // node materials hide their look in the colorNode (.color stays a
+      // white placeholder) — stash the authored color for the editor's
+      // unlit/wireframe override modes
+      if (part.color) preset.userData.baseColor = part.color;
       return preset;
     }
   }

@@ -6,7 +6,7 @@ import { heightAt } from './terrain.js';
 // F frames the selection, hold RMB to fly (WASD + Q/E down/up), scroll dollies.
 // Every change is the same ops any agent sends.
 export class Editor {
-  constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, outliner, gizmos, modeEl }) {
+  constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, outliner, gizmos, viewbar, modeEl }) {
     this.camera = camera;
     this.scene = scene;
     this.renderer = renderer;
@@ -19,6 +19,7 @@ export class Editor {
     this.palette = palette;
     this.outliner = outliner;
     this.gizmos = gizmos;
+    this.viewbar = viewbar;
     this.modeEl = modeEl;
     this.mode = 'play';
     this.tool = 'translate';
@@ -225,6 +226,7 @@ export class Editor {
     this.palette.show();
     this.outliner?.show();
     this.gizmos?.setEnabled(true);
+    this.viewbar?.show();
   }
 
   enterPlay() {
@@ -238,6 +240,9 @@ export class Editor {
     this.palette.hide();
     this.outliner?.hide();
     this.gizmos?.setEnabled(false);
+    // play never looks through a scene-view lens: back to lit, sim running
+    this.viewbar?.hide();
+    this.viewbar?.reset();
     this.modeEl.style.display = 'none';
     this.renderer.domElement.requestPointerLock();
   }

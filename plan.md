@@ -181,6 +181,46 @@ seen or reached; no gates, no loading, ever. Driven by
 - [x] Camera far plane 4000 (was 1000): the world axis runs ~2.5km; the tree,
       the bridge and the void glow must survive projection, not just fog.
 
+### M13 — Invisible streaming & the light pool (forced by: Tomb G2 in play — lantern hitches, zone-seam freezes)
+
+The bar was Dark Souls / INSIDE: no loading you can feel, ever. Baseline
+measured over CDP: a 2,097ms frame entering the cavern (zone stream-in),
+700ms+ both other seams, ~30fps steady. After: every seam ≤ 13ms (zero
+frames over 50ms in any direction), steady 120fps, lighting a lantern ≤ 11ms.
+
+- [x] Light pool: scene lights are part of every material's shader cache key
+      (LightsNode hashes `light.id` + castShadow), so adding/removing ONE
+      light recompiled every pipeline in the scene — that was the lantern
+      hitch AND most of the seam freeze. Runtime point lights now live in a
+      fixed pool of 16 permanent PointLights (position/color/intensity are
+      not in the key); the nearest specs hold slots, so the forward-lighting
+      budget is constant no matter how many lanterns burn. Spot/directional/
+      castShadow lights bypass the pool — build-time only.
+- [x] Shared geometry/material caches keyed by recipe values (mesh parts,
+      scatter instances, terrain heightfields). World content repeats; GPU
+      objects now do too. Shared resources carry `userData.shared` and are
+      never disposed by users (terrain cache evicts oldest past 8, untagging
+      so normal disposal reclaims them).
+- [x] Fog mutates in place: replacing `scene.fog` re-keyed every pipeline —
+      each zone crossfade was a full-scene recompile. Same-family fog
+      (exp↔exp, linear↔linear) now updates values only; only a family swap
+      pays (the kernel default is linear, worlds with exp fog pay once at
+      boot, behind the overlay).
+- [x] The world stays resident: everything builds at load and renders ONCE —
+      all of it visible, frustum culling off — for three warm frames behind
+      the entry overlay, so every pipeline compiles and every render object
+      exists before play. Streamed-out zones HIDE (sounds and light slots
+      release); streamed-in zones SHOW. Nothing is built, compiled or torn
+      down mid-play. Probe meshes warm material variants that exist only in
+      interact/trigger ops (a lantern's unlit flame), instanced and particle
+      variants probed faithfully (different shader builds).
+- [x] Positional audio flood fix: three re-schedules six panner ramps per
+      frame per PositionalAudio (and the listener), moving or not — ~10k
+      WebAudio automation events/second for a dozen static drips. Panners
+      (and the listener) now re-ramp only when they actually move.
+- [x] `tools/profile-seam.mjs`: CPU-profile the page across a transition over
+      CDP, print hottest functions — how every one of these was found.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

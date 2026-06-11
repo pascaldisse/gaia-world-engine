@@ -61,6 +61,35 @@ Screenshot discipline:
   with `gaia.player.keys.add("KeyW")` / `.delete(...)`. Verify climbs by
   reading `gaia.player.position` — feet are `y - 1.6`.
 
+## Performance rules (M13 — keep streaming invisible)
+
+- The scene's light SET is part of every material's shader cache key.
+  Runtime point lights ride a fixed pool (nearest 16 win slots) so lighting
+  lanterns is free — but adding a `spot`/`directional`/`castShadow` light,
+  at runtime, recompiles every pipeline in the scene. Author those at build
+  time only.
+- Zone fogs must stay in one family: exp↔exp crossfades mutate the existing
+  fog object (free); switching linear↔exp replaces it and re-keys every
+  pipeline. Every zone env should use `density` (exp) fog.
+- The whole world builds AND renders once at load (three warm frames,
+  unculled, behind the entry overlay); after that zones stream by pure
+  visibility. If a fresh material variant appears ONLY in op payloads the
+  warm-up can't see (beyond `interact.ops` / `triggers.*.ops` mesh values,
+  which it probes), its first draw compiles mid-play — prefer pre-seeding a
+  lit example somewhere or reusing an existing recipe.
+- Geometries/materials are cached by recipe and shared (`userData.shared`)
+  — never dispose what you didn't create, and never mutate a mesh part's
+  material in place (edit the component; identical recipes are the SAME
+  material object).
+- `tools/profile-seam.mjs '<js that triggers the moment>'` CPU-profiles the
+  page over CDP and prints the hottest functions — use it before guessing,
+  and verify hitches with a rAF frame-time probe
+  (`window.__t=performance.now()` … measure deltas), not by feel.
+- Teleporting a player/agent ACROSS zones in one jump can trip the OLD
+  zone's `voidY` for one frame (the player respawns at the world spawn).
+  Real movement never does this; for tests, teleport in two steps or check
+  `gaia.zones.current` after.
+
 ## Other ground rules
 
 - Senses ARE the right tool for spatial/logic verification: positions,

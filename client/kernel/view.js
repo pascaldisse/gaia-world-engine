@@ -1,20 +1,36 @@
 import * as THREE from 'three/webgpu';
 import { buildTerrainMesh, heightAt, registerTerrain, unregisterTerrain } from './terrain.js';
-import { makeGeometry, makePartMaterial } from './geometry.js';
+import { makeGeometry, makePartMaterial, disposeOwn } from './geometry.js';
 import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
+
+// In the node renderer the SET of scene lights is part of every material's
+// shader cache key (LightsNode hashes light.id + castShadow) — adding or
+// removing one light recompiles every pipeline in the scene. So runtime
+// lights live in a fixed pool of permanent PointLights: the pool objects
+// never enter or leave the scene, only their position/color/intensity
+// change (none of which touch the key). Light a hundred lanterns: zero
+// recompiles. The pool is also the light BUDGET — the nearest N win, so
+// forward-lighting cost stays constant no matter how much of the world is
+// burning. (Playdead's INSIDE rule: never change the shader environment
+// mid-play.)
+const LIGHT_POOL_SIZE = 16;
+const _lightPos = new THREE.Vector3();
+const _probeGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);
 
 // Reconciles world store documents into three.js objects. Each entity gets a
 // Group; components map onto children/properties of that group.
 export class View {
-  constructor({ scene, store, audio, effects, environment }) {
+  constructor({ scene, store, audio, effects, environment, camera, renderer }) {
     this.scene = scene;
     this.store = store;
     this.audio = audio;
     this.effects = effects;
     this.environment = environment;
+    this.camera = camera;
+    this.renderer = renderer;
     this.groups = new Map();
-    this.lights = new Map();
+    this.lights = new Map(); // direct lights (spot/directional/shadow) — build-time only
     this.sounds = new Map();
     this.particleSystems = new Map();
     this.suppressed = new Set();
@@ -23,7 +39,17 @@ export class View {
     this.currentZone = null;
     this.buildQueue = [];
     this.buildSet = new Set();
-    this.removeQueue = [];
+    this.hideQueue = [];
+    this.showQueue = [];
+    this.lightSpecs = new Map(); // id -> point light spec, pool-assigned by distance
+    this.slotById = new Map(); // id -> pool slot currently lighting it
+    this.lightPool = [];
+    for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
+      const light = new THREE.PointLight('#ffffff', 0, 1);
+      light.castShadow = false;
+      scene.add(light);
+      this.lightPool.push({ light, id: null });
+    }
     store.onChange((event) => this.handle(event));
   }
 
@@ -35,14 +61,38 @@ export class View {
     return !zone || this.activeZones.has(zone);
   }
 
+  // streamed-out zones HIDE rather than tear down (the Dark Souls model: the
+  // world stays resident, geometry never lies). Hidden groups keep their
+  // meshes, render objects and compiled pipelines — re-entering a zone is a
+  // visibility flip, not a rebuild. Only sounds and light slots let go.
   setActiveZones(set) {
     this.activeZones = set;
     for (const [id, comps] of this.store.entities) {
-      const built = this.groups.has(id);
+      const group = this.groups.get(id);
       const want = this.isActive(comps);
-      if (want && !built) this.queueBuild(id);
-      else if (!want && built) this.removeQueue.push(id);
+      if (want && !group) this.queueBuild(id);
+      else if (want && group?.userData.hidden) this.showQueue.push(id);
+      else if (!want && group && !group.userData.hidden) this.hideQueue.push(id);
     }
+  }
+
+  hide(id) {
+    const group = this.groups.get(id);
+    if (!group || group.userData.hidden) return;
+    group.visible = false;
+    group.userData.hidden = true;
+    this.sounds.get(id)?.dispose();
+    this.sounds.delete(id);
+    this.releaseSlot(id);
+  }
+
+  show(id) {
+    const group = this.groups.get(id);
+    if (!group || !group.userData.hidden) return;
+    group.visible = id !== this.ownPresence;
+    group.userData.hidden = false;
+    const components = this.store.get(id);
+    if (components?.sound) this.applySound(id, group, components.sound);
   }
 
   queueBuild(id) {
@@ -51,20 +101,31 @@ export class View {
     this.buildQueue.push(id);
   }
 
-  // time-sliced streaming: a zone coming in never drops a frame — a few
-  // entities build per tick (scatters are the heavy ones)
+  // time-sliced streaming: a zone coming in never drops a frame — builds run
+  // against a per-frame millisecond deadline, and each built entity attaches
+  // only after its pipelines pre-compiled off-frame (buildDeferred)
   update() {
-    let budget = 4;
-    while (budget > 0 && this.removeQueue.length) {
-      this.remove(this.removeQueue.shift());
-      budget--;
+    const deadline = performance.now() + 3;
+    while (this.hideQueue.length && performance.now() < deadline) {
+      this.hide(this.hideQueue.shift());
     }
-    while (budget > 0 && this.buildQueue.length) {
+    while (this.showQueue.length && performance.now() < deadline) {
+      this.show(this.showQueue.shift());
+    }
+    // builds are weighted by mesh-part count: each part attached this frame
+    // costs the NEXT render first-draw setup (render object, bind groups,
+    // buffers), so a zone streams in a few parts per frame, never a burst
+    let parts = 6;
+    while (this.buildQueue.length && parts > 0 && performance.now() < deadline) {
       const id = this.buildQueue.shift();
       this.buildSet.delete(id);
-      if (!this.groups.has(id) && this.store.get(id)) this.build(id);
-      budget--;
+      const comps = this.store.get(id);
+      if (!this.groups.has(id) && comps) {
+        this.build(id);
+        parts -= comps.mesh?.parts?.length ?? 1;
+      }
     }
+    this.updateLights();
   }
 
   handle(event) {
@@ -74,11 +135,81 @@ export class View {
     else if (event.kind === 'set') this.applyComponent(event.id, event.component);
   }
 
+  // every material recipe in the snapshot — including zones not yet active,
+  // and the mesh values hiding inside interact ops — gets drawn ONCE here,
+  // on tiny probe meshes pushed through the REAL render path (post chain,
+  // shadow pass and all) for two frames at load, behind the entry overlay.
+  // compileAsync would warm the wrong context: the world renders through
+  // the bloom pass, whose target needs different pipelines than the canvas.
+  // After the warm-up, no streamed zone, spawn or lantern flame ever meets
+  // a cold shader. (Playdead's INSIDE warm-up: draw every variant before
+  // play, then never compile again.)
+  warmMaterials() {
+    if (!this.camera) return;
+    const parts = [];
+    const addParts = (mesh, instanced = false) => {
+      if (mesh) for (const part of mesh.parts ?? [mesh]) parts.push({ part, instanced });
+    };
+    const scanOps = (ops) => {
+      for (const op of ops ?? []) {
+        if (op.component === 'mesh') addParts(op.value);
+        if (op.components) addParts(op.components.mesh);
+      }
+    };
+    for (const comps of this.store.entities.values()) {
+      addParts(comps.mesh);
+      if (comps.scatter?.instance) addParts(comps.scatter.instance, true);
+      scanOps(comps.interact?.ops);
+      if (comps.triggers) for (const t of Object.values(comps.triggers)) scanOps(t?.ops);
+    }
+    const holder = new THREE.Group();
+    const addProbe = (probe) => {
+      // out of sight but never culled: the draw still runs, the pipeline
+      // (and its shadow-pass twin) still compiles
+      probe.frustumCulled = false;
+      probe.castShadow = true;
+      probe.receiveShadow = true;
+      holder.add(probe);
+    };
+    const seen = new Set();
+    for (const { part, instanced } of parts) {
+      const material = makePartMaterial(part);
+      const key = instanced ? material.uuid + 'i' : material.uuid;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // instanced meshes build a different shader variant — probe faithfully
+      addProbe(instanced ? new THREE.InstancedMesh(_probeGeometry, material, 1) : new THREE.Mesh(_probeGeometry, material));
+    }
+    // particle systems are their own material per spec — warm a 1-grain copy
+    const particleSpecs = new Set();
+    for (const comps of this.store.entities.values()) {
+      if (!comps.particles) continue;
+      const specKey = JSON.stringify(comps.particles);
+      if (particleSpecs.has(specKey)) continue;
+      particleSpecs.add(specKey);
+      addProbe(buildParticles({ ...comps.particles, count: 1 }).mesh);
+    }
+    if (!holder.children.length) return;
+    holder.position.set(0, -800, 0);
+    this.scene.add(holder);
+    let framesLeft = 2;
+    const tick = () => {
+      if (--framesLeft > 0) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      this.scene.remove(holder);
+      holder.traverse((node) => disposeOwn(node));
+    };
+    requestAnimationFrame(tick);
+  }
+
   buildAnimated(id) {
     this.build(id);
     const group = this.groups.get(id);
     const components = this.store.get(id);
-    if (!group || !this.effects || components?.terrain || id === this.ownPresence) return;
+    // hidden builds (spawn into a streamed-out zone) materialize silently
+    if (!group || group.userData.hidden || !this.effects || components?.terrain || id === this.ownPresence) return;
     group.visible = false;
     this.effects.wispTo(group.position.clone(), () => {
       group.visible = true;
@@ -110,18 +241,58 @@ export class View {
     if (this.store.get(id) && this.groups.has(id)) this.applyTransform(id);
   }
 
+  // the whole world builds at load — and renders, ALL of it visible, for a
+  // few frames behind the entry overlay, so every pipeline compiles and
+  // every render object exists before play begins. Then the zones the
+  // player isn't in go to sleep. After that, streaming is pure visibility —
+  // nothing is ever built, compiled or torn down mid-play (the Dark Souls
+  // model: the world stays resident; INSIDE's rule: warm everything, then
+  // never warm again).
   rebuildAll() {
     for (const id of [...this.groups.keys()]) this.remove(id);
+    this.warming = true;
     for (const id of this.store.entities.keys()) this.build(id);
+    this.warmMaterials();
+    // render the warm frames UNCULLED: render objects only exist once drawn,
+    // and the camera is at the spawn — anything outside its frustum would
+    // stay cold and bill its setup to the first frame that looks at it
+    const culled = [];
+    for (const group of this.groups.values()) {
+      group.traverse((node) => {
+        if (node.isMesh && node.frustumCulled) {
+          node.frustumCulled = false;
+          culled.push(node);
+        }
+      });
+    }
+    let frames = 3;
+    const settle = () => {
+      if (--frames > 0) {
+        requestAnimationFrame(settle);
+        return;
+      }
+      for (const node of culled) node.frustumCulled = true;
+      this.warming = false;
+      for (const [id, comps] of this.store.entities) {
+        if (!this.isActive(comps)) this.hide(id);
+      }
+    };
+    requestAnimationFrame(settle);
   }
 
   build(id) {
     this.remove(id);
     const components = this.store.get(id);
-    if (!components || !this.isActive(components)) return;
+    if (!components) return;
     const group = new THREE.Group();
     group.name = id;
     if (id === this.ownPresence) group.visible = false; // don't render your own head
+    if (!this.warming && !this.isActive(components)) {
+      // out-of-zone entities build resident-but-asleep: no draw, no sound,
+      // no light slot — show() wakes them when their zone streams in
+      group.visible = false;
+      group.userData.hidden = true;
+    }
     this.groups.set(id, group);
     this.scene.add(group);
     // terrain first so grounded transforms in the same entity resolve correctly
@@ -244,29 +415,92 @@ export class View {
       existing.dispose?.();
       this.lights.delete(id);
     }
+    this.lightSpecs.delete(id);
+    this.releaseSlot(id);
     if (!value) return;
-    let light;
-    switch (value.type) {
-      case 'spot':
+    if (value.type === 'spot' || value.type === 'directional' || value.castShadow) {
+      // direct lights change the scene's light set — every material in the
+      // scene recompiles. Fine at build time, never during play.
+      let light;
+      if (value.type === 'spot') {
         light = new THREE.SpotLight(value.color ?? '#ffffff', value.intensity ?? 10, value.distance ?? 0, value.angle ?? Math.PI / 5);
-        break;
-      case 'directional':
+      } else if (value.type === 'directional') {
         light = new THREE.DirectionalLight(value.color ?? '#ffffff', value.intensity ?? 1);
-        break;
-      default:
+      } else {
         light = new THREE.PointLight(value.color ?? '#ffffff', value.intensity ?? 10, value.distance ?? 0);
+      }
+      light.position.set(...(value.offset ?? [0, 0, 0]));
+      light.castShadow = value.castShadow ?? false;
+      light.userData.baseIntensity = light.intensity;
+      this.lights.set(id, light);
+      group.add(light);
+      return;
     }
-    light.position.set(...(value.offset ?? [0, 0, 0]));
-    light.castShadow = value.castShadow ?? false;
+    // point lights go through the pool — updateLights assigns the nearest
+    this.lightSpecs.set(id, value);
+  }
+
+  releaseSlot(id) {
+    const slot = this.slotById.get(id);
+    if (!slot) return;
+    slot.id = null;
+    slot.light.intensity = 0;
+    this.slotById.delete(id);
+  }
+
+  assignSlot(slot, id, spec) {
+    if (slot.id !== null) this.slotById.delete(slot.id);
+    slot.id = id;
+    this.slotById.set(id, slot);
+    const light = slot.light;
+    light.color.set(spec.color ?? '#ffffff');
+    light.intensity = spec.intensity ?? 10;
+    light.distance = spec.distance ?? 0;
     light.userData.baseIntensity = light.intensity;
-    this.lights.set(id, light);
-    group.add(light);
+  }
+
+  // pool assignment: the nearest specs (by distance to camera, minus their
+  // reach) hold slots; everyone else waits unlit. Positions follow their
+  // entity every frame, so pooled lights ride moving platforms for free.
+  updateLights() {
+    const cam = this.camera?.position;
+    if (!cam) return;
+    const candidates = [];
+    for (const [id, spec] of this.lightSpecs) {
+      const group = this.groups.get(id);
+      if (!group || group.userData.hidden) continue; // hidden = streamed out
+      const d = Math.hypot(group.position.x - cam.x, group.position.y - cam.y, group.position.z - cam.z) - (spec.distance || 30);
+      candidates.push({ id, spec, group, d });
+    }
+    if (candidates.length > this.lightPool.length) candidates.sort((a, b) => a.d - b.d);
+    const want = candidates.slice(0, this.lightPool.length);
+    const wantIds = new Set();
+    for (const c of want) wantIds.add(c.id);
+    for (const slot of this.lightPool) {
+      if (slot.id !== null && !wantIds.has(slot.id)) {
+        this.slotById.delete(slot.id);
+        slot.id = null;
+        slot.light.intensity = 0;
+      }
+    }
+    let free = null;
+    for (const c of want) {
+      let slot = this.slotById.get(c.id);
+      if (!slot) {
+        if (!free) free = this.lightPool.filter((s) => s.id === null);
+        slot = free.pop();
+        if (!slot) break;
+        this.assignSlot(slot, c.id, c.spec);
+      }
+      _lightPos.set(...(c.spec.offset ?? [0, 0, 0]));
+      slot.light.position.copy(c.group.localToWorld(_lightPos));
+    }
   }
 
   applySound(id, group, value) {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
-    if (!value) return;
+    if (!value || group.userData.hidden) return; // hidden zones are silent
     const handle = this.audio.attach(group, value);
     this.sounds.set(id, handle);
     // an ambient sound built for a non-current zone starts silent
@@ -302,6 +536,8 @@ export class View {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
     this.lights.delete(id);
+    this.lightSpecs.delete(id);
+    this.releaseSlot(id);
     this.particleSystems.delete(id);
     unregisterTerrain(group);
     disposeObject(group);
@@ -441,16 +677,10 @@ export class View {
   }
 
   getLight(id) {
-    return this.lights.get(id);
+    return this.slotById.get(id)?.light ?? this.lights.get(id);
   }
 }
 
 function disposeObject(object) {
-  object.traverse((node) => {
-    node.geometry?.dispose();
-    if (node.material) {
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      for (const material of materials) material.dispose();
-    }
-  });
+  object.traverse((node) => disposeOwn(node));
 }

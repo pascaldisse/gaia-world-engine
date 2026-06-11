@@ -55,16 +55,16 @@ export const SCHEMA = {
     },
   },
   light: {
-    doc: 'a real light — lights are the perf budget, not meshes',
+    doc: 'a real light. Point lights are pooled: the nearest 16 to the camera shine, the rest wait — add as many as the world wants, the budget is constant and lighting one mid-play is free',
     default: { type: 'point', color: '#ffffff', intensity: 20, distance: 30 },
     fields: {
-      type: { doc: 'kind of light', enum: ['point', 'spot', 'directional'] },
+      type: { doc: 'kind of light. spot/directional bypass the pool and recompile every shader when added — author at build time, never mid-play', enum: ['point', 'spot', 'directional'] },
       color: { doc: 'light color' },
       intensity: { doc: 'brightness', range: [0, 120] },
-      distance: { doc: 'falloff range in meters (0 = infinite)', range: [0, 120] },
+      distance: { doc: 'falloff range in meters (0 = infinite). Also the pool priority: nearer-than-reach lights win slots', range: [0, 120] },
       offset: { doc: 'entity-local [x, y, z] of the bulb', range: [-10, 10] },
       angle: { doc: 'spot cone half-angle (radians)', range: [0, 1.57] },
-      castShadow: { doc: 'expensive — a few per zone at most' },
+      castShadow: { doc: 'expensive, bypasses the pool (recompiles all shaders when toggled) — a few per zone, build time only' },
     },
   },
   sound: {

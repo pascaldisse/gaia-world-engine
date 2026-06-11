@@ -29,7 +29,7 @@ const store = new WorldStore();
 const audio = new AudioEngine(camera);
 const effects = new Effects({ scene, audio });
 const environment = new Environment({ renderer, scene, hemi, sun, post, audio });
-const view = new View({ scene, store, audio, effects, environment });
+const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 const zones = new Zones({ store, view, environment });
 
@@ -318,7 +318,10 @@ renderer.setAnimationLoop(() => {
   behaviors.update(dt);
   effects.update(dt);
   environment.update(dt);
-  for (const state of view.particleSystems.values()) updateParticles(state, t);
+  for (const [id, state] of view.particleSystems) {
+    if (view.getGroup(id)?.userData.hidden) continue; // streamed-out zones sleep
+    updateParticles(state, t);
+  }
   player.update(dt);
   zones.update(player.position);
   player.voidY = zones.currentVoidY;

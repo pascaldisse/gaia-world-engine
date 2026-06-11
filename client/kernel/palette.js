@@ -75,8 +75,8 @@ export class Palette {
     if (this.ghost) {
       this.view.scene.remove(this.ghost);
       this.ghost.traverse((node) => {
-        node.geometry?.dispose();
-        node.material?.dispose();
+        if (node.geometry && !node.geometry.userData?.shared) node.geometry.dispose();
+        node.material?.dispose(); // ghost materials are its own (basic, translucent)
       });
       this.ghost = null;
     }

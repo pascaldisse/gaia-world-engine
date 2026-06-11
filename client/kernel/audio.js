@@ -2,13 +2,32 @@ import * as THREE from 'three/webgpu';
 
 const SERVER = `http://${location.hostname}:8420`;
 
+// three's PositionalAudio (and AudioListener) re-schedule six panner ramps
+// EVERY FRAME, moving or not — with a dozen positional sounds that floods
+// the WebAudio automation timelines with ~10k events/second and the
+// cleanup stalls whole frames. Only re-ramp when the object actually moved.
+function rampOnlyWhenMoved(audio) {
+  const ramp = audio.updateMatrixWorld.bind(audio);
+  let last = '';
+  audio.updateMatrixWorld = function (force) {
+    THREE.Object3D.prototype.updateMatrixWorld.call(this, force);
+    const e = this.matrixWorld.elements;
+    // position + forward axis: the listener re-ramps on mouse-look too
+    const key = `${e[12].toFixed(2)},${e[13].toFixed(2)},${e[14].toFixed(2)},${e[8].toFixed(2)},${e[9].toFixed(2)},${e[10].toFixed(2)}`;
+    if (key === last) return;
+    last = key;
+    ramp(true);
+  };
+  return audio;
+}
+
 // Fully data-driven audio: synth patches (layered noise/osc → filter → LFO →
 // reverb send), sample files served from world/assets/, world buses (master →
 // compressor, generated convolver reverb), positional or ambient, plus
 // one-shot SFX and thunder. Sounds are documents; nothing is hardcoded.
 export class AudioEngine {
   constructor(camera) {
-    this.listener = new THREE.AudioListener();
+    this.listener = rampOnlyWhenMoved(new THREE.AudioListener());
     camera.add(this.listener);
     this.buffers = new Map();
     this.master = null;
@@ -105,7 +124,7 @@ export class AudioEngine {
     };
 
     if (spec.kind === 'sample') {
-      const audio = spec.ambient ? new THREE.Audio(this.listener) : new THREE.PositionalAudio(this.listener);
+      const audio = spec.ambient ? new THREE.Audio(this.listener) : rampOnlyWhenMoved(new THREE.PositionalAudio(this.listener));
       if (!spec.ambient) {
         audio.setRefDistance(spec.refDistance ?? 4);
         group.add(audio);
@@ -146,7 +165,7 @@ export class AudioEngine {
       zoneGain.connect(this.master);
       nodes.push(sink, zoneGain);
     } else {
-      audio = new THREE.PositionalAudio(this.listener);
+      audio = rampOnlyWhenMoved(new THREE.PositionalAudio(this.listener));
       audio.setRefDistance(spec.refDistance ?? 4);
       group.add(audio);
       sink = ctx.createGain();
@@ -261,7 +280,7 @@ export class AudioEngine {
     let out = this.master;
     let audio = null;
     if (group) {
-      audio = new THREE.PositionalAudio(this.listener);
+      audio = rampOnlyWhenMoved(new THREE.PositionalAudio(this.listener));
       audio.setRefDistance(spec.refDistance ?? 5);
       group.add(audio);
       out = ctx.createGain();

@@ -50,10 +50,26 @@ export class Environment {
 
   apply(params) {
     const p = { ...this.defaults, ...(params ?? {}) };
-    this.scene.background = new THREE.Color(p.background);
+    if (this.scene.background?.isColor) this.scene.background.set(p.background);
+    else this.scene.background = new THREE.Color(p.background);
     const fog = { ...this.defaults.fog, ...(p.fog ?? {}) };
-    if (fog.density) this.scene.fog = new THREE.FogExp2(fog.color, fog.density);
-    else this.scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
+    // mutate the existing fog in place — the fog OBJECT is part of every
+    // pipeline's cache key, so replacing it recompiles the whole scene.
+    // Only a fog-type change (linear ↔ exp) pays that price.
+    if (fog.density) {
+      if (this.scene.fog?.isFogExp2) {
+        this.scene.fog.color.set(fog.color);
+        this.scene.fog.density = fog.density;
+      } else {
+        this.scene.fog = new THREE.FogExp2(fog.color, fog.density);
+      }
+    } else if (this.scene.fog && !this.scene.fog.isFogExp2) {
+      this.scene.fog.color.set(fog.color);
+      this.scene.fog.near = fog.near;
+      this.scene.fog.far = fog.far;
+    } else {
+      this.scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
+    }
     this.fogDensity = fog.density ?? null;
     this.exposure = p.exposure;
     const hemi = { ...this.defaults.hemisphere, ...(p.hemisphere ?? {}) };

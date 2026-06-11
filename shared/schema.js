@@ -263,6 +263,7 @@ export const SCHEMA = {
       double: { doc: 'chance a strike doubles', range: [0, 1] },
       rainCycle: { doc: 'seconds per rain cycle', range: [5, 600] },
       rainAmount: { doc: 'peak rain 0–1', range: [0, 1] },
+      rainBase: { doc: 'rain floor 0–1 — the cycle swells above this, never below (a storm that never quite stops)', range: [0, 1] },
     },
   },
   zone: {

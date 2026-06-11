@@ -252,8 +252,12 @@ setInterval(() => {
       }
     }
     if (w.rainCycle) {
-      const rain =
-        Math.round((Math.sin((worldTime() * Math.PI * 2) / w.rainCycle) * 0.5 + 0.5) * (w.rainAmount ?? 1) * 100) / 100;
+      // the cycle swells between rainBase and rainAmount — a floor means the
+      // storm never quite stops (rain that reads as "gone" half the time
+      // is rain the player decides is broken)
+      const cycle = Math.sin((worldTime() * Math.PI * 2) / w.rainCycle) * 0.5 + 0.5;
+      const base = w.rainBase ?? 0;
+      const rain = Math.round((base + cycle * Math.max(0, (w.rainAmount ?? 1) - base)) * 100) / 100;
       if (Math.abs(rain - (w.rain ?? 0)) > 0.05) {
         applyAndBroadcast([{ op: 'merge', id, component: 'weather', value: { rain } }], 'weather');
       }

@@ -25,11 +25,16 @@ const debugDir = path.join(worldDir, '..', 'debug');
 console.log(`[gaia] world dir: ${worldDir}`);
 
 // zoned world: manifest.json assembles independently authored zone seeds
-// into one world-space; without it the world is a single implicit zone
+// into one world-space; without it the world is a single implicit zone.
+// The raw form is kept: the `zone` op edits it live and persists it back.
+const manifestFile = path.join(worldDir, 'manifest.json');
+let manifestRaw = null;
 let manifest = null;
 try {
-  manifest = normalizeManifest(JSON.parse(fs.readFileSync(path.join(worldDir, 'manifest.json'), 'utf8')));
+  manifestRaw = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  manifest = normalizeManifest(manifestRaw);
 } catch {
+  manifestRaw = null;
   manifest = null;
 }
 
@@ -123,9 +128,34 @@ function record(applied, from) {
   if (journal.length > 2000) journal.splice(0, journal.length - 2000);
 }
 
+// the `zone` op: streaming geography (bounds, load volumes, neighbors…)
+// edited like everything else — merged into the raw manifest, persisted to
+// manifest.json, broadcast so every client re-derives its streaming live
+function applyZoneOp(op) {
+  const zone = manifestRaw?.zones?.find((z) => z.name === op.name);
+  if (!zone) return false;
+  for (const [key, value] of Object.entries(op.value ?? {})) {
+    if (key === 'name') continue;
+    if (value === null) delete zone[key];
+    else zone[key] = value;
+  }
+  manifest = normalizeManifest(manifestRaw);
+  sense.manifest = manifest;
+  fs.writeFileSync(manifestFile, JSON.stringify(manifestRaw, null, 2) + '\n');
+  console.log(`[gaia] zone ${op.name} updated (${Object.keys(op.value ?? {}).join(', ')})`);
+  return true;
+}
+
 function applyAndBroadcast(ops, from) {
   if (ops.some((op) => op.op === 'reset')) {
     ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
+  }
+  // zone ops target the manifest, not an entity — peel them off, apply, and
+  // re-attach the applied ones so they broadcast and journal like the rest
+  let zoneOps = [];
+  if (ops.some((op) => op.op === 'zone')) {
+    zoneOps = ops.filter((op) => op.op === 'zone' && applyZoneOp(op));
+    ops = ops.filter((op) => op.op !== 'zone');
   }
   // `use` expands server-side like `reset`: the interact component decides
   // what actually happens (and whether it happens at all)
@@ -156,7 +186,7 @@ function applyAndBroadcast(ops, from) {
     }
     ops = ops.concat(stamps);
   }
-  const applied = world.applyOps(ops);
+  const applied = world.applyOps(ops).concat(zoneOps);
   if (applied.length) {
     record(applied, from);
     broadcast({ type: 'ops', ops: applied, from });
@@ -246,7 +276,7 @@ const server = http.createServer(async (req, res) => {
   const q = Object.fromEntries(url.searchParams);
   try {
     if (req.method === 'GET' && url.pathname === '/world') {
-      return json(res, { ...world.snapshot(), manifest });
+      return json(res, { ...world.snapshot(), manifest: manifestRaw });
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       const since = Number(q.since ?? 0);
@@ -403,7 +433,9 @@ function nums(q, keys) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (socket) => {
-  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest, game, ...world.snapshot() }));
+  // clients get the RAW manifest — they normalize themselves, and the editor
+  // edits the authored form (the `zone` op round-trips through it)
+  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest: manifestRaw, game, ...world.snapshot() }));
   socket.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
@@ -440,6 +472,7 @@ function describe(op) {
   if (op.op === 'set') return `set ${op.id}.${op.component}`;
   if (op.op === 'despawn') return `despawn ${op.id}`;
   if (op.op === 'event') return `event ${op.name}`;
+  if (op.op === 'zone') return `zone ${op.name} [${Object.keys(op.value ?? {}).join(', ')}]`;
   return op.op;
 }
 

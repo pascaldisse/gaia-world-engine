@@ -319,6 +319,44 @@ physically exist. Everything here is data; no texture assets anywhere.
       and a 5200m sky quad authored with `scale: 0.0012` quietly became
       six meters wide.
 
+## M17 — streaming as data: load volumes + the `zone` op (DONE)
+
+The Dark Souls model, made explicit and editable. Until now a zone streamed
+in with every neighbor of the current zone — fine for connected interiors,
+wrong for a vista layer (a fog-immune abyss ocean) that must not exist
+until the approach actually reveals it.
+
+- [x] Manifest zones take `load: [{ center: [x,z], radius, y: [min,max] }]`
+      — world-space trigger volumes. A zone WITH volumes streams in only
+      while the observer stands inside one (or the zone is current); the
+      implicit neighbor rule no longer applies to it. Zones without `load`
+      behave exactly as before. 2m unload margin so a boundary hover never
+      flickers the zone in and out.
+- [x] The active set re-derives EVERY frame from the player's position
+      (membership can change without a zone change — crossing a height);
+      environment/ambience still crossfade only on zone change.
+- [x] The `zone` op: `{ op: 'zone', name, value: { bounds?, load?, … } }` —
+      streaming geography edited like everything else. The server merges
+      into the raw manifest, persists manifest.json, journals and
+      broadcasts; every client re-derives its streaming live. Clients now
+      receive the RAW manifest in the snapshot and normalize themselves.
+- [x] Editor: the `zones` gizmo chip also draws load volumes (dashed
+      capped cages — "condition", not "place"); every manifest zone's
+      group head in the outliner gets a ⛭ that opens the zone in the
+      inspector — its manifest entry as editable JSON, committed as
+      `zone` ops (undoable).
+- [x] Senses follow: `look` passes the observer's y so load volumes gate
+      perception exactly as they gate rendering; top-down senses (map)
+      fall back to the neighbor rule.
+- [x] The title menu is a scene, not a screen: game.json takes
+      `menu: { camera: { position, yaw, pitch } }`. On boot with a menu
+      the camera holds that shot, the player is FROZEN (no input, no
+      gravity, no void teleport) and NO presence spawns — the world plays
+      as a diorama behind the card. Choosing a level unfreezes, respawns,
+      spawns the presence FIRST and then runs the level ops (their `$id`
+      merges need the body to exist). The overlay ships empty; a titled
+      game never flashes the GAIA defaults.
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)

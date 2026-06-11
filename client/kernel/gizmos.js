@@ -18,6 +18,7 @@ const COLORS = {
   particles: '#e8b4f0',
   zone: '#51708f',
   zoneCurrent: '#7df9ff',
+  zoneLoad: '#74c7a8',
   spawn: '#7dffb0',
 };
 
@@ -386,6 +387,38 @@ export class Gizmos {
       );
       mark(beacon);
       this.root.add(beacon);
+    }
+    // load volumes: the explicit streaming triggers — a capped cylinder cage
+    // (dashed: "condition", not "place"). Drawn at their authored y range.
+    for (const zone of manifest.zones) {
+      for (const volume of zone.load ?? []) {
+        const [cx, cz] = volume.center ?? [0, 0];
+        const r = volume.radius ?? 0;
+        const [y0, y1] = volume.y ?? [this.surfaceY(cx, cz) - 4, this.surfaceY(cx, cz) + 30];
+        const top = Math.min(y1, y0 + 200); // a sky-high cap still reads as a cage
+        const holder = new THREE.Group();
+        holder.position.set(cx, 0, cz);
+        for (const y of [y0, top]) {
+          const ring = new THREE.Line(circleGeometry(r), dashedMaterial(COLORS.zoneLoad, 0.85));
+          ring.computeLineDistances();
+          ring.position.y = y;
+          mark(ring);
+          holder.add(ring);
+        }
+        const points = [];
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          points.push(
+            new THREE.Vector3(Math.cos(a) * r, y0, Math.sin(a) * r),
+            new THREE.Vector3(Math.cos(a) * r, top, Math.sin(a) * r),
+          );
+        }
+        const verticals = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), dashedMaterial(COLORS.zoneLoad, 0.5));
+        verticals.computeLineDistances();
+        mark(verticals);
+        holder.add(verticals);
+        this.root.add(holder);
+      }
     }
   }
 

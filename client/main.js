@@ -55,44 +55,58 @@ const net = connect({
       }
     }
     if (!player.spawned) {
-      player.respawn();
       player.spawned = true;
+      // the overlay text is the world's to claim — index.html ships it empty
+      // so a titled game never flashes the GAIA defaults on boot
+      overlayTitleEl.textContent = game?.title ?? 'GAIA';
+      overlaySubEl.textContent = game ? '' : 'click to enter the world';
       // dev deep-links: ?create=1 opens creator mode (?select=<id> selects,
       // ?gizmos=a,b,c switches overlay categories on) — so tools and agents
       // can screenshot the editor without touching the keyboard
       const params = new URLSearchParams(location.search);
-      if (params.has('create')) {
-        setTimeout(() => {
-          overlay.style.display = 'none';
-          editor.enterCreate();
-          for (const key of (params.get('gizmos') ?? '').split(',').filter(Boolean)) gizmos.toggle(key);
-          const sel = params.get('select');
-          if (sel) {
-            editor.select(sel);
-            editor.frameSelected();
-          }
-          // explicit camera pose beats framing when you know the shot you want
-          const pos = params.get('pos')?.split(',').map(Number);
-          if (pos?.length === 3 && pos.every((n) => Number.isFinite(n))) player.position.set(...pos);
-          if (params.has('yaw')) player.yaw = Number(params.get('yaw')) || 0;
-          if (params.has('pitch')) player.pitch = Number(params.get('pitch')) || 0;
-        }, 800);
-      } else if (spawnComp?.gameMode && !player.gameMode) {
-        // a world can declare itself a game: editing locked until G
-        editor.toggleGameMode();
-      }
-      // a world with game.json gets its own title screen — and ?level=<id>
-      // starts straight at a level select entry with the SAME setup logic
-      // (agents and humans alike skip the walk to wherever they're testing)
       const lvl = params.get('level');
       const deepLevel = lvl && game?.levels?.find((l) => l.id === lvl || l.name === lvl);
-      if (deepLevel) {
-        setTimeout(() => {
-          overlay.style.display = 'none';
-          applyLevel(deepLevel, { lock: false });
-        }, 400);
-      } else if (game && !params.has('create')) {
+      if (game && !params.has('create') && !deepLevel) {
+        // the title menu IS a scene: the camera holds game.json's menu shot
+        // while the world streams and renders behind the card — but no body
+        // exists (frozen, no presence spawned) until a level is chosen
+        const cam = game.menu?.camera ?? {};
+        player.position.set(...(cam.position ?? player.spawnPose?.position ?? [0, 2, 22]));
+        player.yaw = cam.yaw ?? 0;
+        player.pitch = cam.pitch ?? 0;
+        player.frozen = true;
+        if (spawnComp?.gameMode && !player.gameMode) editor.toggleGameMode();
         buildTitleScreen(game);
+      } else {
+        player.respawn();
+        if (params.has('create')) {
+          setTimeout(() => {
+            overlay.style.display = 'none';
+            editor.enterCreate();
+            for (const key of (params.get('gizmos') ?? '').split(',').filter(Boolean)) gizmos.toggle(key);
+            const sel = params.get('select');
+            if (sel) {
+              editor.select(sel);
+              editor.frameSelected();
+            }
+            // explicit camera pose beats framing when you know the shot you want
+            const pos = params.get('pos')?.split(',').map(Number);
+            if (pos?.length === 3 && pos.every((n) => Number.isFinite(n))) player.position.set(...pos);
+            if (params.has('yaw')) player.yaw = Number(params.get('yaw')) || 0;
+            if (params.has('pitch')) player.pitch = Number(params.get('pitch')) || 0;
+          }, 800);
+        } else if (spawnComp?.gameMode && !player.gameMode) {
+          // a world can declare itself a game: editing locked until G
+          editor.toggleGameMode();
+        }
+        // ?level=<id> starts straight at a level select entry with the SAME
+        // setup logic as the menu (agents and humans alike skip the walk)
+        if (deepLevel) {
+          setTimeout(() => {
+            overlay.style.display = 'none';
+            applyLevel(deepLevel, { lock: false });
+          }, 400);
+        }
       }
     }
     // zone set must be known before the snapshot builds, so only the
@@ -101,25 +115,19 @@ const net = connect({
     zones.update(player.position);
     store.applySnapshot(entities);
     countEl.textContent = store.entities.size;
-    if (!store.get(presenceId)) {
-      net.send([
-        {
-          op: 'spawn',
-          id: presenceId,
-          components: {
-            presence: { kind: 'player', yaw: 0 },
-            transform: { position: [player.position.x, player.position.y, player.position.z] },
-            mesh: {
-              parts: [
-                { shape: 'sphere', radius: 0.3, color: '#cfe3ff', emissive: '#aac8ff', emissiveIntensity: 1.4, castShadow: false },
-              ],
-            },
-          },
-        },
-      ]);
-    }
+    // while the title menu is up there is no body in the world — the
+    // presence spawns when a level is chosen (and re-spawns on reconnect)
+    if (!overlay.dataset.menu) ensurePresence();
   },
   onOps: (ops, from) => {
+    // zone ops edit the manifest, not an entity — streaming re-derives live
+    for (const op of ops) {
+      if (op.op === 'zone') {
+        zones.applyZoneOp(op);
+        zones.update(player.position);
+        gizmos.dirty = true;
+      }
+    }
     store.applyOps(ops);
     countEl.textContent = store.entities.size;
     panel.refresh();
@@ -144,17 +152,42 @@ const menuEl = document.getElementById('menu');
 const overlayTitleEl = document.getElementById('overlay-title');
 const overlaySubEl = document.getElementById('overlay-sub');
 
+// the player's body, spawned on demand: immediately on plain worlds, only
+// when a level is chosen on menu worlds (the menu scene has no body in it)
+function ensurePresence() {
+  if (store.get(presenceId)) return;
+  net.send([
+    {
+      op: 'spawn',
+      id: presenceId,
+      components: {
+        presence: { kind: 'player', yaw: 0 },
+        transform: { position: [player.position.x, player.position.y, player.position.z] },
+        mesh: {
+          parts: [
+            { shape: 'sphere', radius: 0.3, color: '#cfe3ff', emissive: '#aac8ff', emissiveIntensity: 1.4, castShadow: false },
+          ],
+        },
+      },
+    },
+  ]);
+}
+
 function applyLevel(level, { lock = true } = {}) {
+  player.frozen = false;
+  if (level.spawn?.position) {
+    player.spawnPose = { position: level.spawn.position, yaw: level.spawn.yaw ?? 0 };
+  }
+  player.respawn();
+  // the body must exist BEFORE the level ops run — their `$id` merges
+  // (equipment, the carried flame) land on the presence entity
+  ensurePresence();
   const ops = [];
   if (level.reset) ops.push({ op: 'reset' });
   for (const op of level.ops ?? []) {
     ops.push(JSON.parse(JSON.stringify(op).replaceAll('"$id"', JSON.stringify(presenceId))));
   }
   if (ops.length) net.send(ops);
-  if (level.spawn?.position) {
-    player.spawnPose = { position: level.spawn.position, yaw: level.spawn.yaw ?? 0 };
-  }
-  player.respawn();
   // the menu's job is done — from here the overlay is a plain pause screen
   delete overlay.dataset.menu;
   menuEl.style.display = 'none';
@@ -398,6 +431,7 @@ const panel = new Panel({
   el: document.getElementById('panel'),
   store,
   view,
+  zones,
   send: net.send,
   history,
   onDuplicate: (id) => editor.duplicate(id),
@@ -423,6 +457,12 @@ const outliner = new Outliner({
   onFocus: (id) => {
     editor.select(id);
     editor.frameSelected();
+  },
+  // the streaming geography is editable like everything else: the zone's
+  // manifest entry opens in the inspector, commits as `zone` ops
+  onZone: (name) => {
+    editor.select(null);
+    panel.showZone(name);
   },
 });
 const editor = new Editor({

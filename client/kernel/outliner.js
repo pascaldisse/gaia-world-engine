@@ -26,7 +26,7 @@ function iconFor(comps) {
 }
 
 export class Outliner {
-  constructor({ el, store, view, zones, gizmos, onPick, onFocus }) {
+  constructor({ el, store, view, zones, gizmos, onPick, onFocus, onZone }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -34,6 +34,7 @@ export class Outliner {
     this.gizmos = gizmos;
     this.onPick = onPick;
     this.onFocus = onFocus;
+    this.onZone = onZone;
     this.collapsed = new Set();
     this.search = '';
     this.selected = null;
@@ -171,6 +172,17 @@ export class Outliner {
         else this.collapsed.add(group.name);
         this.renderList();
       };
+      // manifest zones are themselves editable: bounds, load volumes,
+      // neighbors — the streaming geography, inspected like an entity
+      if (this.onZone && this.zones?.rawZone?.(group.name)) {
+        const gear = span('o-zone-edit', '⛭');
+        gear.title = 'edit zone streaming (bounds, load volumes)';
+        gear.onclick = (e) => {
+          e.stopPropagation();
+          this.onZone(group.name);
+        };
+        head.append(gear);
+      }
       this.listEl.append(head);
       if (collapsed) continue;
 

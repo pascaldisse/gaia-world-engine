@@ -367,6 +367,14 @@
         opacity: 0.55;
         color: #dbe7ff;
       }
+      #outliner .o-group .o-zone-edit {
+        float: right;
+        opacity: 0.45;
+        color: #74c7a8;
+      }
+      #outliner .o-group .o-zone-edit:hover {
+        opacity: 1;
+      }
       #outliner .o-row {
         display: flex;
         align-items: center;
@@ -559,8 +567,10 @@
     <div id="console"></div>
     <div id="palette"></div>
     <div id="overlay">
-      <h1 id="overlay-title">GAIA</h1>
-      <p id="overlay-sub">click to enter the world</p>
+      <!-- empty until the snapshot decides: a titled game claims this screen
+           as its own — the GAIA defaults must never flash first -->
+      <h1 id="overlay-title"></h1>
+      <p id="overlay-sub"></p>
       <div id="menu"></div>
       <p id="overlay-keys">WASD move &middot; mouse look &middot; shift run &middot; E grab &middot; M mute &middot; Tab create &middot; G game mode &middot; esc release</p>
     </div>

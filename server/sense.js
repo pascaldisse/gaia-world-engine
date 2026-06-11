@@ -16,10 +16,13 @@ export class Sense {
   }
 
   // agents stream the same way players do: a zoned world scopes perception
-  // to the active zone set around the observer
-  zoneSetAt(x, z) {
+  // to the active zone set around the observer. With a y, load volumes gate
+  // exactly as they do for a player; without one (top-down senses), zones
+  // with load volumes fall back to the neighbor rule.
+  zoneSetAt(x, z, y) {
     if (!this.manifest) return null;
-    return activeZones(this.manifest, zoneAt(this.manifest, x, z));
+    const current = zoneAt(this.manifest, x, z);
+    return activeZones(this.manifest, current, y === undefined ? null : [x, y, z]);
   }
 
   inZoneSet(set, comps) {
@@ -47,7 +50,7 @@ export class Sense {
     const fz = -Math.cos(yaw);
     const seen = [];
     const heard = [];
-    const zset = this.zoneSetAt(x, z);
+    const zset = this.zoneSetAt(x, z, y);
 
     for (const [id, comps] of this.world.entities) {
       if (id === as || comps.terrain) continue;

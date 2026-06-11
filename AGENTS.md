@@ -42,6 +42,20 @@ Screenshot discipline:
   with `&mute=1`). Worlds without game.json keep the plain GAIA overlay
   (the frozen demo relies on that). NOTE: picking a level (or ?level=) sends
   its `reset` + ops to the LIVE world — it rewinds shared quest state.
+  game.json can also carry `menu: { camera: { position, yaw, pitch } }` —
+  the boot menu then holds that shot over the LIVE world (player frozen, NO
+  presence spawned until a level is picked; `gaia.player.frozen` is the
+  flag, and setting `gaia.player.position` while frozen makes a free
+  streaming/screenshot probe — zones stream around the menu camera).
+- Zone streaming is data, editable live: manifest zones may carry
+  `load: [{ center: [x,z], radius, y: [min,max] }]` volumes (Dark Souls
+  style) — such a zone streams in ONLY while the observer is inside a
+  volume (or the zone is current); it no longer rides the neighbor rule.
+  The `zone` op edits the manifest at runtime and persists it:
+  `{ "op": "zone", "name": "<zone>", "value": { "load": [...] } }` (null
+  deletes a field). In the editor, the `zones` gizmo chip draws bounds +
+  dashed load cages, and the ⛭ on a zone's outliner group opens its
+  manifest entry as editable JSON in the inspector.
   — creator mode opens by itself, the entity is selected, the listed gizmo
   categories switch on, and the camera goes exactly where you said (editor
   mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so

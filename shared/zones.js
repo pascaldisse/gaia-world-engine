@@ -19,8 +19,24 @@ export function normalizeManifest(raw) {
       // world-space disc the zone claims; zones without bounds (backdrops)
       // are never "current", only always-loaded scenery
       bounds: zone.bounds ?? null,
+      // load volumes (the Dark Souls model): explicit world-space volumes
+      // that stream this zone in. A zone WITH volumes loads only while the
+      // observer stands inside one (or the zone is current) — the implicit
+      // "load with every neighbor" rule no longer applies to it.
+      load: Array.isArray(zone.load) && zone.load.length ? zone.load : null,
     })),
   };
+}
+
+// is (x, y, z) inside a load volume — a disc with an optional y range.
+// pad widens the volume: the unload test uses a margin so a player hovering
+// exactly on the boundary doesn't flicker the zone in and out.
+export function insideVolume(volume, x, y, z, pad = 0) {
+  const [cx, cz] = volume.center ?? [0, 0];
+  if (Math.hypot(x - cx, z - cz) > (volume.radius ?? 0) + pad) return false;
+  const range = volume.y;
+  if (range && y !== undefined && (y < range[0] - pad || y > range[1] + pad)) return false;
+  return true;
 }
 
 // which zone claims (x, z) — smallest containing disc wins, so a courtyard
@@ -38,14 +54,26 @@ export function zoneAt(manifest, x, z) {
 }
 
 // the set that must be resident: current zone, its neighbors (so nothing
-// visible or reachable ever pops in), and the always-zones (backdrops)
-export function activeZones(manifest, current) {
+// visible or reachable ever pops in), and the always-zones (backdrops).
+// Zones with explicit `load` volumes opt OUT of the neighbor rule: they
+// stream in only while the observer's position is inside a volume — that is
+// how a vista layer stays unloaded until the approach actually reveals it.
+// pos: [x, y, z] (y may be undefined — volume y ranges then don't gate);
+// without pos (top-down senses), load-zones fall back to the neighbor rule.
+// prev: the previously active set — members get a 2m unload margin.
+export function activeZones(manifest, current, pos = null, prev = null) {
   const set = new Set();
-  for (const zone of manifest.zones) if (zone.always) set.add(zone.name);
-  if (current) {
-    set.add(current);
-    const zone = manifest.zones.find((z) => z.name === current);
-    for (const name of zone?.neighbors ?? []) set.add(name);
+  const zone = current ? manifest.zones.find((z) => z.name === current) : null;
+  const neighbors = new Set(zone?.neighbors ?? []);
+  for (const z of manifest.zones) {
+    if (z.always || z.name === current) {
+      set.add(z.name);
+    } else if (z.load && pos) {
+      const pad = prev?.has(z.name) ? 2 : 0;
+      if (z.load.some((v) => insideVolume(v, pos[0], pos[1], pos[2], pad))) set.add(z.name);
+    } else if (neighbors.has(z.name)) {
+      set.add(z.name);
+    }
   }
   return set;
 }

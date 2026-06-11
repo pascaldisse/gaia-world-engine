@@ -27,15 +27,17 @@ const RANGES = {
 const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, view, send, history, onDuplicate, onDelete }) {
+  constructor({ el, store, view, zones, send, history, onDuplicate, onDelete }) {
     this.el = el;
     this.store = store;
     this.view = view;
+    this.zones = zones;
     this.send = send;
     this.history = history;
     this.onDuplicate = onDuplicate;
     this.onDelete = onDelete;
     this.id = null;
+    this.zoneName = null;
     this.tab = 'fields';
     this.interacting = false;
     this.commitTimer = null;
@@ -45,16 +47,32 @@ export class Panel {
 
   show(id) {
     this.id = id;
+    this.zoneName = null;
     this.el.style.display = 'flex';
     this.render();
   }
 
+  // a manifest zone in the inspector: not an entity — its document is the
+  // streaming geography (bounds disc, load volumes, neighbors), edited as
+  // JSON and committed as a `zone` op the server persists to manifest.json
+  showZone(name) {
+    this.id = null;
+    this.zoneName = name;
+    this.el.style.display = 'flex';
+    this.renderZone();
+  }
+
   hide() {
     this.id = null;
+    this.zoneName = null;
     this.el.style.display = 'none';
   }
 
   refresh() {
+    if (this.zoneName) {
+      if (!this.interacting && !this.el.contains(document.activeElement)) this.renderZone();
+      return;
+    }
     if (!this.id) return;
     if (!this.store.get(this.id)) {
       this.hide();
@@ -62,6 +80,70 @@ export class Panel {
     }
     if (this.interacting || this.el.contains(document.activeElement)) return;
     this.render();
+  }
+
+  renderZone() {
+    const raw = this.zones?.rawZone(this.zoneName);
+    if (!raw) {
+      this.hide();
+      return;
+    }
+    this.el.innerHTML = '';
+    const head = div('panel-head');
+    head.append(span('panel-title', `zone · ${this.zoneName}`));
+    head.append(button('×', () => this.hide()));
+    this.el.append(head);
+
+    const state =
+      this.view?.currentZone === this.zoneName
+        ? 'current'
+        : this.view?.activeZones?.has(this.zoneName)
+          ? 'resident'
+          : 'streamed out';
+    this.el.append(div('runtime', raw.always ? `${state} · always-loaded` : state));
+    this.el.append(
+      div(
+        'section-doc',
+        'bounds: the disc this zone claims. load: volumes that stream it in — ' +
+          '{center:[x,z], radius, y:[min,max]}; a zone WITH load volumes no longer ' +
+          'loads with its neighbors. Apply persists to manifest.json.',
+      ),
+    );
+
+    const body = div('panel-body');
+    this.el.append(body);
+    const editable = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (key !== 'name') editable[key] = value;
+    }
+    const area = document.createElement('textarea');
+    area.value = JSON.stringify(editable, null, 2);
+    area.spellcheck = false;
+    body.append(area);
+    const error = div('json-error');
+    const apply = button('apply', () => {
+      try {
+        const next = JSON.parse(area.value);
+        if (next.name) delete next.name;
+        const prev = structuredClone(editable);
+        const value = {};
+        const undoValue = {};
+        for (const key of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+          if (JSON.stringify(prev[key]) === JSON.stringify(next[key])) continue;
+          value[key] = next[key] ?? null;
+          undoValue[key] = prev[key] ?? null;
+        }
+        if (Object.keys(value).length) {
+          const redo = [{ op: 'zone', name: this.zoneName, value }];
+          this.send(redo);
+          this.history.push([{ op: 'zone', name: this.zoneName, value: undoValue }], redo, `zone.${this.zoneName}`);
+        }
+        error.textContent = '';
+      } catch (err) {
+        error.textContent = String(err.message ?? err);
+      }
+    });
+    body.append(apply, error);
   }
 
   queueCommit(name, work) {

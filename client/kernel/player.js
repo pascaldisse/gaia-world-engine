@@ -31,6 +31,10 @@ export class Player {
     this.voidY = -120;
     this.lastSafe = null; // last static ground pose — void falls return here
     this.onEvent = null; // (name, data) => {} — splash/sinking/drown/void hooks
+    // frozen: a title menu is up — the world plays behind the card but the
+    // body doesn't exist yet (no input, no gravity, no void teleports); the
+    // camera just holds the menu shot until a level is chosen
+    this.frozen = false;
 
     // while a title menu is live (overlay.dataset.menu), entering the world
     // is the menu's job — a background click must not skip level setup
@@ -64,6 +68,12 @@ export class Player {
   }
 
   update(dt) {
+    if (this.frozen) {
+      this.camera.position.copy(this.position);
+      this.euler.set(this.pitch, this.yaw, 0);
+      this.camera.quaternion.setFromEuler(this.euler);
+      return;
+    }
     const flying = this.editorMode ? this.flyActive || this.flyLatched : this.noclip;
 
     // riding: a moving platform carries the body with its frame delta

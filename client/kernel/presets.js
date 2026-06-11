@@ -63,7 +63,14 @@ export function makePresetMaterial(part) {
         const core = dot(normalize(cameraPosition.sub(positionWorld)), normalWorld).abs();
         const vert = smoothstep(0.0, 0.3, uv().y).mul(smoothstep(1.0, 0.7, uv().y));
         const near = smoothstep(2.0, 18.0, length(positionWorld.sub(cameraPosition)));
-        const g = core.mul(core).mul(vert).mul(near).mul(part.beamStrength ?? 0.5);
+        // beams are ground-level dressing: seen from high above (the Fall),
+        // their walls fill the whole frame from any view angle — isolated by
+        // hiding them, the mid-fall grey wash was ONLY these meshes. Fade by
+        // CAMERA HEIGHT, which no pitch or yaw can defeat: full below
+        // fadeAbove (m), gone by ~2.4x it. Authors override per part.
+        const fadeStart = part.fadeAbove ?? 25;
+        const high = smoothstep(fadeStart, fadeStart * 2.4, cameraPosition.y).oneMinus();
+        const g = core.mul(core).mul(vert).mul(near).mul(high).mul(part.beamStrength ?? 0.5);
         material.colorNode = color(part.color ?? '#9db8d9').mul(g);
         material.opacityNode = g;
         material.transparent = true;

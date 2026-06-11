@@ -17,6 +17,7 @@ const GEOMETRY_FIELDS = ['shape', 'size', 'radius', 'radiusTop', 'radiusBottom',
 const MATERIAL_FIELDS = [
   'preset', 'color', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
   'opacity', 'fog', 'tip', 'speed', 'glowStrength', 'beamStrength', 'sparkle', 'sky', 'glint', 'lines',
+  'fadeAbove', 'flicker',
 ];
 
 function recipeKey(part, fields) {

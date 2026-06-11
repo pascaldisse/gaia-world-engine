@@ -378,4 +378,5 @@ until the approach actually reveals it.
 ## Run
 
 `npm run dev` → world server :8420, client :5173 (or next free port).
+`GAIA_PORT` / `GAIA_CLIENT_PORT` move the pair so games run side by side.
 World persists in `world/world.json`; delete to re-seed from `world/seed.json`.

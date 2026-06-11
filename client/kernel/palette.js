@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { makeGeometry } from './geometry.js';
 
-const BASE = `http://${location.hostname}:8420`;
+const BASE = `http://${location.hostname}:${__GAIA_PORT__}`;
 
 // Prefab palette with ghost stamping. The library lives on the server as
 // plain component documents — agents can add new brushes at runtime.

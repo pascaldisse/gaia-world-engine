@@ -3,10 +3,11 @@
 import WebSocket from 'ws';
 
 const port = process.env.CDP_PORT ?? 9222;
+const clientPort = process.env.GAIA_CLIENT_PORT ?? '5173';
 const targets = await (await fetch(`http://localhost:${port}/json`)).json();
-const page = targets.find((t) => t.type === 'page' && t.url.includes(':5173'));
+const page = targets.find((t) => t.type === 'page' && t.url.includes(`:${clientPort}`));
 if (!page) {
-  console.error('no :5173 page');
+  console.error(`no :${clientPort} page`);
   process.exit(1);
 }
 const ws = new WebSocket(page.webSocketDebuggerUrl);

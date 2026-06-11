@@ -14,9 +14,11 @@ const port = process.env.CDP_PORT ?? 9222;
 const targets = await (await fetch(`http://localhost:${port}/json`)).json();
 // match localhost AND [::1] — when another project squats the IPv4 port,
 // the engine's vite still binds IPv6 and the tab runs on http://[::1]:5173
-const page = targets.find((t) => t.type === 'page' && t.url.includes(':5173'));
+// (set GAIA_CLIENT_PORT when the stack runs on alternate ports)
+const clientPort = process.env.GAIA_CLIENT_PORT ?? '5173';
+const page = targets.find((t) => t.type === 'page' && t.url.includes(`:${clientPort}`));
 if (!page) {
-  console.error('no localhost:5173 page — launch the browser with --remote-debugging-port');
+  console.error(`no localhost:${clientPort} page — launch the browser with --remote-debugging-port`);
   process.exit(1);
 }
 const ws = new WebSocket(page.webSocketDebuggerUrl);

@@ -42,7 +42,7 @@ view.ownPresence = presenceId;
 let pendingShot = null;
 
 const net = connect({
-  url: `ws://${location.hostname}:8420`,
+  url: `ws://${location.hostname}:${__GAIA_PORT__}`,
   presence: presenceId,
   onSnapshot: (entities, time, manifest, game) => {
     clock.offset = time - performance.now() / 1000;
@@ -344,7 +344,7 @@ function captureSnapshot() {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const res = await fetch(`http://${location.hostname}:8420/snapshot`, {
+        const res = await fetch(`http://${location.hostname}:${__GAIA_PORT__}/snapshot`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({

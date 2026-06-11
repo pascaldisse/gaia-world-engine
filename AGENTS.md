@@ -80,6 +80,12 @@ Screenshot discipline:
   `eval 'window.__t=0; requestAnimationFrame(()=>__t=1)'` … then read `__t`.
 - If another project squats 127.0.0.1:5173, the engine's vite still binds
   IPv6 — open `http://[::1]:5173/` instead (cdp.mjs matches both).
+- The whole stack moves ports via env: `GAIA_PORT` (world server; vite
+  injects it into the client as `__GAIA_PORT__`) and `GAIA_CLIENT_PORT`
+  (vite). The Tomb game's `game/dev.sh` defaults to 8421/5174 so it runs
+  beside other games on 8420/5173. Set `GAIA_CLIENT_PORT` for
+  `tools/cdp.mjs` / `profile-seam.mjs` tab matching, and point screenshot/
+  op/sense curls at the right server port.
 - You can drive a full play-test over CDP without a keyboard: set
   `gaia.player.locked = true`, toggle modes via `gaia.editor`, and hold keys
   with `gaia.player.keys.add("KeyW")` / `.delete(...)`. Verify climbs by

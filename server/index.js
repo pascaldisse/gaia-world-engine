@@ -10,7 +10,9 @@ import { Triggers } from './triggers.js';
 import { normalizeManifest, placeEntity, zoneAt } from '../shared/zones.js';
 import { SCHEMA } from '../shared/schema.js';
 
-const PORT = 8420;
+// GAIA_PORT moves the whole stack (vite injects the same value into the
+// client as __GAIA_PORT__) so two worlds can run side by side
+const PORT = Number(process.env.GAIA_PORT ?? 8420);
 // GAIA_WORLD points the engine at any world project directory (separate repo);
 // defaults to the engine's own world/.
 const worldDir = process.env.GAIA_WORLD

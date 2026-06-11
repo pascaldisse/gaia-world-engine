@@ -27,7 +27,7 @@ const RANGES = {
 const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditPath }) {
+  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditPath, onEditCarves }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -37,6 +37,7 @@ export class Panel {
     this.onDuplicate = onDuplicate;
     this.onDelete = onDelete;
     this.onEditPath = onEditPath;
+    this.onEditCarves = onEditCarves;
     this.id = null;
     this.sceneName = null;
     this.tab = 'fields';
@@ -235,12 +236,19 @@ export class Panel {
       });
       section.append(content);
       // tube parts get a door into the world: Edit Path hands the spline to
-      // the editor (click a point, W moves it, R scales its thickness)
+      // the editor (click a point, W moves it, R scales its thickness) —
+      // and Edit Holes does the same for the boolean cutters (`carve`):
+      // ghost meshes you grab with the entity gizmos
       if (name === 'mesh') {
         const parts = comps.mesh?.parts ?? [comps.mesh];
         parts.forEach((part, i) => {
-          if (part?.shape !== 'tube' || !Array.isArray(part.path) || part.path.length < 2) return;
-          section.append(button(parts.length > 1 ? `edit path · part ${i}` : 'edit path', () => this.onEditPath?.(this.id, i)));
+          const tag = parts.length > 1 ? ` · part ${i}` : '';
+          if (part?.shape === 'tube' && Array.isArray(part.path) && part.path.length >= 2) {
+            section.append(button(`edit path${tag}`, () => this.onEditPath?.(this.id, i)));
+          }
+          if (!part) return;
+          const n = Array.isArray(part.carve) ? part.carve.length : 0;
+          section.append(button(`edit holes (${n})${tag}`, () => this.onEditCarves?.(this.id, i)));
         });
       }
       body.append(section);

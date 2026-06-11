@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { heightAt } from './terrain.js';
+import { makeGeometry } from './geometry.js';
 
 // Creator mode with Unity controls: Q view / W move / E rotate / R scale,
 // F frames the selection, hold RMB to fly (WASD + Q/E down/up), scroll dollies.
@@ -30,6 +31,7 @@ export class Editor {
     this.lastStream = 0;
     this.dragStart = null;
     this.pathEdit = null;
+    this.carveEdit = null;
     this.dir = new THREE.Vector3();
     this.orbiting = false;
     this.pivot = new THREE.Vector3();
@@ -45,14 +47,20 @@ export class Editor {
     this.helper.visible = false;
     scene.add(this.helper);
 
-    // path mode follows the data, not its own edits: undo, another agent's
-    // op, or our own commit echo all land here and re-place the handles
+    // path/hole modes follow the data, not their own edits: undo, another
+    // agent's op, or our own commit echo all land here and re-place handles
     store.onChange((event) => {
-      if (!this.pathEdit) return;
-      if (event.kind === 'snapshot') this.refreshPathHandles();
-      else if (event.id !== this.pathEdit.id) return;
-      else if (event.kind === 'despawn') this.exitPathEdit();
-      else if (event.kind === 'set' && event.component === 'mesh') this.refreshPathHandles();
+      if (this.pathEdit) {
+        if (event.kind === 'snapshot') this.refreshPathHandles();
+        else if (event.id !== this.pathEdit.id) return;
+        else if (event.kind === 'despawn') this.exitPathEdit();
+        else if (event.kind === 'set' && event.component === 'mesh') this.refreshPathHandles();
+      } else if (this.carveEdit) {
+        if (event.kind === 'snapshot') this.refreshCarveHandles();
+        else if (event.id !== this.carveEdit.id) return;
+        else if (event.kind === 'despawn') this.exitCarveEdit();
+        else if (event.kind === 'set' && event.component === 'mesh') this.refreshCarveHandles();
+      }
     });
 
     renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -74,6 +82,10 @@ export class Editor {
       if (this.tc.axis) return; // gizmo interaction
       if (this.pathEdit) {
         this.pickPathPoint(e); // path mode owns the click — esc leaves
+        return;
+      }
+      if (this.carveEdit) {
+        this.pickCarve(e); // hole mode too
         return;
       }
       if (this.palette.armed) return; // palette stamps
@@ -144,6 +156,38 @@ export class Editor {
         return;
       }
       if (e.metaKey || e.ctrlKey) return;
+      if (this.carveEdit) {
+        // hole mode owns the keys: delete removes the CUTTER, never the
+        // entity — the entity is unreachable until esc leaves the mode
+        switch (e.code) {
+          case 'KeyQ':
+            this.setTool(null);
+            break;
+          case 'KeyW':
+            this.setTool('translate');
+            break;
+          case 'KeyE':
+            this.setTool('rotate');
+            break;
+          case 'KeyR':
+            this.setTool('scale');
+            break;
+          case 'KeyF':
+            this.frameSelected();
+            break;
+          case 'KeyN':
+            this.addCarve();
+            break;
+          case 'Delete':
+          case 'Backspace':
+            this.removeCarve();
+            break;
+          case 'Escape':
+            this.exitCarveEdit();
+            break;
+        }
+        return;
+      }
       if (this.pathEdit) {
         // a spline point translates and thickens — no rotate, and delete
         // still means "delete the entity", too heavy a key to leave armed
@@ -264,6 +308,7 @@ export class Editor {
 
   select(id) {
     this.exitPathEdit();
+    this.exitCarveEdit();
     this.selected = id;
     if (this.selBox) {
       this.scene.remove(this.selBox);
@@ -308,6 +353,7 @@ export class Editor {
   setTool(tool) {
     this.tool = tool;
     if (this.pathEdit) this.attachPathGizmo();
+    else if (this.carveEdit) this.attachCarveGizmo();
     else this.attachGizmo();
   }
 
@@ -558,6 +604,283 @@ export class Editor {
     pe.ring.scale.setScalar(Math.max(0.05, liveRadius ?? this.pointRadius(pe.index)));
   }
 
+  // ---- hole edit: boolean cutters as grabbable ghost meshes ----
+  // The cutters hang inside the rock as translucent red shapes — click one,
+  // and the same W/E/R gizmos entities use move, turn and size it; the hole
+  // follows on release (carves re-run CSG per rebuild, so the ghost is the
+  // live preview). The DATA stays the flat `carve` array on the mesh part:
+  // the "children" exist only as this lens, never as nested entities.
+
+  editCarves(id, partIndex = 0) {
+    if (this.player.gameMode) return;
+    if (this.mode !== 'create') this.enterCreate();
+    this.select(id); // also tears down any previous path/hole session
+    if (!this.store.get(id)) return;
+    this.tc.detach();
+    this.helper.visible = false;
+    this.carveEdit = {
+      id,
+      part: partIndex,
+      index: null,
+      handles: [],
+      proxy: new THREE.Object3D(),
+      root: null,
+      frame: null,
+      dragging: false,
+      dragMode: null,
+      startMesh: null,
+      startEntry: null,
+    };
+    this.scene.add(this.carveEdit.proxy);
+    if (!this.tool) this.tool = 'translate';
+    this.buildCarveHandles();
+    if (this.carveEdit) hintText('hole edit — click a cutter · W move E turn R size · N new ⌫ remove · esc done');
+  }
+
+  exitCarveEdit() {
+    if (!this.carveEdit) return;
+    this.disposeCarveVisuals();
+    this.scene.remove(this.carveEdit.proxy);
+    this.carveEdit = null;
+    this.tc.detach();
+    this.tc.showX = this.tc.showY = this.tc.showZ = true;
+    this.helper.visible = false;
+    hintText('');
+    this.attachGizmo();
+  }
+
+  carvePart() {
+    const ce = this.carveEdit;
+    const mesh = this.store.get(ce.id)?.mesh;
+    return (mesh?.parts ?? [mesh])[ce.part] ?? null;
+  }
+
+  carveEntry(i) {
+    const part = this.carvePart();
+    return Array.isArray(part?.carve) ? part.carve[i] : null;
+  }
+
+  // handle space is the part's own frame (scene ∘ entity ∘ part transform),
+  // so a handle's pose IS a carve coordinate — no conversion drift
+  buildCarveHandles() {
+    const ce = this.carveEdit;
+    this.disposeCarveVisuals();
+    const comps = this.store.get(ce.id);
+    const part = this.carvePart();
+    if (!part) {
+      this.exitCarveEdit();
+      return;
+    }
+    const root = new THREE.Group();
+    const group = this.view.getGroup(ce.id);
+    if (group) {
+      group.updateWorldMatrix(true, false);
+      root.applyMatrix4(group.matrixWorld);
+    } else {
+      const t = comps.transform ?? {};
+      root.position.set(...(t.position ?? [0, 0, 0]));
+      root.rotation.set(...(t.rotation ?? [0, 0, 0]));
+    }
+    const frame = new THREE.Group();
+    frame.position.set(...(part.position ?? [0, 0, 0]));
+    frame.rotation.set(...(part.rotation ?? [0, 0, 0]));
+    if (part.scale) {
+      if (Array.isArray(part.scale)) frame.scale.set(...part.scale);
+      else frame.scale.setScalar(part.scale);
+    }
+    root.add(frame);
+    this.scene.add(root);
+    root.updateWorldMatrix(true, true);
+    ce.root = root;
+    ce.frame = frame;
+    (Array.isArray(part.carve) ? part.carve : []).forEach((c, i) => {
+      const material = new THREE.MeshBasicMaterial({
+        color: '#ff6b6b',
+        transparent: true,
+        opacity: 0.3,
+        depthTest: false,
+        depthWrite: false,
+        fog: false,
+        side: THREE.DoubleSide,
+      });
+      // the ghost IS the cutter's recipe — same geometry the CSG evaluates
+      const handle = new THREE.Mesh(makeGeometry(c), material);
+      handle.position.set(...(c.position ?? [0, 0, 0]));
+      if (c.rotation) handle.rotation.set(...c.rotation);
+      handle.userData.carveIndex = i;
+      handle.renderOrder = 998;
+      frame.add(handle);
+      ce.handles.push(handle);
+    });
+  }
+
+  disposeCarveVisuals() {
+    const ce = this.carveEdit;
+    if (!ce) return;
+    if (ce.root) {
+      ce.root.traverse((node) => {
+        // geometries come from the shared recipe cache — only the ghost
+        // materials are ours to dispose
+        if (node.geometry && !node.geometry.userData?.shared) node.geometry.dispose();
+        node.material?.dispose();
+      });
+      this.scene.remove(ce.root);
+    }
+    ce.root = ce.frame = null;
+    ce.handles = [];
+  }
+
+  refreshCarveHandles() {
+    const ce = this.carveEdit;
+    if (!ce || ce.dragging) return;
+    const index = ce.index;
+    this.buildCarveHandles();
+    if (!this.carveEdit) return; // the part vanished — session closed
+    if (index !== null && index < ce.handles.length) this.selectCarve(index);
+    else {
+      ce.index = null;
+      this.tc.detach();
+      this.helper.visible = false;
+    }
+  }
+
+  pickCarve(event) {
+    this.pointer.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    const hits = this.raycaster.intersectObjects(this.carveEdit.handles, false);
+    if (hits.length) this.selectCarve(hits[0].object.userData.carveIndex);
+    // a miss keeps the mode — deliberate exit only (esc)
+  }
+
+  selectCarve(i) {
+    const ce = this.carveEdit;
+    ce.index = i;
+    for (const h of ce.handles) h.material.color.set(h.userData.carveIndex === i ? '#7df9ff' : '#ff6b6b');
+    const h = ce.handles[i];
+    h.getWorldPosition(ce.proxy.position);
+    h.getWorldQuaternion(ce.proxy.quaternion);
+    ce.proxy.scale.set(1, 1, 1);
+    this.attachCarveGizmo();
+  }
+
+  attachCarveGizmo() {
+    const ce = this.carveEdit;
+    if (!ce || ce.index === null || !this.tool) {
+      this.tc.detach();
+      this.helper.visible = false;
+      return;
+    }
+    this.tc.setMode(this.tool);
+    // sizing follows the cutter's nature: a box scales on three axes, a
+    // sphere has one radius (X), a cylinder radius (X) + height (Y)
+    const entry = this.carveEntry(ce.index);
+    const scale = this.tool === 'scale';
+    this.tc.showX = true;
+    this.tc.showY = !scale || !!entry?.size || entry?.height !== undefined;
+    this.tc.showZ = !scale || !!entry?.size;
+    this.tc.attach(ce.proxy);
+    this.helper.visible = true;
+  }
+
+  onCarveDragChanged(dragging) {
+    const ce = this.carveEdit;
+    if (ce.index === null) return;
+    if (dragging) {
+      ce.dragging = true;
+      ce.dragMode = this.tool;
+      ce.startMesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
+      ce.startEntry = structuredClone(this.carveEntry(ce.index) ?? {});
+    } else {
+      ce.dragging = false;
+      const value = this.carveCommitMesh();
+      ce.proxy.scale.set(1, 1, 1);
+      if (!value) return;
+      const redo = [{ op: 'set', id: ce.id, component: 'mesh', value }];
+      this.send(redo);
+      this.history.push([{ op: 'set', id: ce.id, component: 'mesh', value: ce.startMesh }], redo);
+    }
+  }
+
+  onCarveChange() {
+    const ce = this.carveEdit;
+    if (ce.index === null || !ce.dragging) return;
+    const h = ce.handles[ce.index];
+    if (ce.dragMode === 'rotate') {
+      ce.frame.getWorldQuaternion(_q);
+      h.quaternion.copy(_q.invert().multiply(ce.proxy.quaternion));
+    } else if (ce.dragMode === 'scale') {
+      const entry = ce.startEntry;
+      if (!entry.size && entry.height === undefined) h.scale.setScalar(ce.proxy.scale.x);
+      else h.scale.copy(ce.proxy.scale);
+    } else {
+      h.position.copy(ce.frame.worldToLocal(_v.copy(ce.proxy.position)));
+    }
+  }
+
+  carveCommitMesh() {
+    const ce = this.carveEdit;
+    const mesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
+    const part = mesh ? (mesh.parts ?? [mesh])[ce.part] : null;
+    const entry = part && Array.isArray(part.carve) ? part.carve[ce.index] : null;
+    if (!entry) return null;
+    const h = ce.handles[ce.index];
+    if (ce.dragMode === 'rotate') {
+      _e.setFromQuaternion(h.quaternion);
+      entry.rotation = [r2(_e.x), r2(_e.y), r2(_e.z)];
+    } else if (ce.dragMode === 'scale') {
+      const s = [ce.proxy.scale.x, ce.proxy.scale.y, ce.proxy.scale.z];
+      if (entry.size) entry.size = entry.size.map((v, i) => r2(Math.max(0.1, v * s[i])));
+      else {
+        if (entry.radius !== undefined) entry.radius = r2(Math.max(0.1, entry.radius * s[0]));
+        if (entry.height !== undefined) entry.height = r2(Math.max(0.1, entry.height * s[1]));
+      }
+    } else {
+      entry.position = [r2(h.position.x), r2(h.position.y), r2(h.position.z)];
+    }
+    return mesh;
+  }
+
+  // N: a new cutter is born where you look — raycast against the entity's
+  // own surface; if the view misses it, 8m ahead of the camera
+  addCarve() {
+    const ce = this.carveEdit;
+    const startMesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
+    const mesh = structuredClone(startMesh);
+    const part = mesh ? (mesh.parts ?? [mesh])[ce.part] : null;
+    if (!part) return;
+    this.raycaster.setFromCamera(_screenCenter, this.camera);
+    const group = this.view.getGroup(ce.id);
+    const hits = group ? this.raycaster.intersectObject(group, true) : [];
+    if (hits.length) _v.copy(hits[0].point);
+    else this.camera.getWorldPosition(_v).addScaledVector(this.camera.getWorldDirection(this.dir), 8);
+    const local = ce.frame.worldToLocal(_v);
+    part.carve = Array.isArray(part.carve) ? part.carve : [];
+    part.carve.push({ shape: 'box', size: [2, 2, 2], position: [r2(local.x), r2(local.y), r2(local.z)] });
+    const redo = [{ op: 'set', id: ce.id, component: 'mesh', value: mesh }];
+    this.send(redo);
+    this.history.push([{ op: 'set', id: ce.id, component: 'mesh', value: startMesh }], redo);
+    // the commit echo rebuilds the handles — then hand the newborn the gizmo
+    const newborn = part.carve.length - 1;
+    setTimeout(() => {
+      if (this.carveEdit?.id === ce.id && newborn < this.carveEdit.handles.length) this.selectCarve(newborn);
+    }, 150);
+  }
+
+  removeCarve() {
+    const ce = this.carveEdit;
+    if (ce.index === null) return;
+    const startMesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
+    const mesh = structuredClone(startMesh);
+    const part = mesh ? (mesh.parts ?? [mesh])[ce.part] : null;
+    if (!part || !Array.isArray(part.carve) || !part.carve[ce.index]) return;
+    part.carve.splice(ce.index, 1);
+    if (!part.carve.length) delete part.carve;
+    ce.index = null;
+    const redo = [{ op: 'set', id: ce.id, component: 'mesh', value: mesh }];
+    this.send(redo);
+    this.history.push([{ op: 'set', id: ce.id, component: 'mesh', value: startMesh }], redo);
+  }
+
   startOrbit(e) {
     this.orbiting = true;
     this.lastX = e.clientX;
@@ -615,6 +938,10 @@ export class Editor {
       this.onPathDragChanged(dragging);
       return;
     }
+    if (this.carveEdit) {
+      this.onCarveDragChanged(dragging);
+      return;
+    }
     if (!this.selected) return;
     if (dragging) {
       this.view.suppress(this.selected);
@@ -640,6 +967,10 @@ export class Editor {
   onObjectChange() {
     if (this.pathEdit) {
       this.onPathChange();
+      return;
+    }
+    if (this.carveEdit) {
+      this.onCarveChange();
       return;
     }
     const now = performance.now();
@@ -725,6 +1056,9 @@ function r2(v) {
 
 const _v = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+const _screenCenter = new THREE.Vector2(0, 0);
 
 // expand radii (single number, short array, or legacy radius) to one entry
 // per path point — the tube maps radius i to point i, clamping past the

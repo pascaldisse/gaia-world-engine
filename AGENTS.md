@@ -210,3 +210,11 @@ Screenshot discipline:
   ops. Long systems: author as ~100m SEGMENTS (surfaceAt culls meshes whose
   entity origin is >60m away in xz; segments also stream better). Walls
   don't block (blockers are boxes) — fine for caves, gate the mouths.
+- Hands-on lenses in the inspector's mesh section: `edit path` (tube
+  splines — click a point, W moves, R thickens) and `edit holes` (the
+  `carve` cutters as translucent red ghost meshes inside the rock — click
+  one, W/E/R move/turn/size it with the entity gizmos, N births a cutter
+  where you look, ⌫ removes the selected one, esc leaves). The mesh
+  rebuilds on RELEASE (carves re-run CSG per rebuild); each release is one
+  undoable mesh op. The data stays the flat `carve` array on the part —
+  the "child cutters" exist only as the editor lens, never as entities.

@@ -665,6 +665,7 @@ const panel = new Panel({
   onDuplicate: (id) => editor.duplicate(id),
   onDelete: (id) => editor.delete(id),
   onEditPath: (id, part) => editor.editPath(id, part),
+  onEditCarves: (id, part) => editor.editCarves(id, part),
 });
 const palette = new Palette({
   el: document.getElementById('palette'),

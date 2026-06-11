@@ -33,6 +33,17 @@ try {
   manifest = null;
 }
 
+// game.json: a world can declare itself a titled game — title screen text
+// plus level-select entries (spawn pose, setup ops with `$id` standing for
+// the choosing presence). Worlds without one keep the default GAIA overlay.
+let game = null;
+try {
+  game = JSON.parse(fs.readFileSync(path.join(worldDir, 'game.json'), 'utf8'));
+  console.log(`[gaia] game: ${game.title ?? 'untitled'} (${game.levels?.length ?? 0} levels)`);
+} catch {
+  game = null;
+}
+
 // zone seeds are read at boot and again by the `reset` op — placed into
 // world-space and stamped with their zone every time
 function loadZoneSeedOps(zone) {
@@ -392,7 +403,7 @@ function nums(q, keys) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (socket) => {
-  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest, ...world.snapshot() }));
+  socket.send(JSON.stringify({ type: 'snapshot', time: worldTime(), manifest, game, ...world.snapshot() }));
   socket.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);

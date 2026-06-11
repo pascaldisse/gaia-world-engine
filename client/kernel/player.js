@@ -32,7 +32,11 @@ export class Player {
     this.lastSafe = null; // last static ground pose — void falls return here
     this.onEvent = null; // (name, data) => {} — splash/sinking/drown/void hooks
 
-    overlay.addEventListener('click', () => dom.requestPointerLock());
+    // while a title menu is live (overlay.dataset.menu), entering the world
+    // is the menu's job — a background click must not skip level setup
+    overlay.addEventListener('click', () => {
+      if (!overlay.dataset.menu) dom.requestPointerLock();
+    });
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === dom;
       overlay.style.display = this.locked || this.editorMode ? 'none' : 'flex';

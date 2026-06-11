@@ -44,7 +44,7 @@ let pendingShot = null;
 const net = connect({
   url: `ws://${location.hostname}:8420`,
   presence: presenceId,
-  onSnapshot: (entities, time, manifest) => {
+  onSnapshot: (entities, time, manifest, game) => {
     clock.offset = time - performance.now() / 1000;
     let spawnComp = null;
     for (const comps of Object.values(entities)) {
@@ -80,6 +80,19 @@ const net = connect({
       } else if (spawnComp?.gameMode && !player.gameMode) {
         // a world can declare itself a game: editing locked until G
         editor.toggleGameMode();
+      }
+      // a world with game.json gets its own title screen — and ?level=<id>
+      // starts straight at a level select entry with the SAME setup logic
+      // (agents and humans alike skip the walk to wherever they're testing)
+      const lvl = params.get('level');
+      const deepLevel = lvl && game?.levels?.find((l) => l.id === lvl || l.name === lvl);
+      if (deepLevel) {
+        setTimeout(() => {
+          overlay.style.display = 'none';
+          applyLevel(deepLevel, { lock: false });
+        }, 400);
+      } else if (game && !params.has('create')) {
+        buildTitleScreen(game);
       }
     }
     // zone set must be known before the snapshot builds, so only the
@@ -121,6 +134,72 @@ const net = connect({
     pendingShot = id;
   },
 });
+
+// ---- title screen: a world's game.json replaces the default overlay with
+// NEW GAME / LEVEL SELECT. A level entry is pure data: { id, name, spawn:
+// {position, yaw}, reset, ops } — its ops run with `$id` resolved to the
+// choosing presence (the same convention interacts use), so "equipment and
+// stats" are just components granted by ops. The same entries power ?level=.
+const menuEl = document.getElementById('menu');
+const overlayTitleEl = document.getElementById('overlay-title');
+const overlaySubEl = document.getElementById('overlay-sub');
+
+function applyLevel(level, { lock = true } = {}) {
+  const ops = [];
+  if (level.reset) ops.push({ op: 'reset' });
+  for (const op of level.ops ?? []) {
+    ops.push(JSON.parse(JSON.stringify(op).replaceAll('"$id"', JSON.stringify(presenceId))));
+  }
+  if (ops.length) net.send(ops);
+  if (level.spawn?.position) {
+    player.spawnPose = { position: level.spawn.position, yaw: level.spawn.yaw ?? 0 };
+  }
+  player.respawn();
+  // the menu's job is done — from here the overlay is a plain pause screen
+  delete overlay.dataset.menu;
+  menuEl.style.display = 'none';
+  overlaySubEl.textContent = 'click to continue';
+  if (lock) renderer.domElement.requestPointerLock();
+}
+
+function buildTitleScreen(game) {
+  overlayTitleEl.textContent = game.title ?? 'GAIA';
+  overlaySubEl.textContent = game.subtitle ?? '';
+  overlay.dataset.menu = '1';
+  menuEl.replaceChildren();
+  menuEl.style.display = 'flex';
+  const levels = game.levels ?? [];
+  const option = (label, onPick) => {
+    const el = document.createElement('div');
+    el.className = 'menu-option';
+    el.textContent = label;
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onPick();
+    });
+    menuEl.appendChild(el);
+    return el;
+  };
+  option('NEW GAME', () => applyLevel(levels[0] ?? { reset: true }));
+  if (levels.length > 1) {
+    const list = document.createElement('div');
+    list.className = 'menu-levels';
+    option('LEVEL SELECT', () => {
+      list.style.display = list.style.display === 'flex' ? 'none' : 'flex';
+    });
+    for (const level of levels) {
+      const el = document.createElement('div');
+      el.className = 'menu-level';
+      el.textContent = level.name ?? level.id;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyLevel(level);
+      });
+      list.appendChild(el);
+    }
+    menuEl.appendChild(list);
+  }
+}
 
 function handleEvents(ops) {
   for (const op of ops) {

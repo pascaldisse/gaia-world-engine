@@ -32,6 +32,16 @@ Screenshot discipline:
 - You cannot press keys in the browser. To screenshot the EDITOR (outliner,
   gizmos, selection) open a deep-link instead:
   `?create=1&select=<id>&gizmos=colliders,triggers,water,lights,sounds,paths,areas,zones&pos=x,y,z&yaw=r&pitch=r`
+- A world with `game.json` (next to its manifest) gets a TITLE SCREEN: the
+  default overlay becomes `{ title, subtitle, levels: [...] }` with NEW GAME /
+  LEVEL SELECT. A level entry is pure data — `{ id, name, spawn: {position,
+  yaw}, reset, ops }`; its ops run with `"$id"` resolved to the choosing
+  presence (the interact convention), so "equipment/stats" are just granted
+  components. `?level=<id>` applies the SAME entry and skips the overlay —
+  the fastest way to start a verification session deep in a game (combine
+  with `&mute=1`). Worlds without game.json keep the plain GAIA overlay
+  (the frozen demo relies on that). NOTE: picking a level (or ?level=) sends
+  its `reset` + ops to the LIVE world — it rewinds shared quest state.
   — creator mode opens by itself, the entity is selected, the listed gizmo
   categories switch on, and the camera goes exactly where you said (editor
   mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so

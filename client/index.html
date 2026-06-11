@@ -52,6 +52,47 @@
         font-size: 13px;
         opacity: 0.75;
       }
+      #menu {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        margin-top: 22px;
+      }
+      #menu .menu-option {
+        font-size: 15px;
+        letter-spacing: 0.34em;
+        text-indent: 0.34em;
+        padding: 7px 22px;
+        opacity: 0.72;
+        cursor: pointer;
+        user-select: none;
+        transition: opacity 0.15s ease, text-shadow 0.15s ease;
+      }
+      #menu .menu-option:hover {
+        opacity: 1;
+        text-shadow: 0 0 14px rgba(232, 240, 255, 0.7);
+      }
+      #menu .menu-levels {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        margin-top: 6px;
+      }
+      #menu .menu-level {
+        font-size: 12px;
+        letter-spacing: 0.26em;
+        text-indent: 0.26em;
+        padding: 5px 18px;
+        opacity: 0.6;
+        cursor: pointer;
+        user-select: none;
+      }
+      #menu .menu-level:hover {
+        opacity: 1;
+        text-shadow: 0 0 12px rgba(232, 240, 255, 0.7);
+      }
       #crosshair {
         position: fixed;
         top: 50%;
@@ -518,9 +559,10 @@
     <div id="console"></div>
     <div id="palette"></div>
     <div id="overlay">
-      <h1>GAIA</h1>
-      <p>click to enter the world</p>
-      <p>WASD move &middot; mouse look &middot; shift run &middot; E grab &middot; M mute &middot; Tab create &middot; G game mode &middot; esc release</p>
+      <h1 id="overlay-title">GAIA</h1>
+      <p id="overlay-sub">click to enter the world</p>
+      <div id="menu"></div>
+      <p id="overlay-keys">WASD move &middot; mouse look &middot; shift run &middot; E grab &middot; M mute &middot; Tab create &middot; G game mode &middot; esc release</p>
     </div>
     <script type="module" src="/main.js"></script>
   </body>

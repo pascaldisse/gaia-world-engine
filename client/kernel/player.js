@@ -16,6 +16,9 @@ export class Player {
     this.flyLatched = false;
     this.noclip = false;
     this.eyeHeight = 1.7;
+    this.eyeStand = 1.7;
+    this.eyeCrouch = 1.0;
+    this.jumpLocked = false; // held Space = one jump until release
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
     // bodies in space: vertical velocity (gravity), swim state, ridden platform
     this.vy = 0;
@@ -82,7 +85,18 @@ export class Player {
       }
     }
 
-    const speedBase = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 14 : 6;
+    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked);
+
+    // crouch (hold ctrl or C): the eye sinks toward crouch height; grounded
+    // follow lowers the camera with it, and mid-air the FEET rise instead —
+    // which is exactly what makes the crouch-jump clear higher ledges
+    const crouching =
+      canMove && !flying && !this.swimming &&
+      (this.keys.has('ControlLeft') || this.keys.has('ControlRight') || this.keys.has('KeyC'));
+    this.eyeHeight += ((crouching ? this.eyeCrouch : this.eyeStand) - this.eyeHeight) * Math.min(1, dt * 12);
+    if (!this.keys.has('Space')) this.jumpLocked = false;
+
+    const speedBase = crouching ? 3 : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 14 : 6;
     const speed = this.swimming && !flying ? speedBase * 0.4 : speedBase;
     // Unity-style flythrough moves along the view direction (pitch included)
     const forward = flying
@@ -95,7 +109,6 @@ export class Player {
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
     const move = new THREE.Vector3();
-    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked);
     if (canMove) {
       if (this.keys.has('KeyW')) move.add(forward);
       if (this.keys.has('KeyS')) move.sub(forward);
@@ -185,10 +198,20 @@ export class Player {
           this.sinking = false;
           this.swimTime = 0;
         }
-        if (feet <= groundY + 0.35) {
-          // grounded: follow the ground (and remember a platform under us)
-          this.vy = 0;
-          this.position.y += (groundY + this.eyeHeight - this.position.y) * Math.min(1, dt * 12);
+        if (feet <= groundY + 0.35 && this.vy <= 0) {
+          // grounded — and Space leaves it: vy 8 against gravity 24 is a
+          // ~1.3m arc, Half-Life-sized. The vy<=0 guard above is what lets
+          // the jump survive its first frame inside the ground-snap band.
+          if (canMove && !flying && this.keys.has('Space') && !this.jumpLocked) {
+            this.jumpLocked = true;
+            this.vy = 8;
+            this.position.y += this.vy * dt;
+            this.onEvent?.('jump', { x: r2(x), z: r2(z) });
+          } else {
+            // follow the ground (and remember a platform under us)
+            this.vy = 0;
+            this.position.y += (groundY + this.eyeHeight - this.position.y) * Math.min(1, dt * 12);
+          }
           if (platformId) {
             if (this.platform?.id !== platformId) {
               const group = this.view?.getGroup(platformId);
@@ -202,8 +225,9 @@ export class Player {
             this.lastSafe = { x: this.position.x, y: groundY + this.eyeHeight, z: this.position.z };
           }
         } else {
-          // airborne: gravity (the Fall is just a very long version of this)
-          this.platform = null;
+          // airborne: gravity (the Fall is just a very long version of this).
+          // The ridden platform is KEPT — jumping on the moving ferry must
+          // not leave you hanging over the water it just sailed out from under
           this.vy = Math.max(this.vy - 24 * dt, -26);
           this.position.y += this.vy * dt;
           if (this.position.y - this.eyeHeight <= groundY) {

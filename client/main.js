@@ -167,6 +167,7 @@ document.addEventListener('keydown', (e) => {
   const el = document.activeElement;
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
   debugEl.style.display = debugEl.style.display === 'flex' ? 'none' : 'flex';
+  if (debugEl.style.display === 'flex') highlightDebugKnob();
 });
 function debugKnob(name, onChange, format = (v) => `${v.toFixed(2)}×`) {
   const input = document.getElementById(`debug-${name}`);
@@ -193,6 +194,40 @@ debugKnob('storm', (v) => {
       }
     }
   }, 250);
+});
+// flame: reach (falloff distance) of the light YOUR presence carries —
+// does nothing until a world has granted you one
+let flameTimer = null;
+debugKnob('flame', (v) => {
+  clearTimeout(flameTimer);
+  flameTimer = setTimeout(() => {
+    if (!store.get(presenceId)?.light) return;
+    net.send([{ op: 'merge', id: presenceId, component: 'light', value: { distance: v } }]);
+  }, 150);
+}, (v) => `${v.toFixed(0)}m`);
+
+// the debug menu drives with arrow keys too: ↑/↓ pick a knob, ←/→ nudge it
+const debugKnobNames = ['exposure', 'skylight', 'fog', 'storm', 'flame'];
+let debugSelected = 0;
+function highlightDebugKnob() {
+  debugKnobNames.forEach((name, i) => {
+    document.getElementById(`debug-${name}`).parentElement.classList.toggle('selected', i === debugSelected);
+  });
+}
+document.addEventListener('keydown', (e) => {
+  if (debugEl.style.display !== 'flex') return;
+  if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+    e.preventDefault();
+    debugSelected = (debugSelected + (e.code === 'ArrowDown' ? 1 : debugKnobNames.length - 1)) % debugKnobNames.length;
+    highlightDebugKnob();
+  } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+    e.preventDefault(); // ours, not the focused slider's — no double steps
+    const input = document.getElementById(`debug-${debugKnobNames[debugSelected]}`);
+    const step = Number(input.step) || 1;
+    const next = Number(input.value) + (e.code === 'ArrowRight' ? step : -step);
+    input.value = String(Math.min(Number(input.max), Math.max(Number(input.min), next)));
+    input.dispatchEvent(new Event('input'));
+  }
 });
 
 const titleEl = document.getElementById('title');

@@ -238,6 +238,9 @@ Three primitives make it real:
       reconnects to the same presence entity. What a session was granted —
       a carried light, later an inventory — needs game-side re-grant logic
       only across full disconnects (the server reaps dead presences).
+- [x] Look-dev knobs (~): a `flame` slider tunes the reach of the light
+      your presence carries, and the whole menu drives with arrow keys —
+      ↑/↓ select a knob, ←/→ nudge it.
 
 ## Later
 

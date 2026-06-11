@@ -397,6 +397,12 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+      #debug label.selected {
+        background: rgba(125, 249, 255, 0.14);
+        outline: 1px solid rgba(125, 249, 255, 0.4);
       }
       #debug input[type='range'] {
         width: 140px;
@@ -502,6 +508,7 @@
       <label>skylight <input id="debug-skylight" type="range" min="0" max="1.5" step="0.02" value="0" /> <span id="debug-skylight-value">+0.00</span></label>
       <label>fog <input id="debug-fog" type="range" min="0.2" max="2.5" step="0.05" value="1" /> <span id="debug-fog-value">1.00×</span></label>
       <label>storm <input id="debug-storm" type="range" min="0.2" max="5" step="0.1" value="1" /> <span id="debug-storm-value">1.00×</span></label>
+      <label>flame <input id="debug-flame" type="range" min="5" max="60" step="1" value="30" /> <span id="debug-flame-value">30m</span></label>
     </div>
     <div id="crosshair"></div>
     <div id="hint"></div>

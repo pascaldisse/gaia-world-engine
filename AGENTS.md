@@ -56,6 +56,13 @@ Screenshot discipline:
   deletes a field). In the editor, the `zones` gizmo chip draws bounds +
   dashed load cages, and the ⛭ on a zone's outliner group opens its
   manifest entry as editable JSON in the inspector.
+- Creator mode has a viewbar (top center): `lit / unlit / wire` draw modes
+  and a `■ stop` toggle. Unlit shows floored albedo with fog and exposure
+  neutral — edit a midnight zone in daylight; wire shows the geometry.
+  ■ stop freezes behaviors, particles, triggers and sound (the default
+  edit-mode rest state) while movement, streaming and edits keep working.
+  Leaving create mode always restores lit + running. Programmatic:
+  `gaia.setDrawMode('unlit'|'wireframe'|'lit')`, `gaia.setStopped(true)`.
   — creator mode opens by itself, the entity is selected, the listed gizmo
   categories switch on, and the camera goes exactly where you said (editor
   mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so

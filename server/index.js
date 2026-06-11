@@ -127,6 +127,20 @@ function applyAndBroadcast(ops, from) {
       const zone = p ? zoneAt(manifest, p[0], p[2]) : null;
       if (zone) op.components.zone = { name: zone };
     }
+    // presences move: re-stamp their zone as they cross bounds, so senses
+    // scope correctly and a client never streams out its own body (or the
+    // light it carries)
+    const stamps = [];
+    for (const op of ops) {
+      if ((op.op !== 'merge' && op.op !== 'set') || op.component !== 'transform') continue;
+      const p = op.value?.position;
+      if (!p) continue;
+      const comps = world.entities.get(op.id);
+      if (!comps?.presence) continue;
+      const zone = zoneAt(manifest, p[0], p[2]);
+      if (zone && comps.zone?.name !== zone) stamps.push({ op: 'merge', id: op.id, component: 'zone', value: { name: zone } });
+    }
+    ops = ops.concat(stamps);
   }
   const applied = world.applyOps(ops);
   if (applied.length) {

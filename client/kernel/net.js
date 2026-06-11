@@ -1,4 +1,9 @@
-export const clientId = `c${Math.random().toString(36).slice(2, 8)}`;
+// per-tab identity that survives reloads: the same tab reconnects to the
+// same presence entity, so anything granted to it (a carried light, later
+// an inventory) is still there after F5. New tabs get their own.
+const stored = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('gaia-client') : null;
+export const clientId = stored ?? `c${Math.random().toString(36).slice(2, 8)}`;
+if (!stored && typeof sessionStorage !== 'undefined') sessionStorage.setItem('gaia-client', clientId);
 
 export function connect({ url, presence, onSnapshot, onOps, onStatus, onScreenshot }) {
   let socket;

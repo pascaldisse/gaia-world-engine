@@ -89,6 +89,14 @@ Screenshot discipline:
   zone's `voidY` for one frame (the player respawns at the world spawn).
   Real movement never does this; for tests, teleport in two steps or check
   `gaia.zones.current` after.
+- A `light` component ON a presence entity is a carried light. For its own
+  client it rides the camera (offset in the camera's flat frame, z < 0 =
+  ahead); interact/trigger ops grant it with `id: '$id'` (the presence that
+  fired). The server reaps presences on disconnect — worlds that grant
+  carried things re-grant them from world state (see the Tomb's
+  flame-keeper trigger pattern).
+- Presence `zone` stamps update server-side as they move — senses scope by
+  where the player actually IS, not where they connected.
 
 ## Other ground rules
 

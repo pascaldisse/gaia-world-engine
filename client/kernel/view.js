@@ -16,6 +16,7 @@ import { buildParticles } from './particles.js';
 // mid-play.)
 const LIGHT_POOL_SIZE = 16;
 const _lightPos = new THREE.Vector3();
+const _lightDir = new THREE.Vector3();
 const _probeGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);
 
 // Reconciles world store documents into three.js objects. Each entity gets a
@@ -492,8 +493,24 @@ export class View {
         if (!slot) break;
         this.assignSlot(slot, c.id, c.spec);
       }
-      _lightPos.set(...(c.spec.offset ?? [0, 0, 0]));
-      slot.light.position.copy(c.group.localToWorld(_lightPos));
+      if (c.id === this.ownPresence) {
+        // your own carried light rides the camera, smooth at frame rate —
+        // not the 300ms presence trickle the rest of the world sees. The
+        // offset is in the camera's FLAT frame (yaw only, so looking down
+        // doesn't bury it in the floor): z < 0 carries it ahead of you,
+        // lighting where you're going instead of glaring where you stand.
+        const [ox, oy, oz] = c.spec.offset ?? [0, 0, 0];
+        this.camera.getWorldDirection(_lightDir);
+        _lightDir.y = 0;
+        _lightDir.normalize();
+        slot.light.position.copy(this.camera.position).addScaledVector(_lightDir, -oz);
+        slot.light.position.y += oy;
+        slot.light.position.x += -_lightDir.z * ox;
+        slot.light.position.z += _lightDir.x * ox;
+      } else {
+        _lightPos.set(...(c.spec.offset ?? [0, 0, 0]));
+        slot.light.position.copy(c.group.localToWorld(_lightPos));
+      }
     }
   }
 

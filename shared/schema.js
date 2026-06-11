@@ -55,7 +55,7 @@ export const SCHEMA = {
     },
   },
   light: {
-    doc: 'a real light. Point lights are pooled: the nearest 16 to the camera shine, the rest wait — add as many as the world wants, the budget is constant and lighting one mid-play is free',
+    doc: 'a real light. Point lights are pooled: the nearest 16 to the camera shine, the rest wait — add as many as the world wants, the budget is constant and lighting one mid-play is free. On a presence entity it is a CARRIED light: the owning client rides it on the camera (offset in the camera flat frame, z<0 = ahead of you)',
     default: { type: 'point', color: '#ffffff', intensity: 20, distance: 30 },
     fields: {
       type: { doc: 'kind of light. spot/directional bypass the pool and recompile every shader when added — author at build time, never mid-play', enum: ['point', 'spot', 'directional'] },

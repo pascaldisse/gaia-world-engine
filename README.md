@@ -280,7 +280,7 @@ State lives on the server; the vite client hot-reloads freely around it.
 
 ## Roadmap
 
-See [plan.md](plan.md) — M1–M13 are done: in-world editing, agent senses
+See [plan.md](plan.md) — M1–M14 are done: in-world editing, agent senses
 and intents, inspector, instancing and shader presets, procedural audio,
 observability, zones & streaming (M7), bodies in space — gravity, swim,
 rideable platforms, blockers (M8), world logic — triggers, state,
@@ -290,5 +290,9 @@ dwells + stacked floors + deep-world rendering (M12), and invisible
 streaming + the light pool (M13: the world warms once at load and stays
 resident, zones stream by visibility, runtime point lights share 16
 pooled slots — no shader ever compiles mid-play; every zone seam and
-every lantern lit measured ≤ 13ms). The Later list holds scripting, full
-TSL authoring, and multiplayer attribution.
+every lantern lit measured ≤ 13ms), and the carried light (M14: a light
+component on a presence rides its player's camera — carried ahead in the
+camera's flat frame, so it lights where you're going and never blocks the
+view; presences re-stamp their zone as they move; per-tab identity
+survives reloads). The Later list holds scripting, full TSL authoring,
+and multiplayer attribution.

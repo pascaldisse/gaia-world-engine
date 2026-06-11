@@ -221,6 +221,24 @@ frames over 50ms in any direction), steady 120fps, lighting a lantern ≤ 11ms.
 - [x] `tools/profile-seam.mjs`: CPU-profile the page across a transition over
       CDP, print hottest functions — how every one of these was found.
 
+### M14 — The carried light (forced by: Tomb — the flame of the first shore)
+
+A `light` component ON a presence entity is a light the player carries.
+Three primitives make it real:
+
+- [x] The OWN presence's pooled light rides the camera at frame rate (not
+      the 300ms presence trickle), with its offset in the camera's FLAT
+      frame: z < 0 carries it ahead of you, lighting where you're going —
+      yaw-only, so looking down never buries it in the floor. No geometry,
+      so nothing ever blocks the view.
+- [x] Presences re-stamp their zone server-side as their transform crosses
+      zone bounds — senses scope correctly and a client never streams out
+      its own body (or the light it carries). Closes the M9 known gap.
+- [x] Client identity is per-tab persistent (sessionStorage): a reload
+      reconnects to the same presence entity. What a session was granted —
+      a carried light, later an inventory — needs game-side re-grant logic
+      only across full disconnects (the server reaps dead presences).
+
 ## Later
 
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)
@@ -232,9 +250,6 @@ frames over 50ms in any direction), steady 120fps, lighting a lantern ≤ 11ms.
 
 ## Known gaps (accepted for now)
 
-- Zone stamps on moving presences/avatars don't update when they cross zone
-  bounds at runtime — re-stamping lands with seams/triggers (M9). Harmless
-  while content lives in one playable zone.
 - Carried grounded entities appear ground-snapped to other clients mid-carry.
 - Screenshots require a visible (non-backgrounded) browser tab — browsers
   pause the render loop in background tabs.

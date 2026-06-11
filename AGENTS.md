@@ -60,13 +60,22 @@ Screenshot discipline:
   categories switch on, and the camera goes exactly where you said (editor
   mode has no gravity, so it stays). Gizmos draw into the WebGL canvas, so
   `shot` captures them; the DOM panels (outliner/inspector/log) do NOT
-  appear in canvas screenshots. For those, launch a dedicated visible
-  browser instance with the DevTools protocol and use `tools/cdp.mjs`:
+  appear in canvas screenshots. For those, launch a dedicated browser
+  instance with the DevTools protocol and use `tools/cdp.mjs`:
   ```sh
-  "Brave Browser" --user-data-dir=/tmp/gaia-profile --remote-debugging-port=9222 "<url>" &
+  open -n -g -j -a "Brave Browser" --args --user-data-dir=/tmp/gaia-profile \
+    --remote-debugging-port=9222 --disable-backgrounding-occluded-windows \
+    --disable-renderer-backgrounding --disable-background-timer-throttling "<url>"
   node tools/cdp.mjs shot ui.png      # full page: DOM + canvas
   node tools/cdp.mjs eval 'gaia.gizmos.root.children.length'   # poke the kernel
   ```
+  ALWAYS launch with `open -n -g -j` (background + hidden): the player works
+  on this machine and the work window must NEVER pop in front of theirs.
+  Hidden still renders — the disable-backgrounding flags keep WebGPU rAF,
+  timers, /screenshot and cdp.mjs shots fully alive (verified); probe rAF
+  after launch as below if in doubt. To make the window visible on purpose
+  (watching a play-test), click the Brave icon in the dock — don't launch
+  visible by default.
   Do NOT use `--headless` — it hangs on WebGPU init. The dedicated
   `--user-data-dir` instance keeps your work out of the player's browser
   (their instance can also wedge on localhost after heavy tab churn — a

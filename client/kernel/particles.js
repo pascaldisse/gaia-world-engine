@@ -9,11 +9,20 @@ export function buildParticles(spec) {
   const rng = mulberry32((spec.seed ?? 1) * 7919 + 3);
   const area = spec.area ?? { center: [0, 0], radius: 20 };
 
-  const mesh = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(spec.size ?? 0.07, 6, 4),
-    new THREE.MeshBasicMaterial({ color: spec.color ?? '#ffe066' }),
-    count,
-  );
+  // streak: the real-time rain idiom — a drop is a velocity-stretched
+  // billboard (here a thin vertical sliver), not a ball. Fireflies and
+  // souls stay spheres; rain authored without streak looks like snow.
+  const size = spec.size ?? 0.07;
+  const geometry = spec.streak
+    ? new THREE.BoxGeometry(size, spec.streak, size)
+    : new THREE.SphereGeometry(size, 6, 4);
+  const material = new THREE.MeshBasicMaterial({ color: spec.color ?? '#ffe066' });
+  if (spec.opacity !== undefined && spec.opacity < 1) {
+    material.transparent = true;
+    material.opacity = spec.opacity;
+    material.depthWrite = false;
+  }
+  const mesh = new THREE.InstancedMesh(geometry, material, count);
   mesh.frustumCulled = false;
   mesh.castShadow = false;
 

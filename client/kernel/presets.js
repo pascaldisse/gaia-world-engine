@@ -3,6 +3,7 @@ import {
   time,
   uv,
   vec2,
+  vec4,
   color,
   sin,
   length,
@@ -14,6 +15,7 @@ import {
   positionWorld,
   cameraPosition,
   normalWorld,
+  modelWorldMatrix,
 } from 'three/tsl';
 
 // Shader presets as data: a mesh part says {preset: "water"} and gets a TSL
@@ -63,7 +65,16 @@ export function makePresetMaterial(part) {
         const core = dot(normalize(cameraPosition.sub(positionWorld)), normalWorld).abs();
         const vert = smoothstep(0.0, 0.3, uv().y).mul(smoothstep(1.0, 0.7, uv().y));
         const near = smoothstep(2.0, 18.0, length(positionWorld.sub(cameraPosition)));
-        const g = core.mul(core).mul(vert).mul(near).mul(part.beamStrength ?? 0.5);
+        // looking ALONG the shaft (falling down it, sighting up it) puts the
+        // far wall head-on across the whole frame at distances the near-fade
+        // can't reach — a screen-filling wash. Sight lines nearly parallel
+        // to the beam's axis fade out; views from across the water look
+        // through it sideways and keep the full silhouette. modelWorldMatrix
+        // is per-object, so the cached material stays shared.
+        const axis = normalize(modelWorldMatrix.mul(vec4(0, 1, 0, 0)).xyz);
+        const axial = dot(normalize(positionWorld.sub(cameraPosition)), axis).abs();
+        const sideOn = smoothstep(0.6, 0.85, axial).oneMinus();
+        const g = core.mul(core).mul(vert).mul(near).mul(sideOn).mul(part.beamStrength ?? 0.5);
         material.colorNode = color(part.color ?? '#9db8d9').mul(g);
         material.opacityNode = g;
         material.transparent = true;

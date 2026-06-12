@@ -215,8 +215,10 @@ Screenshot discipline:
   spline control points as grabbable orange dots (W moves, R thickens) and
   the `carve` cutters ("holes") as translucent red ghost meshes, listed in
   the OUTLINER as children of the entity while the mode is on. The ghosts
-  are depth-tested on purpose: occlusion is what tells you where a hole
-  sits. Click a point/ghost in the world or a hole row in the outliner,
+  render in TWO states: strong (0.45) where the cutter stands in open air,
+  faint (0.12, depth-test off) where the world buries it — the seam between
+  the states is the intersection contour, the thing you steer the hole by.
+  Click a point/ghost in the world or a hole row in the outliner,
   W/E/R it with the entity gizmos; N (or the outliner's `+ hole` row)
   births a cutter where you look, ⌫ removes the selected one, esc is done.
   Outside edit mode the holes are invisible everywhere (including the

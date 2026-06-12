@@ -433,15 +433,16 @@ export class Editor {
       }
 
       // every part's holes: the cutters as ghost meshes — the recipe the
-      // CSG evaluates, visible only inside this mode. Depth-tested on
-      // purpose: occlusion is what tells you WHERE a hole sits; the
-      // polygon offset keeps the ghost from shimmering against the carved
-      // walls it coincides with.
+      // CSG evaluates, visible only inside this mode. Two passes, one
+      // truth: strong where the cutter stands in open air, faint where
+      // the world buries it — the seam between the two states IS the
+      // intersection contour, the thing you steer the hole by.
       (Array.isArray(part.carve) ? part.carve : []).forEach((c, i) => {
-        const material = new THREE.MeshBasicMaterial({
+        const geometry = makeGeometry(c);
+        const front = new THREE.MeshBasicMaterial({
           color: '#ff6b6b',
           transparent: true,
-          opacity: 0.35,
+          opacity: 0.45,
           depthWrite: false,
           polygonOffset: true,
           polygonOffsetFactor: -1,
@@ -449,7 +450,21 @@ export class Editor {
           fog: false,
           side: THREE.DoubleSide,
         });
-        const handle = new THREE.Mesh(makeGeometry(c), material);
+        const back = new THREE.MeshBasicMaterial({
+          color: '#ff6b6b',
+          transparent: true,
+          opacity: 0.12,
+          depthTest: false,
+          depthWrite: false,
+          fog: false,
+          side: THREE.DoubleSide,
+        });
+        const handle = new THREE.Mesh(geometry, front);
+        const buried = new THREE.Mesh(geometry, back);
+        buried.renderOrder = 996; // under the front pass, over the world
+        handle.renderOrder = 997;
+        handle.add(buried);
+        handle.userData.buried = buried;
         handle.position.set(...(c.position ?? [0, 0, 0]));
         if (c.rotation) handle.rotation.set(...c.rotation);
         handle.userData.sel = { kind: 'cutter', part: pi, index: i };
@@ -516,7 +531,9 @@ export class Editor {
     for (const h of me.handles) {
       const u = h.userData.sel;
       const on = u.kind === sel.kind && u.part === sel.part && u.index === sel.index;
-      h.material.color.set(on ? '#7df9ff' : u.kind === 'point' ? '#ffa94d' : '#ff6b6b');
+      const color = on ? '#7df9ff' : u.kind === 'point' ? '#ffa94d' : '#ff6b6b';
+      h.material.color.set(color);
+      h.userData.buried?.material.color.set(color);
     }
     handle.getWorldPosition(me.proxy.position);
     if (sel.kind === 'cutter') handle.getWorldQuaternion(me.proxy.quaternion);

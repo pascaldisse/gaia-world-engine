@@ -307,8 +307,8 @@ export class Editor {
   // The inspector's `edit` button opens it. Spline control points appear as
   // grabbable orange dots (W moves, R thickens — one axis, a point has
   // thickness, not volume); the boolean cutters (`carve`) appear as
-  // translucent red ghost meshes — the holes, presented like children of
-  // the mesh, selectable here or from the inspector's hole list, moved/
+  // translucent red ghost meshes — the holes, listed in the outliner as
+  // children of the entity, selectable there or in the world, moved/
   // turned/sized with the same W/E/R gizmos entities use. N births a hole
   // where you look, ⌫ removes the selected one, esc is done. Outside this
   // mode the holes stay invisible. The mesh rebuilds on RELEASE, not per
@@ -348,6 +348,7 @@ export class Editor {
     if (this.meshEdit) {
       hintText('mesh edit — click a point or hole · W move E turn R size · N new hole ⌫ remove · esc done');
       this.panel?.refresh();
+      this.outliner?.refresh(); // the holes appear as children of the entity
     }
   }
 
@@ -363,6 +364,7 @@ export class Editor {
     hintText('');
     this.attachGizmo();
     this.panel?.refresh();
+    this.outliner?.refresh();
   }
 
   // handle space is each part's own frame (scene ∘ entity ∘ part transform),
@@ -431,14 +433,19 @@ export class Editor {
       }
 
       // every part's holes: the cutters as ghost meshes — the recipe the
-      // CSG evaluates, visible only inside this mode
+      // CSG evaluates, visible only inside this mode. Depth-tested on
+      // purpose: occlusion is what tells you WHERE a hole sits; the
+      // polygon offset keeps the ghost from shimmering against the carved
+      // walls it coincides with.
       (Array.isArray(part.carve) ? part.carve : []).forEach((c, i) => {
         const material = new THREE.MeshBasicMaterial({
           color: '#ff6b6b',
           transparent: true,
-          opacity: 0.3,
-          depthTest: false,
+          opacity: 0.35,
           depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: -1,
           fog: false,
           side: THREE.DoubleSide,
         });
@@ -446,7 +453,6 @@ export class Editor {
         handle.position.set(...(c.position ?? [0, 0, 0]));
         if (c.rotation) handle.rotation.set(...c.rotation);
         handle.userData.sel = { kind: 'cutter', part: pi, index: i };
-        handle.renderOrder = 998;
         frame.add(handle);
         me.handles.push(handle);
       });
@@ -481,7 +487,7 @@ export class Editor {
       this.meshEdit.sel = null;
       this.tc.detach();
       this.helper.visible = false;
-      this.panel?.refresh();
+      this.outliner?.refresh();
     }
   }
 
@@ -518,7 +524,7 @@ export class Editor {
     me.proxy.scale.set(1, 1, 1);
     this.attachHandleGizmo();
     this.updateRing();
-    this.panel?.refresh();
+    this.outliner?.refresh(); // sync the selected hole row
   }
 
   attachHandleGizmo() {

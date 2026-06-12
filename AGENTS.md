@@ -214,15 +214,16 @@ Screenshot discipline:
   (it toggles to `done`). It shows everything the mesh is made of — tube
   spline control points as grabbable orange dots (W moves, R thickens) and
   the `carve` cutters ("holes") as translucent red ghost meshes, listed in
-  the inspector like children of the mesh while the mode is on. Click a
-  point/ghost in the world or a hole row in the inspector, W/E/R it with
-  the entity gizmos; N (or `+ hole`) births a cutter where you look, ⌫
-  removes the selected one, esc is done. Outside edit mode the holes are
-  invisible everywhere (including the inspector fields — the JSON tab
-  still shows the raw `carve`). The mesh rebuilds on RELEASE (carves
-  re-run CSG per rebuild); each release is one undoable mesh op. The data
-  stays the flat `path`/`carve` arrays on the part — the "children" exist
-  only as the lens, never as entities.
+  the OUTLINER as children of the entity while the mode is on. The ghosts
+  are depth-tested on purpose: occlusion is what tells you where a hole
+  sits. Click a point/ghost in the world or a hole row in the outliner,
+  W/E/R it with the entity gizmos; N (or the outliner's `+ hole` row)
+  births a cutter where you look, ⌫ removes the selected one, esc is done.
+  Outside edit mode the holes are invisible everywhere (including the
+  inspector fields — the JSON tab still shows the raw `carve`). The mesh
+  rebuilds on RELEASE (carves re-run CSG per rebuild); each release is one
+  undoable mesh op. The data stays the flat `path`/`carve` arrays on the
+  part — the "children" exist only as the lens, never as entities.
 - Components have NO remove-×: click a section head to select it, ⌘⌫
   removes the component (one op, undoable). Programmatic removal stays
   `{op:'set', id, component, value: null}`.

@@ -19,7 +19,7 @@ const RANGES = {
 const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditMesh, onPickHole, onAddHole, getMeshEdit }) {
+  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditMesh, getMeshEdit }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -29,8 +29,6 @@ export class Panel {
     this.onDuplicate = onDuplicate;
     this.onDelete = onDelete;
     this.onEditMesh = onEditMesh;
-    this.onPickHole = onPickHole;
-    this.onAddHole = onAddHole;
     this.getMeshEdit = getMeshEdit; // () => the editor's live mesh-edit session (or null)
     this.id = null;
     this.sceneName = null;
@@ -237,8 +235,7 @@ export class Panel {
   }
 
   renderFields(body, comps) {
-    const meshEdit = this.getMeshEdit?.();
-    const editingMesh = meshEdit?.id === this.id;
+    const editingMesh = this.getMeshEdit?.()?.id === this.id;
     for (const name of Object.keys(comps)) {
       const section = div('panel-section');
       if (name === this.selectedComponent) section.classList.add('selected');
@@ -272,10 +269,6 @@ export class Panel {
         setTimeout(() => this.render(), 160);
       });
       section.append(content);
-      // in mesh edit mode the holes show up like children of the mesh —
-      // click one here (or its ghost in the world) to grab it. The data
-      // stays the part's flat `carve` array; this list is just the lens.
-      if (name === 'mesh' && editingMesh) section.append(this.renderHoles(comps, meshEdit));
       body.append(section);
     }
 
@@ -290,34 +283,6 @@ export class Panel {
     };
     addRow.append(select);
     body.append(addRow);
-  }
-
-  // the holes, listed like children of the mesh while edit mode is on —
-  // click to grab one in the world, + hole births one where you look
-  renderHoles(comps, meshEdit) {
-    const wrap = div('holes');
-    const parts = comps.mesh ? comps.mesh.parts ?? [comps.mesh] : [];
-    parts.forEach((part, pi) => {
-      const carves = Array.isArray(part?.carve) ? part.carve : [];
-      carves.forEach((c, i) => {
-        const tag = parts.length > 1 ? ` · part ${pi}` : '';
-        const row = div('hole-row', `◻ hole ${i}${tag} — ${c.shape ?? 'box'}`);
-        const sel = meshEdit.sel;
-        if (sel?.kind === 'cutter' && sel.part === pi && sel.index === i) row.classList.add('selected');
-        row.onclick = () => {
-          for (const sib of wrap.querySelectorAll('.hole-row')) sib.classList.remove('selected');
-          row.classList.add('selected');
-          this.onPickHole?.(pi, i);
-        };
-        wrap.append(row);
-      });
-    });
-    const add = button('+ hole', () => {
-      add.blur();
-      this.onAddHole?.();
-    });
-    wrap.append(add);
-    return wrap;
   }
 
   // renders holder[key] into parent; mutates holder in place and calls onEdit

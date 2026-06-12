@@ -28,7 +28,7 @@ function iconFor(comps) {
 }
 
 export class Outliner {
-  constructor({ el, store, view, scenes, gizmos, onPick, onFocus, onScene }) {
+  constructor({ el, store, view, scenes, gizmos, onPick, onFocus, onScene, onPickHole, onAddHole, getMeshEdit }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -37,6 +37,9 @@ export class Outliner {
     this.onPick = onPick;
     this.onFocus = onFocus;
     this.onScene = onScene;
+    this.onPickHole = onPickHole;
+    this.onAddHole = onAddHole;
+    this.getMeshEdit = getMeshEdit;
     this.collapsed = new Set();
     this.search = '';
     this.selected = null;
@@ -114,6 +117,12 @@ export class Outliner {
     if (id) this.rows.get(id)?.classList.add('selected');
   }
 
+  // something structural changed right now (mesh edit opened, a hole picked) —
+  // skip the 600ms dirty throttle and redraw
+  refresh() {
+    if (this.visible) this.renderList();
+  }
+
   update() {
     if (!this.visible) return;
     if (this.view.currentScene !== this.sceneSeen) {
@@ -188,6 +197,7 @@ export class Outliner {
       this.listEl.append(head);
       if (collapsed) continue;
 
+      const meshEdit = this.getMeshEdit?.();
       for (const [id, comps] of rows) {
         const row = div('o-row');
         row.append(span('o-icon', iconFor(comps)));
@@ -198,7 +208,34 @@ export class Outliner {
         row.ondblclick = () => this.onFocus?.(id);
         this.rows.set(id, row);
         this.listEl.append(row);
+        if (meshEdit?.id === id) this.appendHoleRows(meshEdit, comps);
       }
     }
+  }
+
+  // while a mesh is in edit mode its holes (the carve cutters) list here as
+  // children of the entity — click one to grab its ghost in the world. The
+  // data stays the part's flat `carve` array; the child rows are just how
+  // the lens presents it. `+ hole` births one where you look.
+  appendHoleRows(meshEdit, comps) {
+    const parts = comps.mesh ? comps.mesh.parts ?? [comps.mesh] : [];
+    parts.forEach((part, pi) => {
+      const carves = Array.isArray(part?.carve) ? part.carve : [];
+      carves.forEach((c, i) => {
+        const row = div('o-row hole');
+        row.append(span('o-icon', '◻'));
+        const tag = parts.length > 1 ? ` · part ${pi}` : '';
+        row.append(span('o-id', `hole ${i}${tag} — ${c.shape ?? 'box'}`));
+        const sel = meshEdit.sel;
+        if (sel?.kind === 'cutter' && sel.part === pi && sel.index === i) row.classList.add('selected');
+        row.onclick = () => this.onPickHole?.(pi, i);
+        this.listEl.append(row);
+      });
+    });
+    const add = div('o-row hole add');
+    add.append(span('o-icon', '+'));
+    add.append(span('o-id', 'hole'));
+    add.onclick = () => this.onAddHole?.();
+    this.listEl.append(add);
   }
 }

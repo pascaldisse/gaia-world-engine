@@ -663,8 +663,6 @@ const panel = new Panel({
   onDuplicate: (id) => editor.duplicate(id),
   onDelete: (id) => editor.delete(id),
   onEditMesh: (id) => editor.editMesh(id),
-  onPickHole: (part, index) => editor.selectHandle({ kind: 'cutter', part, index }),
-  onAddHole: () => editor.addCarve(),
   getMeshEdit: () => editor.meshEdit,
 });
 const palette = new Palette({
@@ -694,6 +692,10 @@ const outliner = new Outliner({
     editor.select(null);
     panel.showScene(name);
   },
+  // mesh edit: the holes list as children of the edited entity, right here
+  onPickHole: (part, index) => editor.selectHandle({ kind: 'cutter', part, index }),
+  onAddHole: () => editor.addCarve(),
+  getMeshEdit: () => editor.meshEdit,
 });
 const editor = new Editor({
   camera,

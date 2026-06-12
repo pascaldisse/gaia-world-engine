@@ -433,38 +433,23 @@ export class Editor {
       }
 
       // every part's holes: the cutters as ghost meshes — the recipe the
-      // CSG evaluates, visible only inside this mode. Two passes, one
-      // truth: strong where the cutter stands in open air, faint where
-      // the world buries it — the seam between the two states IS the
-      // intersection contour, the thing you steer the hole by.
+      // CSG evaluates, visible only inside this mode. A ghost is JUST A
+      // MESH: a translucent shape that depth-tests, sorts, and fogs like
+      // every other mesh in the engine — no renderOrder, no x-ray. Being
+      // partially hidden by the world is the cue for where the cut sits.
+      // (The polygon offset only keeps it from sparkling against the
+      // carved walls it coincides with.)
       (Array.isArray(part.carve) ? part.carve : []).forEach((c, i) => {
-        const geometry = makeGeometry(c);
-        const front = new THREE.MeshBasicMaterial({
+        const material = new THREE.MeshBasicMaterial({
           color: '#ff6b6b',
           transparent: true,
           opacity: 0.45,
-          depthWrite: false,
           polygonOffset: true,
           polygonOffsetFactor: -1,
           polygonOffsetUnits: -1,
-          fog: false,
           side: THREE.DoubleSide,
         });
-        const back = new THREE.MeshBasicMaterial({
-          color: '#ff6b6b',
-          transparent: true,
-          opacity: 0.12,
-          depthTest: false,
-          depthWrite: false,
-          fog: false,
-          side: THREE.DoubleSide,
-        });
-        const handle = new THREE.Mesh(geometry, front);
-        const buried = new THREE.Mesh(geometry, back);
-        buried.renderOrder = 996; // under the front pass, over the world
-        handle.renderOrder = 997;
-        handle.add(buried);
-        handle.userData.buried = buried;
+        const handle = new THREE.Mesh(makeGeometry(c), material);
         handle.position.set(...(c.position ?? [0, 0, 0]));
         if (c.rotation) handle.rotation.set(...c.rotation);
         handle.userData.sel = { kind: 'cutter', part: pi, index: i };
@@ -531,9 +516,7 @@ export class Editor {
     for (const h of me.handles) {
       const u = h.userData.sel;
       const on = u.kind === sel.kind && u.part === sel.part && u.index === sel.index;
-      const color = on ? '#7df9ff' : u.kind === 'point' ? '#ffa94d' : '#ff6b6b';
-      h.material.color.set(color);
-      h.userData.buried?.material.color.set(color);
+      h.material.color.set(on ? '#7df9ff' : u.kind === 'point' ? '#ffa94d' : '#ff6b6b');
     }
     handle.getWorldPosition(me.proxy.position);
     if (sel.kind === 'cutter') handle.getWorldQuaternion(me.proxy.quaternion);
@@ -767,6 +750,18 @@ export class Editor {
   }
 
   frameSelected() {
+    // in mesh edit, F frames the selected handle — a hole is framed like
+    // any mesh, a spline point like a small one
+    const handle = this.meshEdit && this.handleFor(this.meshEdit.sel);
+    if (handle) {
+      const box = new THREE.Box3().setFromObject(handle);
+      const center = box.getCenter(new THREE.Vector3());
+      const sphere = box.getBoundingSphere(new THREE.Sphere());
+      this.camera.getWorldDirection(this.dir);
+      this.player.position.copy(center).addScaledVector(this.dir, -Math.max(4, sphere.radius * 2.5));
+      this.player.velocity.set(0, 0, 0);
+      return;
+    }
     const group = this.selected && this.view.getGroup(this.selected);
     if (group) {
       const box = new THREE.Box3().setFromObject(group);

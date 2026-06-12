@@ -214,10 +214,11 @@ Screenshot discipline:
   (it toggles to `done`). It shows everything the mesh is made of — tube
   spline control points as grabbable orange dots (W moves, R thickens) and
   the `carve` cutters ("holes") as translucent red ghost meshes, listed in
-  the OUTLINER as children of the entity while the mode is on. The ghosts
-  render in TWO states: strong (0.45) where the cutter stands in open air,
-  faint (0.12, depth-test off) where the world buries it — the seam between
-  the states is the intersection contour, the thing you steer the hole by.
+  the OUTLINER as children of the entity while the mode is on. A ghost is
+  JUST A MESH: no renderOrder, no x-ray — it depth-tests, sorts, and fogs
+  like every other mesh, so the world partially hides it and the visible
+  edge is the intersection contour. It frames like a mesh too: double-click
+  its outliner row (or F while selected) to jump to it.
   Click a point/ghost in the world or a hole row in the outliner,
   W/E/R it with the entity gizmos; N (or the outliner's `+ hole` row)
   births a cutter where you look, ⌫ removes the selected one, esc is done.

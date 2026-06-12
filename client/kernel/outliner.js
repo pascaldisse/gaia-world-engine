@@ -28,7 +28,7 @@ function iconFor(comps) {
 }
 
 export class Outliner {
-  constructor({ el, store, view, scenes, gizmos, onPick, onFocus, onScene, onPickHole, onAddHole, getMeshEdit }) {
+  constructor({ el, store, view, scenes, gizmos, onPick, onFocus, onScene, onPickHole, onFocusHole, onAddHole, getMeshEdit }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -38,6 +38,7 @@ export class Outliner {
     this.onFocus = onFocus;
     this.onScene = onScene;
     this.onPickHole = onPickHole;
+    this.onFocusHole = onFocusHole;
     this.onAddHole = onAddHole;
     this.getMeshEdit = getMeshEdit;
     this.collapsed = new Set();
@@ -229,6 +230,7 @@ export class Outliner {
         const sel = meshEdit.sel;
         if (sel?.kind === 'cutter' && sel.part === pi && sel.index === i) row.classList.add('selected');
         row.onclick = () => this.onPickHole?.(pi, i);
+        row.ondblclick = () => this.onFocusHole?.(pi, i);
         this.listEl.append(row);
       });
     });

@@ -694,6 +694,10 @@ const outliner = new Outliner({
   },
   // mesh edit: the holes list as children of the edited entity, right here
   onPickHole: (part, index) => editor.selectHandle({ kind: 'cutter', part, index }),
+  onFocusHole: (part, index) => {
+    editor.selectHandle({ kind: 'cutter', part, index });
+    editor.frameSelected();
+  },
   onAddHole: () => editor.addCarve(),
   getMeshEdit: () => editor.meshEdit,
 });

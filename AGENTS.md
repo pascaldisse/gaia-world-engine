@@ -217,8 +217,11 @@ Screenshot discipline:
   the OUTLINER as children of the entity while the mode is on. A ghost is
   JUST A MESH: no renderOrder, no x-ray — it depth-tests, sorts, and fogs
   like every other mesh, so the world partially hides it and the visible
-  edge is the intersection contour. It frames like a mesh too: double-click
-  its outliner row (or F while selected) to jump to it.
+  edge is the intersection contour. It follows the draw mode (wires in
+  wireframe) and frames like a mesh too: double-click its outliner row
+  (or F while selected) to jump to it. The handle root re-syncs to the
+  entity's body every frame, so ground re-snaps, streams, and transform
+  ops can never make the ghost and the cut drift apart.
   Click a point/ghost in the world or a hole row in the outliner,
   W/E/R it with the entity gizmos; N (or the outliner's `+ hole` row)
   births a cutter where you look, ⌫ removes the selected one, esc is done.

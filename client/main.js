@@ -338,6 +338,8 @@ function setDrawMode(mode) {
   applyAudioGate();
   syncFxMenu();
   for (const [m, btn] of drawModeButtons) btn.classList.toggle('active', m === mode);
+  // an open mesh-edit session rebuilds its ghosts to match the mode
+  window.gaia?.editor?.refreshMeshHandles();
 }
 function setStopped(on) {
   sim.stopped = on;
@@ -715,6 +717,7 @@ const editor = new Editor({
   outliner,
   gizmos,
   viewbar,
+  shading,
   modeEl: document.getElementById('mode'),
 });
 

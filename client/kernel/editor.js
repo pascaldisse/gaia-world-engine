@@ -10,7 +10,7 @@ import { r2 } from '../../shared/num.js';
 // F frames the selection, hold RMB to fly (WASD + Q/E down/up), scroll dollies.
 // Every change is the same ops any agent sends.
 export class Editor {
-  constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, outliner, gizmos, viewbar, modeEl }) {
+  constructor({ camera, scene, renderer, store, view, send, player, history, panel, palette, outliner, gizmos, viewbar, shading, modeEl }) {
     this.camera = camera;
     this.scene = scene;
     this.renderer = renderer;
@@ -24,6 +24,7 @@ export class Editor {
     this.outliner = outliner;
     this.gizmos = gizmos;
     this.viewbar = viewbar;
+    this.shading = shading;
     this.modeEl = modeEl;
     this.mode = 'play';
     this.tool = 'translate';
@@ -437,16 +438,22 @@ export class Editor {
       // MESH: a translucent shape that depth-tests, sorts, and fogs like
       // every other mesh in the engine — no renderOrder, no x-ray. Being
       // partially hidden by the world is the cue for where the cut sits.
-      // (The polygon offset only keeps it from sparkling against the
-      // carved walls it coincides with.)
+      // It follows the draw mode like a mesh too: wires in wireframe.
+      // (depthWrite off so its own back faces can't patch it solid; the
+      // polygon offset keeps it from sparkling against the carved walls —
+      // NEVER on the wire material: depth bias on a line-topology pipeline
+      // is a WebGPU validation error that freezes the whole canvas.)
+      const wire = this.shading?.mode === 'wireframe';
       (Array.isArray(part.carve) ? part.carve : []).forEach((c, i) => {
         const material = new THREE.MeshBasicMaterial({
           color: '#ff6b6b',
-          transparent: true,
-          opacity: 0.45,
-          polygonOffset: true,
-          polygonOffsetFactor: -1,
-          polygonOffsetUnits: -1,
+          wireframe: wire,
+          transparent: !wire,
+          opacity: wire ? 1 : 0.4,
+          depthWrite: wire,
+          polygonOffset: !wire,
+          polygonOffsetFactor: wire ? 0 : -1,
+          polygonOffsetUnits: wire ? 0 : -1,
           side: THREE.DoubleSide,
         });
         const handle = new THREE.Mesh(makeGeometry(c), material);
@@ -866,6 +873,27 @@ export class Editor {
   update() {
     if (this.selected && !this.store.get(this.selected)) this.select(null);
     this.selBox?.update();
+    this.syncMeshRoot();
+  }
+
+  // the entity can move under an open mesh-edit session (ground re-snaps
+  // when terrain streams, a transform op, a restream) — the handles follow
+  // the BODY every frame, never a snapshot of it, or the ghost and the cut
+  // drift apart and commits write coordinates into a frame that moved
+  syncMeshRoot() {
+    const me = this.meshEdit;
+    if (!me?.root) return;
+    const group = this.view.getGroup(me.id);
+    if (!group) return;
+    group.updateWorldMatrix(true, false);
+    group.matrixWorld.decompose(me.root.position, me.root.quaternion, me.root.scale);
+    if (me.sel && !me.dragging) {
+      const handle = this.handleFor(me.sel);
+      if (handle) {
+        handle.getWorldPosition(me.proxy.position);
+        if (me.sel.kind === 'cutter') handle.getWorldQuaternion(me.proxy.quaternion);
+      }
+    }
   }
 }
 

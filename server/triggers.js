@@ -1,3 +1,7 @@
+import { inArea } from '../shared/scenes.js';
+import { matchesWhen, substitute } from '../shared/ops.js';
+import { r2 } from '../shared/num.js';
+
 // Trigger volumes: world logic as data. An entity with a `trigger` component
 // watches every presence (players, agents); when one enters its area the
 // trigger fires its ops — with `$now` replaced by world time and `$id` by
@@ -21,25 +25,24 @@ export class Triggers {
   contains(trig, comps, x, y, z) {
     const area = trig.area;
     if (!area) return false;
-    const [cx, cz] = area.center ?? comps.transform?.position?.filter((_, i) => i !== 1) ?? [0, 0];
-    if (area.radius) {
-      if (Math.hypot(x - cx, z - cz) > area.radius) return false;
-    } else {
-      const [sx, sz] = area.size ?? [10, 10];
-      if (Math.abs(x - cx) > sx / 2 || Math.abs(z - cz) > sz / 2) return false;
-    }
+    const withCenter = area.center ? area : { ...area, center: comps.transform?.position?.filter((_, i) => i !== 1) };
+    if (!inArea(withCenter, x, z)) return false;
     if (trig.yMin !== undefined && y < trig.yMin) return false;
     if (trig.yMax !== undefined && y > trig.yMax) return false;
     return true;
   }
 
   tick() {
+    // one motion-math pass per presence, not per trigger×presence
+    const presences = [];
+    for (const [pid, pcomps] of this.world.entities) {
+      if (pcomps.presence) presences.push([pid, this.sense.positionOf(pcomps)]);
+    }
     for (const [tid, comps] of this.world.entities) {
       const trig = comps.trigger;
       if (!trig) continue;
-      for (const [pid, pcomps] of this.world.entities) {
-        if (!pcomps.presence || pid === tid) continue;
-        const [px, py, pz] = this.sense.positionOf(pcomps);
+      for (const [pid, [px, py, pz]] of presences) {
+        if (pid === tid) continue;
         const key = `${tid}|${pid}`;
         const inside = this.contains(trig, comps, px, py, pz);
         const was = this.inside.get(key) ?? false;
@@ -52,18 +55,17 @@ export class Triggers {
         this.fire(tid, trig, pid);
       }
     }
+    // disconnected presences (and despawned triggers) must not grow the map forever
+    for (const key of this.inside.keys()) {
+      const [tid, pid] = key.split('|');
+      if (!this.world.entities.has(tid) || !this.world.entities.has(pid)) this.inside.delete(key);
+    }
   }
 
   // "world-state.state.gate": "open" → entity world-state, component state,
-  // key gate must equal "open"
+  // key gate must equal "open" — the shared rule the client's E-prompt uses too
   matches(when) {
-    for (const [path, expected] of Object.entries(when)) {
-      const [id, ...keys] = path.split('.');
-      let value = this.world.entities.get(id);
-      for (const key of keys) value = value?.[key];
-      if (value !== expected) return false;
-    }
-    return true;
+    return matchesWhen(when, (id) => this.world.entities.get(id));
   }
 
   // Press-E world logic: an `interact` component fires when a presence USES
@@ -88,7 +90,7 @@ export class Triggers {
     const ops = [
       { op: 'event', name: act.event?.name ?? 'use', data: { ...(act.event?.data ?? {}), target: tid, by: pid } },
     ];
-    for (const op of act.ops ?? []) ops.push(this.substitute(structuredClone(op), pid));
+    for (const op of act.ops ?? []) ops.push(this.substitute(op, pid));
     console.log(`[gaia] use ${tid} (by ${pid})`);
     return ops;
   }
@@ -99,20 +101,14 @@ export class Triggers {
     if (trig.event) {
       ops.push({ op: 'event', name: trig.event.name ?? 'trigger', data: { ...(trig.event.data ?? {}), trigger: tid, by: pid } });
     }
-    for (const op of trig.ops ?? []) ops.push(this.substitute(structuredClone(op), pid));
+    for (const op of trig.ops ?? []) ops.push(this.substitute(op, pid));
     if (ops.length) {
       this.apply(ops, `trigger:${tid}`);
       console.log(`[gaia] trigger ${tid} fired (by ${pid})`);
     }
   }
 
-  substitute(value, pid) {
-    if (value === '$now') return Math.round(this.now() * 100) / 100;
-    if (value === '$id') return pid;
-    if (Array.isArray(value)) return value.map((v) => this.substitute(v, pid));
-    if (value && typeof value === 'object') {
-      for (const k of Object.keys(value)) value[k] = this.substitute(value[k], pid);
-    }
-    return value;
+  substitute(op, pid) {
+    return substitute(structuredClone(op), { $now: r2(this.now()), $id: pid });
   }
 }

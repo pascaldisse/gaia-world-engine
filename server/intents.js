@@ -1,4 +1,4 @@
-import { routeHeight, terrainEntries } from '../shared/terrainmap.js';
+import { r2 } from '../shared/num.js';
 
 const DEFAULT_AGENT = 'agent-claude';
 
@@ -6,15 +6,12 @@ const DEFAULT_AGENT = 'agent-claude';
 // movement at finite speed, streamed as ops every tick so every client watches
 // the avatar actually travel.
 export class Intents {
-  constructor({ world, apply }) {
+  constructor({ world, apply, sense }) {
     this.world = world;
     this.apply = apply;
+    this.sense = sense;
     this.active = new Map();
     this.holding = new Map();
-  }
-
-  groundAt(x, z) {
-    return routeHeight(terrainEntries(this.world.entities), x, z);
   }
 
   ensureAvatar(id) {
@@ -50,10 +47,9 @@ export class Intents {
   }
 
   positionOf(id) {
+    // the senses' motion math — grab/face range agrees with what agents see
     const comps = this.world.entities.get(id);
-    const [x, y, z] = comps?.transform?.position ?? [0, 0, 0];
-    if (comps?.ground) return [x, this.groundAt(x, z) + (comps.ground.offset ?? 0), z];
-    return [x, y, z];
+    return comps ? this.sense.positionOf(comps) : [0, 0, 0];
   }
 
   run(cmd) {
@@ -195,8 +191,4 @@ export class Intents {
       'intents',
     );
   }
-}
-
-function r2(v) {
-  return Math.round(v * 100) / 100;
 }

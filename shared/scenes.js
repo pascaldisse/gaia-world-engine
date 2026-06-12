@@ -30,6 +30,17 @@ export function normalizeScenes(raw) {
   };
 }
 
+// the schema's shared area shape — {center:[x,z], radius | size:[sx,sz]} —
+// used by triggers, water, scatter and particles. One containment test so a
+// swimmer's client-side water check and the server's drown trigger agree by
+// construction. defaultSize covers areas authored without an extent.
+export function inArea(area, x, z, defaultSize = [10, 10]) {
+  const [cx, cz] = area.center ?? [0, 0];
+  if (area.radius) return Math.hypot(x - cx, z - cz) <= area.radius;
+  const [sx, sz] = area.size ?? defaultSize;
+  return Math.abs(x - cx) <= sx / 2 && Math.abs(z - cz) <= sz / 2;
+}
+
 // is (x, y, z) inside a load volume — a disc with an optional y range.
 // pad widens the volume: the unload test uses a margin so a player hovering
 // exactly on the boundary doesn't flicker the scene in and out.

@@ -2,11 +2,14 @@
 // weather strike, agents edit, your own ops land. L toggles it. Presence
 // pose spam is hidden unless asked for; everything else streams live.
 
+import { div, span, button, isTyping } from './dom.js';
+
 const MAX_LINES = 200;
 
 export class EventConsole {
-  constructor({ el }) {
+  constructor({ el, store }) {
     this.el = el;
+    this.store = store;
     this.visible = false;
     this.eventsOnly = false;
     this.showPresence = false;
@@ -15,8 +18,7 @@ export class EventConsole {
     this.buildChrome();
     document.addEventListener('keydown', (e) => {
       if (e.code !== 'KeyL' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const active = document.activeElement;
-      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
+      if (isTyping()) return;
       this.toggle();
     });
   }
@@ -60,7 +62,10 @@ export class EventConsole {
   add(ops, from) {
     if (!this.visible) return;
     for (const op of ops) {
-      const isPresence = typeof op.id === 'string' && op.id.startsWith('player-') && (op.component === 'transform' || op.component === 'presence');
+      // pose spam is anything with a presence COMPONENT — players and agent
+      // avatars alike, whatever their ids are named
+      const isPresence =
+        (op.component === 'transform' || op.component === 'presence') && !!this.store?.get(op.id)?.presence;
       if (isPresence && !this.showPresence) continue;
       if (this.eventsOnly && op.op !== 'event') continue;
       const line = this.format(op, from);
@@ -98,25 +103,4 @@ function short(value) {
   let s = JSON.stringify(value);
   if (s && s.length > 90) s = `${s.slice(0, 87)}…`;
   return s;
-}
-
-function div(cls, text) {
-  const el = document.createElement('div');
-  el.className = cls;
-  if (text !== undefined) el.textContent = text;
-  return el;
-}
-
-function span(cls, text) {
-  const el = document.createElement('span');
-  el.className = cls;
-  el.textContent = text;
-  return el;
-}
-
-function button(text, onClick) {
-  const el = document.createElement('button');
-  el.textContent = text;
-  el.onclick = onClick;
-  return el;
 }

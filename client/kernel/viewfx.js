@@ -22,6 +22,7 @@ export class ViewFx {
     this.post = post;
     this.on = { skybox: true, fog: true, particles: true, post: true, lights: true, audio: true };
     this.skyHidden = false; // sky sweep ran — restore needed on re-enable
+    this.skySweptVersion = -1; // view.buildVersion the hide-sweep last saw
     this.bloomZeroed = false;
     this.linearFog = null; // saved {near, far} while linear fog is gated
   }
@@ -43,17 +44,22 @@ export class ViewFx {
     const on = this.on;
     this.environment.effectsEnabled = on.post;
 
-    // skybox: the background color AND the sky-as-geometry sheets
+    // skybox: the background color AND the sky-as-geometry sheets — the
+    // hide-sweep re-runs only when new content appeared (view.buildVersion)
     if (!on.skybox) {
       if (this.scene.background?.isColor) this.scene.background.copy(EDITOR_BG);
-      for (const group of this.view.groups.values()) {
-        group.traverse((node) => {
-          if (node.userData?.sky && node.visible) node.visible = false;
-        });
+      if (this.view.buildVersion !== this.skySweptVersion) {
+        this.skySweptVersion = this.view.buildVersion;
+        for (const group of this.view.groups.values()) {
+          group.traverse((node) => {
+            if (node.userData?.sky && node.visible) node.visible = false;
+          });
+        }
       }
       this.skyHidden = true;
     } else if (this.skyHidden) {
       this.skyHidden = false;
+      this.skySweptVersion = -1;
       if (this.scene.background?.isColor) this.scene.background.copy(this.environment.current.background);
       for (const group of this.view.groups.values()) {
         group.traverse((node) => {

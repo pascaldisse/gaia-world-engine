@@ -1,11 +1,43 @@
 // Deterministic motion: orbit/bob positions are pure functions of world time,
 // so the renderer, the server's senses, and any future client all agree on
 // where a moving thing is.
+
+// the behavior array-or-single convention, decided once — every consumer
+// (renderer, senses, gizmos) normalizes through here
+export function behaviorList(comps) {
+  return comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
+}
+
+// the legs/total table is a pure function of a path's points and speed, but
+// followers ask for it every frame (twice — position and heading) and the
+// server's senses per trigger tick. Cache per behavior object; ops replace
+// the object wholesale, so the WeakMap invalidates itself.
+const legsCache = new WeakMap();
+function pathLegs(b, pts) {
+  const speed = b.speed ?? 2;
+  const cached = legsCache.get(b);
+  if (cached && cached.pts === pts && cached.speed === speed) return cached;
+  const legs = []; // { dwell: pause at the leg's start point, travel: seconds underway }
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dwell = pts[i - 1][3] ?? 0;
+    const travel =
+      Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]) /
+      Math.max(0.01, speed);
+    legs.push({ dwell, travel });
+    total += dwell + travel;
+  }
+  total += pts[pts.length - 1][3] ?? 0; // looping: pause at the end too
+  const entry = { pts, speed, legs, total };
+  legsCache.set(b, entry);
+  return entry;
+}
+
 export function animatedPosition(comps, time, heightFn) {
   const t = comps.transform ?? {};
   let [x, y, z] = t.position ?? [0, 0, 0];
   if (comps.ground && heightFn) y = heightFn(x, z) + (comps.ground.offset ?? 0);
-  const list = comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
+  const list = behaviorList(comps);
   for (const b of list) {
     if (b.type === 'orbit') {
       const [cx, cy, cz] = b.center ?? [0, 0, 0];
@@ -22,18 +54,7 @@ export function animatedPosition(comps, time, heightFn) {
       // and travel share one clock (phase is seconds too).
       const pts = b.points ?? [];
       if (pts.length >= 2) {
-        const speed = b.speed ?? 2;
-        const legs = []; // { dwell: pause at the leg's start point, travel: seconds underway }
-        let total = 0;
-        for (let i = 1; i < pts.length; i++) {
-          const dwell = pts[i - 1][3] ?? 0;
-          const travel =
-            Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]) /
-            Math.max(0.01, speed);
-          legs.push({ dwell, travel });
-          total += dwell + travel;
-        }
-        total += pts[pts.length - 1][3] ?? 0; // looping: pause at the end too
+        const { legs, total } = pathLegs(b, pts);
         let t = Math.max(0, time - (b.start ?? 0)) + (b.phase ?? 0);
         if (b.loop) t = total ? ((t % total) + total) % total : 0;
         else t = Math.min(t, total);
@@ -68,6 +89,5 @@ export function animatedPosition(comps, time, heightFn) {
 }
 
 export function hasMotion(comps) {
-  const list = comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
-  return list.some((b) => b.type === 'orbit' || b.type === 'bob' || b.type === 'path');
+  return behaviorList(comps).some((b) => b.type === 'orbit' || b.type === 'bob' || b.type === 'path');
 }

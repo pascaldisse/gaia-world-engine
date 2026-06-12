@@ -2,11 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export class World {
-  // saveFilter (scene-model worlds): which entities belong to the SAVE FILE —
-  // the player layer. Everything else lives in the scene files and is
-  // re-seeded from them on every boot, so persisting it here would shadow
-  // the source of truth.
-  constructor(file, { saveFilter = null } = {}) {
+  // saveFilter: which entities belong to the SAVE FILE — the player layer.
+  // Everything else lives in the scene files and is re-seeded from them on
+  // every boot, so persisting it here would shadow the source of truth.
+  constructor(file, { saveFilter }) {
     this.file = file;
     this.saveFilter = saveFilter;
     this.entities = new Map();
@@ -19,10 +18,8 @@ export class World {
     const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     this.counter = data.counter ?? 1;
     this.entities = new Map(Object.entries(data.entities ?? {}));
-    if (this.saveFilter) {
-      for (const [id, comps] of [...this.entities]) {
-        if (!this.saveFilter(id, comps)) this.entities.delete(id);
-      }
+    for (const [id, comps] of [...this.entities]) {
+      if (!this.saveFilter(id, comps)) this.entities.delete(id);
     }
     return this.entities.size > 0;
   }
@@ -32,7 +29,6 @@ export class World {
   }
 
   saveSnapshot() {
-    if (!this.saveFilter) return this.snapshot();
     const entities = {};
     for (const [id, comps] of this.entities) {
       if (this.saveFilter(id, comps)) entities[id] = comps;
@@ -44,11 +40,17 @@ export class World {
     const applied = [];
     let dirty = false;
     for (const op of ops) {
+      // the save rewrites only when the player layer changed — checked on
+      // both sides of the op, so an entity LEAVING the layer (persist
+      // removed, scene claimed) still drops out of the file
+      const before = op.id ? this.entities.get(op.id) : null;
+      const wasSaved = before ? this.saveFilter(op.id, before) : false;
       const result = this.applyOp(op);
-      if (result) {
-        applied.push(result);
-        if (result.op !== 'event') dirty = true;
-      }
+      if (!result) continue;
+      applied.push(result);
+      if (result.op === 'event') continue;
+      const after = result.id ? this.entities.get(result.id) : null;
+      if (wasSaved || result.op === 'clear' || (after && this.saveFilter(result.id, after))) dirty = true;
     }
     if (dirty) this.scheduleSave();
     return applied;
@@ -97,11 +99,14 @@ export class World {
     }
   }
 
+  // trailing throttle, not a debounce: a presence streaming merges faster
+  // than the delay must not push the write out forever
   scheduleSave() {
-    clearTimeout(this.saveTimer);
+    if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       fs.writeFileSync(this.file, JSON.stringify(this.saveSnapshot(), null, 2));
-    }, 300);
+    }, 1000);
   }
 }

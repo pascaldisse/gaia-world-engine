@@ -20,15 +20,20 @@ export class Effects {
   }
 
   update(dt) {
-    for (const tw of [...this.tweens]) {
+    if (!this.tweens.size) return;
+    // done callbacks run after the sweep — they may queue new tweens, which
+    // must start next frame, not be visited mid-iteration
+    let finished = null;
+    for (const tw of this.tweens) {
       tw.t += dt;
       const k = Math.min(1, tw.t / tw.duration);
       tw.step(k);
       if (k >= 1) {
         this.tweens.delete(tw);
-        tw.done?.();
+        (finished ??= []).push(tw);
       }
     }
+    if (finished) for (const tw of finished) tw.done?.();
   }
 
   wispTo(target, done) {

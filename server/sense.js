@@ -1,6 +1,7 @@
-import { animatedPosition } from '../shared/motion.js';
+import { animatedPosition, behaviorList } from '../shared/motion.js';
 import { routeHeight, terrainEntries } from '../shared/terrainmap.js';
 import { sceneAt, activeScenes } from '../shared/scenes.js';
+import { r1 } from '../shared/num.js';
 
 // Perception without pixels: the same world documents the renderer draws are
 // summarized into compact text frames, queries, maps, and sanity checks.
@@ -128,7 +129,7 @@ export class Sense {
     }
     if (comps.light) bits.push(`sheds ${comps.light.color ?? 'white'} light`);
     if (comps.sound) bits.push(soundWord(comps.sound));
-    const behaviors = comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
+    const behaviors = behaviorList(comps);
     if (behaviors.length) bits.push(behaviors.map((b) => b.type).join('+'));
     if (comps.terrain) bits.push(`terrain seed ${comps.terrain.seed}`);
     if (comps.scatter) {
@@ -208,7 +209,7 @@ export class Sense {
     const spheres = [];
     for (const [id, comps] of this.world.entities) {
       if (comps.terrain || !comps.mesh) continue;
-      const behaviors = comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
+      const behaviors = behaviorList(comps);
       const orbits = behaviors.some((b) => b.type === 'orbit');
       const [x, y, z] = this.positionOf(comps);
       const ground = this.groundAt(x, z);
@@ -264,10 +265,6 @@ export class Sense {
     }
     return problems.length ? problems.slice(0, 20).join('\n') : 'no problems found';
   }
-}
-
-function r1(v) {
-  return Math.round(v * 10) / 10;
 }
 
 function dirWord(bearing) {

@@ -103,37 +103,29 @@ export class Environment {
     };
   }
 
+  // everything a crossfade interpolates, snapshotted from the live scene
+  captureState() {
+    return {
+      background: this.scene.background.clone(),
+      fogColor: this.scene.fog.color.clone(),
+      fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
+      exposure: this.exposure,
+      hemiSky: this.hemi.color.clone(),
+      hemiGround: this.hemi.groundColor.clone(),
+      hemiIntensity: this.hemi.intensity,
+      sunColor: this.sun.color.clone(),
+      sunIntensity: this.sun.intensity,
+      ambientIntensity: this.current.ambientIntensity,
+      lightScale: this.lightScale,
+    };
+  }
+
   // crossfade into another mood — scene seams use this so a boundary is a
   // slow change of air, never a cut. Snaps anything that can't interpolate.
   applyFaded(params, seconds = 2.5) {
-    const from = {
-      background: this.scene.background.clone(),
-      fogColor: this.scene.fog.color.clone(),
-      fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
-      exposure: this.exposure,
-      hemiSky: this.hemi.color.clone(),
-      hemiGround: this.hemi.groundColor.clone(),
-      hemiIntensity: this.hemi.intensity,
-      sunColor: this.sun.color.clone(),
-      sunIntensity: this.sun.intensity,
-      ambientIntensity: this.current.ambientIntensity,
-      lightScale: this.lightScale,
-    };
+    const from = this.captureState();
     this.apply(params); // snap to target (sets bloom, buses, fog type)
-    const to = {
-      background: this.scene.background.clone(),
-      fogColor: this.scene.fog.color.clone(),
-      fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
-      exposure: this.exposure,
-      hemiSky: this.hemi.color.clone(),
-      hemiGround: this.hemi.groundColor.clone(),
-      hemiIntensity: this.hemi.intensity,
-      sunColor: this.sun.color.clone(),
-      sunIntensity: this.sun.intensity,
-      ambientIntensity: this.current.ambientIntensity,
-      lightScale: this.lightScale,
-    };
-    this.fadeState = { from, to, t: 0, seconds };
+    this.fadeState = { from, to: this.captureState(), t: 0, seconds };
   }
 
   flash(intensity = 0.8) {

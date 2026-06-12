@@ -1,4 +1,6 @@
 import * as THREE from 'three/webgpu';
+import { matchesWhen } from '../../shared/ops.js';
+import { r2 } from '../../shared/num.js';
 
 // Always-on hands: look at a thing, E to grab, scroll to push/pull, E to drop.
 // A carry is a stream of merge ops — every other client (and agent) sees it live.
@@ -44,22 +46,21 @@ export class Interact {
     });
   }
 
-  rootIdOf(object) {
-    let node = object;
-    while (node && node.parent !== this.scene) node = node.parent;
-    return node?.name || null;
-  }
-
   pick() {
+    // runs every frame: skip streamed-out scenes (the raycaster ignores
+    // `visible`) and anything whose origin is far beyond the 40m ray
     const candidates = [];
+    const cam = this.camera.position;
     for (const [id, group] of this.view.groups) {
+      if (group.userData.hidden) continue;
       const comps = this.store.get(id);
       if (!comps || comps.terrain) continue;
+      if (Math.hypot(group.position.x - cam.x, group.position.z - cam.z) > 120) continue;
       candidates.push(group);
     }
     this.raycaster.setFromCamera(this.center, this.camera);
     for (const hit of this.raycaster.intersectObjects(candidates, true)) {
-      const id = this.rootIdOf(hit.object);
+      const id = this.view.rootIdOf(hit.object);
       if (id) return { id, distance: hit.distance };
     }
     return null;
@@ -75,13 +76,7 @@ export class Interact {
   }
 
   matches(when) {
-    for (const [path, expected] of Object.entries(when)) {
-      const [id, ...keys] = path.split('.');
-      let value = this.store.get(id);
-      for (const key of keys) value = value?.[key];
-      if (value !== expected) return false;
-    }
-    return true;
+    return matchesWhen(when, (id) => this.store.get(id));
   }
 
   use(id) {
@@ -188,8 +183,4 @@ export class Interact {
             : '';
     if (this.hintEl.textContent !== text) this.hintEl.textContent = text;
   }
-}
-
-function r2(v) {
-  return Math.round(v * 100) / 100;
 }

@@ -8,7 +8,9 @@ import { Sense } from './sense.js';
 import { Intents } from './intents.js';
 import { Triggers } from './triggers.js';
 import { normalizeScenes, sceneAt } from '../shared/scenes.js';
-import { SCHEMA } from '../shared/schema.js';
+import { mergeIntoLibrary } from '../shared/ops.js';
+import { SCHEMA, RUNTIME_FIELDS } from '../shared/schema.js';
+import { r1, r2 } from '../shared/num.js';
 
 // GAIA_PORT moves the whole stack (vite injects the same value into the
 // client as __GAIA_PORT__) so two worlds can run side by side
@@ -280,12 +282,7 @@ function record(applied, from) {
 // deletes a key)
 function applySceneOp(op) {
   if (!scenes.has(op.name)) return false;
-  const meta = (worldMeta.scenes[op.name] = worldMeta.scenes[op.name] ?? {});
-  for (const [key, value] of Object.entries(op.value ?? {})) {
-    if (key === 'name') continue;
-    if (value === null) delete meta[key];
-    else meta[key] = value;
-  }
+  mergeIntoLibrary(worldMeta.scenes, op.name, op.value ?? {});
   index = normalizeScenes(worldMeta);
   sense.index = index;
   saveWorldMeta();
@@ -298,8 +295,7 @@ function applySceneOp(op) {
 // rebuild whatever references the name
 function applyMaterialOp(op) {
   if (!op.name) return false;
-  if (op.value === null) delete materials[op.name];
-  else materials[op.name] = { ...(materials[op.name] ?? {}), ...op.value };
+  mergeIntoLibrary(materials, op.name, op.value);
   fs.writeFileSync(materialsFile, JSON.stringify(materials, null, 2) + '\n');
   console.log(`[gaia] material ${op.name} ${op.value === null ? 'deleted' : 'updated'}`);
   return true;
@@ -329,10 +325,15 @@ function writeBackScenes(applied) {
 
 // a prefab instance is stored as its deltas: `prefab` plus whichever
 // components differ from the prefab's. Everything else is the full document.
-// The scene stamp is the file it sits in — never stored.
+// The scene stamp is the file it sits in — never stored; runtime-simulated
+// fields (schema RUNTIME_FIELDS) stay out so the sim never overwrites the
+// authored values in git.
 function sceneDoc(comps) {
   const doc = structuredClone(comps);
   delete doc.scene;
+  for (const [comp, fields] of Object.entries(RUNTIME_FIELDS)) {
+    if (doc[comp]) for (const field of fields) delete doc[comp][field];
+  }
   const base = prefabs.find((p) => p.name === doc.prefab?.name)?.components;
   if (!base) return doc;
   const out = { prefab: doc.prefab.name };
@@ -398,7 +399,7 @@ function applyAndBroadcast(ops, from, { dev = false } = {}) {
   return applied;
 }
 
-const intents = new Intents({ world, apply: applyAndBroadcast });
+const intents = new Intents({ world, apply: applyAndBroadcast, sense });
 setInterval(() => intents.tick(0.1), 100);
 
 const triggers = new Triggers({ world, sense, apply: applyAndBroadcast, now: worldTime });
@@ -424,7 +425,7 @@ setInterval(() => {
     }
     if (w.lightning !== false && now >= st.nextStrike) {
       st.nextStrike = now + gap(w);
-      const intensity = Math.round((0.5 + Math.random() * 0.7) * 100) / 100;
+      const intensity = r2(0.5 + Math.random() * 0.7);
       applyAndBroadcast(
         [
           {
@@ -444,7 +445,7 @@ setInterval(() => {
                 {
                   op: 'event',
                   name: 'lightning',
-                  data: { intensity: Math.round(intensity * (0.5 + Math.random() * 0.4) * 100) / 100, delay: 0.4 },
+                  data: { intensity: r2(intensity * (0.5 + Math.random() * 0.4)), delay: 0.4 },
                 },
               ],
               'weather',
@@ -459,7 +460,7 @@ setInterval(() => {
       // is rain the player decides is broken)
       const cycle = Math.sin((worldTime() * Math.PI * 2) / w.rainCycle) * 0.5 + 0.5;
       const base = w.rainBase ?? 0;
-      const rain = Math.round((base + cycle * Math.max(0, (w.rainAmount ?? 1) - base)) * 100) / 100;
+      const rain = r2(base + cycle * Math.max(0, (w.rainAmount ?? 1) - base));
       if (Math.abs(rain - (w.rain ?? 0)) > 0.05) {
         applyAndBroadcast([{ op: 'merge', id, component: 'weather', value: { rain } }], 'weather');
       }
@@ -502,7 +503,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/sense/describe') {
       const comps = world.entities.get(q.id);
       if (!comps) return json(res, { error: `no entity ${q.id}` }, 404);
-      return text(res, `${q.id}: ${sense.describe(comps)} · at (${sense.positionOf(comps).map((v) => Math.round(v * 10) / 10).join(', ')})`);
+      return text(res, `${q.id}: ${sense.describe(comps)} · at (${sense.positionOf(comps).map(r1).join(', ')})`);
     }
     if (req.method === 'GET' && url.pathname === '/sense/query') {
       return json(res, sense.query({ ...nums(q, ['nearX', 'nearZ', 'radius']), has: q.has, name: q.name }));
@@ -579,7 +580,7 @@ const server = http.createServer(async (req, res) => {
       const state = {};
       for (const [id, comps] of world.entities) if (comps.state) state[id] = comps.state;
       const data = {
-        time: { wall: new Date().toISOString(), world: Math.round(worldTime() * 10) / 10 },
+        time: { wall: new Date().toISOString(), world: r1(worldTime()) },
         player: p,
         carried: world.entities.get(p.id) ?? null,
         state,

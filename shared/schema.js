@@ -26,7 +26,7 @@ export const SCHEMA = {
     default: { parts: [{ shape: 'box', size: [1, 1, 1], color: '#9aa0a6' }] },
     fields: {
       shape: { doc: 'primitive', enum: ['box', 'sphere', 'cylinder', 'cone', 'torus', 'octahedron', 'icosahedron', 'plane', 'tube'] },
-      preset: { doc: 'shader instead of a plain material', enum: ['glow', 'flame', 'water', 'hologram', 'beam'] },
+      preset: { doc: 'shader instead of a plain material', enum: ['glow', 'flame', 'water', 'hologram', 'beam', 'sky', 'overcast', 'clouds', 'abyss', 'stone'] },
       size: { doc: 'box [x,y,z] / plane [w,h]', range: [0.05, 500] },
       radius: { doc: 'sphere/cone/torus radius', range: [0.05, 50] },
       radiusTop: { doc: 'cylinder top radius (0 = point)', range: [0, 50] },
@@ -291,6 +291,11 @@ export const SCHEMA = {
     fields: {},
   },
 };
+
+// fields the server SIMULATES at runtime — dev write-back strips them so a
+// scene file keeps its authored values instead of whatever the sim last
+// computed (the `scene` stamp gets the same treatment, hardcoded)
+export const RUNTIME_FIELDS = { weather: ['rain'] };
 
 // the add-component menu: everything with an authorable default
 export function componentDefaults() {

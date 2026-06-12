@@ -1,8 +1,10 @@
 import * as THREE from 'three/webgpu';
 import { buildTerrainMesh, heightAt, registerTerrain, unregisterTerrain } from './terrain.js';
-import { makeGeometry, makePartMaterial, disposeOwn } from './geometry.js';
+import { makeGeometry, makePartMaterial, disposeOwn, partsOf } from './geometry.js';
+import { SKY_PRESETS } from './presets.js';
 import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
+import { inArea } from '../../shared/scenes.js';
 
 // In the node renderer the SET of scene lights is part of every material's
 // shader cache key (LightsNode hashes light.id + castShadow) — adding or
@@ -50,6 +52,13 @@ export class View {
     this.showQueue = [];
     this.lightSpecs = new Map(); // id -> point light spec, pool-assigned by distance
     this.slotById = new Map(); // id -> pool slot currently lighting it
+    // component indexes for the per-frame ground/water pipeline — the player
+    // asks every frame, so it must never scan the whole entity map
+    this.colliderIds = new Set();
+    this.waterIds = new Set();
+    // bumped whenever scene-graph content appears or changes — editor sweeps
+    // (draw modes, skybox hiding) re-run only when this moves
+    this.buildVersion = 0;
     this.lightPool = [];
     for (let i = 0; i < LIGHT_POOL_SIZE; i++) {
       const light = new THREE.PointLight('#ffffff', 0, 1);
@@ -98,6 +107,7 @@ export class View {
     if (!group || !group.userData.hidden) return;
     group.visible = id !== this.ownPresence;
     group.userData.hidden = false;
+    this.buildVersion++;
     const components = this.store.get(id);
     if (components?.sound) this.applySound(id, group, components.sound);
   }
@@ -108,9 +118,9 @@ export class View {
     this.buildQueue.push(id);
   }
 
-  // time-sliced streaming: a scene coming in never drops a frame — builds run
-  // against a per-frame millisecond deadline, and each built entity attaches
-  // only after its pipelines pre-compiled off-frame (buildDeferred)
+  // time-sliced streaming: a scene coming in never drops a frame — builds
+  // run against a per-frame millisecond deadline, weighted by mesh-part
+  // count (pipelines were all warmed at load; first-draw setup wasn't)
   update() {
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
@@ -136,10 +146,35 @@ export class View {
   }
 
   handle(event) {
+    this.reindex(event);
     if (event.kind === 'snapshot') this.rebuildAll();
     else if (event.kind === 'spawn') this.buildAnimated(event.id);
     else if (event.kind === 'despawn') this.removeAnimated(event.id);
     else if (event.kind === 'set') this.applyComponent(event.id, event.component);
+  }
+
+  // keep the component indexes mirroring the store, build state aside —
+  // water in a not-yet-built entity still drowns
+  reindex(event) {
+    if (event.kind === 'snapshot') {
+      this.colliderIds.clear();
+      this.waterIds.clear();
+      for (const [id, comps] of this.store.entities) this.indexEntity(id, comps);
+    } else if (event.kind === 'spawn') {
+      this.indexEntity(event.id, this.store.get(event.id));
+    } else if (event.kind === 'despawn') {
+      this.colliderIds.delete(event.id);
+      this.waterIds.delete(event.id);
+    } else if (event.kind === 'set' && (event.component === 'collider' || event.component === 'water')) {
+      this.indexEntity(event.id, this.store.get(event.id));
+    }
+  }
+
+  indexEntity(id, comps) {
+    if (comps?.collider?.boxes) this.colliderIds.add(id);
+    else this.colliderIds.delete(id);
+    if (comps?.water) this.waterIds.add(id);
+    else this.waterIds.delete(id);
   }
 
   // every material recipe in the snapshot — including scenes not yet active,
@@ -155,7 +190,7 @@ export class View {
     if (!this.camera) return;
     const parts = [];
     const addParts = (mesh, instanced = false) => {
-      if (mesh) for (const part of mesh.parts ?? [mesh]) parts.push({ part, instanced });
+      for (const part of partsOf(mesh)) parts.push({ part, instanced });
     };
     const scanOps = (ops) => {
       for (const op of ops ?? []) {
@@ -302,6 +337,7 @@ export class View {
     }
     this.groups.set(id, group);
     this.scene.add(group);
+    this.buildVersion++;
     // terrain first so grounded transforms in the same entity resolve correctly
     const names = Object.keys(components).sort((a, b) => (a === 'terrain' ? -1 : b === 'terrain' ? 1 : 0));
     for (const name of names) this.applyComponent(id, name);
@@ -319,6 +355,7 @@ export class View {
         break;
       case 'mesh':
         this.applyMesh(group, value);
+        this.buildVersion++;
         break;
       case 'light':
         this.applyLight(id, group, value);
@@ -329,12 +366,15 @@ export class View {
       case 'terrain':
         this.applyTerrain(group, value);
         this.resnapGrounded();
+        this.buildVersion++;
         break;
       case 'scatter':
         this.applyScatter(group, value);
+        this.buildVersion++;
         break;
       case 'particles':
         this.applyParticles(id, group, value);
+        this.buildVersion++;
         break;
       case 'environment':
         // in a multi-scene world, only the current scene's mood applies
@@ -395,15 +435,14 @@ export class View {
       }
     }
     if (!recipe) return;
-    const parts = recipe.parts ?? [recipe];
-    for (const part of parts) {
+    for (const part of partsOf(recipe)) {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
       // preset parts (water, flame, glow, hologram) are visual, not walkable
       // by default — but an explicit solid wins either way: architectural
       // presets (a stone tube's cave floor) can opt in with solid: true
       mesh.userData.solid = part.solid !== undefined ? !!part.solid : !part.preset;
       // sky-as-geometry sheets — the editor's skybox toggle hides these
-      if (part.preset === 'sky' || part.preset === 'overcast' || part.preset === 'clouds') mesh.userData.sky = true;
+      if (SKY_PRESETS.has(part.preset)) mesh.userData.sky = true;
       // invisible parts still collide — walkway/box colliders
       if (part.visible === false) mesh.visible = false;
       mesh.position.set(...(part.position ?? [0, 0, 0]));
@@ -488,11 +527,7 @@ export class View {
     const wantIds = new Set();
     for (const c of want) wantIds.add(c.id);
     for (const slot of this.lightPool) {
-      if (slot.id !== null && !wantIds.has(slot.id)) {
-        this.slotById.delete(slot.id);
-        slot.id = null;
-        slot.light.intensity = 0;
-      }
+      if (slot.id !== null && !wantIds.has(slot.id)) this.releaseSlot(slot.id);
     }
     let free = null;
     for (const c of want) {
@@ -588,8 +623,8 @@ export class View {
   // yaw-aware.
   walkableAt(x, z, maxTop = Infinity) {
     let best = null;
-    for (const [id, comps] of this.store.entities) {
-      const boxes = comps.collider?.boxes;
+    for (const id of this.colliderIds) {
+      const boxes = this.store.get(id)?.collider?.boxes;
       if (!boxes) continue;
       const group = this.groups.get(id);
       if (!group) continue;
@@ -615,21 +650,14 @@ export class View {
   }
 
   // water lookup: the first active `water` component whose area contains
-  // (x, z) — {level, drownAfter} or null
+  // (x, z) — {level, drownAfter} or null. Same containment math as the
+  // server's trigger volumes (shared inArea), so the swim and the drown agree.
   waterAt(x, z) {
-    for (const comps of this.store.entities.values()) {
-      const water = comps.water;
+    for (const id of this.waterIds) {
+      const comps = this.store.get(id);
+      const water = comps?.water;
       if (!water || !this.isActive(comps)) continue;
-      const area = water.area;
-      if (area) {
-        const [cx, cz] = area.center ?? [0, 0];
-        if (area.radius) {
-          if (Math.hypot(x - cx, z - cz) > area.radius) continue;
-        } else {
-          const [sx, sz] = area.size ?? [100, 100];
-          if (Math.abs(x - cx) > sx / 2 || Math.abs(z - cz) > sz / 2) continue;
-        }
-      }
+      if (water.area && !inArea(water.area, x, z, [100, 100])) continue;
       return { level: water.level ?? 0, drownAfter: water.drownAfter };
     }
     return null;
@@ -641,8 +669,8 @@ export class View {
     const feet = position.y - eyeHeight;
     const head = position.y + 0.2;
     const r = 0.35;
-    for (const [id, comps] of this.store.entities) {
-      const boxes = comps.collider?.boxes;
+    for (const id of this.colliderIds) {
+      const boxes = this.store.get(id)?.collider?.boxes;
       if (!boxes) continue;
       const group = this.groups.get(id);
       if (!group) continue;
@@ -695,9 +723,11 @@ export class View {
       const comps = this.store.get(id);
       if (!comps?.mesh || comps.terrain) continue;
       if (Math.hypot(group.position.x - x, group.position.z - z) > 60) continue;
-      group.traverse((node) => {
-        if (node.isMesh && !node.isInstancedMesh && node.userData.solid) candidates.push(node);
-      });
+      // solid surfaces only ever come from mesh parts — direct children, so
+      // this per-frame hot path never pays a recursive traverse
+      for (const child of group.children) {
+        if (child.userData.kind === 'mesh-part' && child.userData.solid) candidates.push(child);
+      }
     }
     if (!candidates.length) return null;
     this._rayOrigin.set(x, fromY, z);
@@ -709,6 +739,13 @@ export class View {
 
   getGroup(id) {
     return this.groups.get(id);
+  }
+
+  // which entity a raycast hit belongs to: walk up to the group under the scene
+  rootIdOf(object) {
+    let node = object;
+    while (node && node.parent !== this.scene) node = node.parent;
+    return node?.name || null;
   }
 
   getLight(id) {

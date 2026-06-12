@@ -1,5 +1,12 @@
 import * as THREE from 'three/webgpu';
 import { heightAt } from './terrain.js';
+import { isTyping } from './dom.js';
+import { r2 } from '../../shared/num.js';
+
+// per-frame scratch — the movement math must not allocate
+const _forward = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _move = new THREE.Vector3();
 
 export class Player {
   constructor({ camera, dom, overlay, view }) {
@@ -114,15 +121,15 @@ export class Player {
     const speed = this.swimming && !flying ? speedBase * 0.4 : speedBase;
     // Unity-style flythrough moves along the view direction (pitch included)
     const forward = flying
-      ? new THREE.Vector3(
+      ? _forward.set(
           -Math.sin(this.yaw) * Math.cos(this.pitch),
           Math.sin(this.pitch),
           -Math.cos(this.yaw) * Math.cos(this.pitch),
         )
-      : new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+      : _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    const right = _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
-    const move = new THREE.Vector3();
+    const move = _move.set(0, 0, 0);
     if (canMove) {
       if (this.keys.has('KeyW')) move.add(forward);
       if (this.keys.has('KeyS')) move.sub(forward);
@@ -264,13 +271,4 @@ export class Player {
     this.euler.set(this.pitch, this.yaw, 0);
     this.camera.quaternion.setFromEuler(this.euler);
   }
-}
-
-function isTyping() {
-  const el = document.activeElement;
-  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
-}
-
-function r2(v) {
-  return Math.round(v * 100) / 100;
 }

@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { heightAt } from './terrain.js';
+import { disposeOwn, tubeRadii } from './geometry.js';
+import { behaviorList } from '../../shared/motion.js';
 
 // Gizmos draw the invisible data: collider boxes, trigger volumes, water
 // areas, light and sound ranges, ferry routes, scene bounds. X-ray lines
@@ -120,8 +122,7 @@ export class Gizmos {
       if (comps.light && this.want('lights', id)) this.addLight(id, comps);
       if (comps.sound && !comps.sound.ambient && this.want('sounds', id)) this.addSound(id, comps);
       if (this.want('paths', id)) {
-        const behaviors = comps.behavior ? (Array.isArray(comps.behavior) ? comps.behavior : [comps.behavior]) : [];
-        for (const b of behaviors) {
+        for (const b of behaviorList(comps)) {
           if (b.type === 'path' && b.points?.length >= 2) this.addPath(b);
           if (b.type === 'orbit') this.addOrbit(b);
         }
@@ -314,7 +315,7 @@ export class Gizmos {
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(linePts), lineMaterial(COLORS.path, 0.9));
     mark(line);
     wrapper.add(line);
-    const radii = Array.isArray(p.radii) ? p.radii : [p.radii ?? p.radius ?? 3];
+    const radii = tubeRadii(p);
     const markerMat = new THREE.MeshBasicMaterial({ color: COLORS.path, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, fog: false });
     const up = new THREE.Vector3(0, 1, 0);
     pts.forEach((pt, i) => {
@@ -472,7 +473,7 @@ function dashedMaterial(color, opacity = 0.6) {
 
 // closed strips, not THREE.LineLoop — WebGPU has no line-loop primitive
 // topology, so LineLoop silently draws nothing on the WebGPU renderer
-function circleGeometry(radius, segs = 64) {
+export function circleGeometry(radius, segs = 64) {
   const points = [];
   for (let i = 0; i <= segs; i++) {
     const a = (i / segs) * Math.PI * 2;
@@ -496,12 +497,8 @@ function mark(object) {
   object.renderOrder = 999;
 }
 
+// gizmo chrome owns all its resources, so the shared-cache-aware dispose
+// from geometry.js is simply correct here too
 function disposeObject(object) {
-  object.traverse((node) => {
-    node.geometry?.dispose();
-    if (node.material) {
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      for (const material of materials) material.dispose();
-    }
-  });
+  object.traverse((node) => disposeOwn(node));
 }

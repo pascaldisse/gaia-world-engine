@@ -1,27 +1,19 @@
 import { SCHEMA, componentDefaults, fieldInfo } from '../../shared/schema.js';
+import { div, span, button } from './dom.js';
 
 // The inspector is a lens over the entity document: controls are generated
 // from the JSON itself, so every component — present or future — is editable
 // with zero per-component UI code. The schema (shared/schema.js) supplies
 // meaning: docs, real ranges, enums, and the full add-component menu.
 
-// fallback ranges for keys the schema doesn't know, by bare field name
+// fallback ranges ONLY for leaves the schema genuinely lacks (mesh-part
+// transforms, env fog near/far, runtime weather.rain, sfx delay…) — a key
+// the schema ranges must NOT appear here, or the two tables drift
 const RANGES = {
-  position: [-80, 80], rotation: [-3.1416, 3.1416], scale: [0.05, 8], offset: [-10, 10],
-  intensity: [0, 120], distance: [0, 120], emissiveIntensity: [0, 6],
-  radius: [0.05, 12], radiusTop: [0.05, 12], radiusBottom: [0.05, 12], height: [0.05, 24],
-  tube: [0.05, 4], size: [0.05, 40], segments: [16, 256],
-  roughness: [0, 1], metalness: [0, 1], opacity: [0, 1],
-  freq: [20, 1200], level: [0, 1], interval: [0.1, 10], refDistance: [1, 30],
-  speed: [-5, 5], amplitude: [0, 20], amount: [0, 1], phase: [0, 6.283],
-  frequency: [0.001, 0.08], seed: [1, 99], fov: [10, 170], range: [1, 200], yaw: [-3.1416, 3.1416],
-  count: [1, 2000], offsetY: [-5, 10], tilt: [0, 1], noise: [0.001, 0.1], bias: [0, 1],
-  strength: [0, 2], threshold: [0, 1], near: [1, 200], far: [10, 800], exposure: [0.2, 3],
-  density: [0.001, 0.05], bob: [0, 5], y: [-10, 60],
-  gain: [0, 1], detune: [-100, 100], Q: [0.1, 20], rate: [0, 20], depth: [0, 1],
-  reverb: [0, 1], attack: [0, 1], decay: [0, 6], delay: [0, 5], lowpass: [40, 8000], sweep: [20, 4000],
-  rainCycle: [5, 600], rainAmount: [0, 1], rain: [0, 1], minGap: [1, 120], maxGap: [2, 240],
-  glowStrength: [0, 4], lines: [2, 120], minHeight: [-20, 20], maxHeight: [-20, 20],
+  position: [-80, 80], rotation: [-3.1416, 3.1416], scale: [0.05, 8],
+  segments: [16, 256], speed: [-5, 5], yaw: [-3.1416, 3.1416],
+  level: [0, 1], y: [-10, 60], near: [1, 200], far: [10, 800],
+  rain: [0, 1], delay: [0, 5],
 };
 
 const COMPONENT_DEFAULTS = componentDefaults();
@@ -70,12 +62,17 @@ export class Panel {
     this.el.style.display = 'none';
   }
 
-  refresh() {
+  // called with each applied op batch — re-render only when one of the ops
+  // actually touches what the panel is showing (presence streams, agent
+  // traffic and carry merges must not rebuild the inspector)
+  refresh(ops = null) {
     if (this.sceneName) {
+      if (ops && !ops.some((op) => op.op === 'scene' && op.name === this.sceneName)) return;
       if (!this.interacting && !this.el.contains(document.activeElement)) this.renderScene();
       return;
     }
     if (!this.id) return;
+    if (ops && !ops.some((op) => op.id === this.id)) return;
     if (!this.store.get(this.id)) {
       this.hide();
       return;
@@ -118,28 +115,35 @@ export class Panel {
     for (const [key, value] of Object.entries(raw)) {
       if (key !== 'name') editable[key] = value;
     }
+    this.jsonEditor(body, editable, (next) => {
+      if (next.name) delete next.name;
+      const prev = structuredClone(editable);
+      const value = {};
+      const undoValue = {};
+      for (const key of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+        if (JSON.stringify(prev[key]) === JSON.stringify(next[key])) continue;
+        value[key] = next[key] ?? null;
+        undoValue[key] = prev[key] ?? null;
+      }
+      if (Object.keys(value).length) {
+        const redo = [{ op: 'scene', name: this.sceneName, value }];
+        this.send(redo);
+        this.history.push([{ op: 'scene', name: this.sceneName, value: undoValue }], redo, `scene.${this.sceneName}`);
+      }
+    });
+  }
+
+  // textarea + apply + error line; onApply gets the parsed JSON and may
+  // throw — the message lands in the error line
+  jsonEditor(body, value, onApply) {
     const area = document.createElement('textarea');
-    area.value = JSON.stringify(editable, null, 2);
+    area.value = JSON.stringify(value, null, 2);
     area.spellcheck = false;
     body.append(area);
     const error = div('json-error');
     const apply = button('apply', () => {
       try {
-        const next = JSON.parse(area.value);
-        if (next.name) delete next.name;
-        const prev = structuredClone(editable);
-        const value = {};
-        const undoValue = {};
-        for (const key of new Set([...Object.keys(prev), ...Object.keys(next)])) {
-          if (JSON.stringify(prev[key]) === JSON.stringify(next[key])) continue;
-          value[key] = next[key] ?? null;
-          undoValue[key] = prev[key] ?? null;
-        }
-        if (Object.keys(value).length) {
-          const redo = [{ op: 'scene', name: this.sceneName, value }];
-          this.send(redo);
-          this.history.push([{ op: 'scene', name: this.sceneName, value: undoValue }], redo, `scene.${this.sceneName}`);
-        }
+        onApply(JSON.parse(area.value));
         error.textContent = '';
       } catch (err) {
         error.textContent = String(err.message ?? err);
@@ -416,54 +420,21 @@ export class Panel {
   }
 
   renderJson(body, comps) {
-    const area = document.createElement('textarea');
-    area.value = JSON.stringify(comps, null, 2);
-    area.spellcheck = false;
-    body.append(area);
-    const error = div('json-error');
-    const apply = button('apply', () => {
-      try {
-        const next = JSON.parse(area.value);
-        const prev = structuredClone(comps);
-        const undoOps = [];
-        const redoOps = [];
-        for (const name of new Set([...Object.keys(prev), ...Object.keys(next)])) {
-          if (JSON.stringify(prev[name]) === JSON.stringify(next[name])) continue;
-          undoOps.push({ op: 'set', id: this.id, component: name, value: prev[name] ?? null });
-          redoOps.push({ op: 'set', id: this.id, component: name, value: next[name] ?? null });
-        }
-        if (redoOps.length) {
-          this.send(redoOps);
-          this.history.push(undoOps, redoOps);
-        }
-        error.textContent = '';
-      } catch (err) {
-        error.textContent = String(err.message ?? err);
+    this.jsonEditor(body, comps, (next) => {
+      const prev = structuredClone(comps);
+      const undoOps = [];
+      const redoOps = [];
+      for (const name of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+        if (JSON.stringify(prev[name]) === JSON.stringify(next[name])) continue;
+        undoOps.push({ op: 'set', id: this.id, component: name, value: prev[name] ?? null });
+        redoOps.push({ op: 'set', id: this.id, component: name, value: next[name] ?? null });
+      }
+      if (redoOps.length) {
+        this.send(redoOps);
+        this.history.push(undoOps, redoOps);
       }
     });
-    body.append(apply, error);
   }
-}
-
-function div(cls, text) {
-  const el = document.createElement('div');
-  el.className = cls;
-  if (text !== undefined) el.textContent = text;
-  return el;
-}
-
-function span(cls, text) {
-  const el = document.createElement('span');
-  el.className = cls;
-  el.textContent = text;
-  return el;
-}
-
-function button(text, onClick) {
-  const el = document.createElement('button');
-  el.textContent = text;
-  el.onclick = onClick;
-  return el;
 }
 
 function expandHex(hex) {

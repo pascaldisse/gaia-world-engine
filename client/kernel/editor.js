@@ -1,7 +1,10 @@
 import * as THREE from 'three/webgpu';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { heightAt } from './terrain.js';
-import { makeGeometry } from './geometry.js';
+import { makeGeometry, disposeOwn, partsOf, tubeRadii } from './geometry.js';
+import { circleGeometry } from './gizmos.js';
+import { isTyping, pointerNDC } from './dom.js';
+import { r2 } from '../../shared/num.js';
 
 // Creator mode with Unity controls: Q view / W move / E rotate / R scale,
 // F frames the selection, hold RMB to fly (WASD + Q/E down/up), scroll dollies.
@@ -156,76 +159,38 @@ export class Editor {
         return;
       }
       if (e.metaKey || e.ctrlKey) return;
-      if (this.carveEdit) {
-        // hole mode owns the keys: delete removes the CUTTER, never the
-        // entity — the entity is unreachable until esc leaves the mode
-        switch (e.code) {
-          case 'KeyQ':
-            this.setTool(null);
-            break;
-          case 'KeyW':
-            this.setTool('translate');
-            break;
-          case 'KeyE':
-            this.setTool('rotate');
-            break;
-          case 'KeyR':
-            this.setTool('scale');
-            break;
-          case 'KeyF':
-            this.frameSelected();
-            break;
-          case 'KeyN':
-            this.addCarve();
-            break;
-          case 'Delete':
-          case 'Backspace':
-            this.removeCarve();
-            break;
-          case 'Escape':
-            this.exitCarveEdit();
-            break;
-        }
-        return;
-      }
-      if (this.pathEdit) {
-        // a spline point translates and thickens — no rotate, and delete
-        // still means "delete the entity", too heavy a key to leave armed
-        switch (e.code) {
-          case 'KeyQ':
-            this.setTool(null);
-            break;
-          case 'KeyW':
-            this.setTool('translate');
-            break;
-          case 'KeyR':
-            this.setTool('scale');
-            break;
-          case 'KeyF':
-            this.frameSelected();
-            break;
-          case 'Escape':
-            this.exitPathEdit();
-            break;
-        }
-        return;
-      }
+      // the tool keys are one vocabulary across normal and lens modes; a
+      // spline point has no rotation, so E stays inert in path mode
       switch (e.code) {
         case 'KeyQ':
           this.setTool(null);
-          break;
+          return;
         case 'KeyW':
           this.setTool('translate');
-          break;
+          return;
         case 'KeyE':
-          this.setTool('rotate');
-          break;
+          if (!this.pathEdit) this.setTool('rotate');
+          return;
         case 'KeyR':
           this.setTool('scale');
-          break;
+          return;
         case 'KeyF':
           this.frameSelected();
-          break;
+          return;
+      }
+      if (this.carveEdit) {
+        // hole mode owns the keys: delete removes the CUTTER, never the
+        // entity — the entity is unreachable until esc leaves the mode
+        if (e.code === 'KeyN') this.addCarve();
+        else if (e.code === 'Delete' || e.code === 'Backspace') this.removeCarve();
+        else if (e.code === 'Escape') this.exitCarveEdit();
+        return;
+      }
+      if (this.pathEdit) {
+        if (e.code === 'Escape') this.exitPathEdit();
+        return;
+      }
+      switch (e.code) {
         case 'Delete':
         case 'Backspace':
           if (this.selected) this.delete(this.selected);
@@ -292,14 +257,12 @@ export class Editor {
   }
 
   selectAt(event) {
-    this.pointer.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.setFromCamera(pointerNDC(event, this.pointer), this.camera);
     const hits = this.raycaster.intersectObjects([...this.view.groups.values()], true);
     for (const hit of hits) {
-      let node = hit.object;
-      while (node && node.parent !== this.scene) node = node.parent;
-      if (node?.name) {
-        this.select(node.name);
+      const id = this.view.rootIdOf(hit.object);
+      if (id) {
+        this.select(id);
         return;
       }
     }
@@ -357,23 +320,22 @@ export class Editor {
     else this.attachGizmo();
   }
 
-  // ---- path edit: tube splines as grabbable points ----
-  // The inspector's numbers are exact but blind; this is the hands-on lens.
-  // Click a control point, W drags it with the same translate gizmo entities
-  // use, R scales its radius — one axis, because a spline point has
-  // thickness, not volume, and rotation doesn't exist for it at all. The
-  // tube itself rebuilds on release, not per frame: a carve-heavy tube
-  // re-runs CSG every rebuild, so the orange spline and the radius ring are
-  // the live preview while dragging.
+  // ---- the lens scaffolding: path edit and hole edit are the same kind of
+  // session — edit a sub-array of one mesh part through grabbable handles.
+  // Everything generic lives here; each lens keeps only its own handle
+  // construction, gizmo axis policy and commit mutation. The next lens
+  // (collider boxes, behavior waypoints) reuses all of it.
 
-  editPath(id, partIndex = 0) {
-    if (this.player.gameMode) return;
+  // open a session: enters create mode, tears down any previous session via
+  // select(id), and returns the fresh session (null = refused)
+  enterLens(key, id, partIndex, extra) {
+    if (this.player.gameMode) return null;
     if (this.mode !== 'create') this.enterCreate();
-    this.select(id); // also tears down any previous path session
-    if (!this.store.get(id)) return;
+    this.select(id);
+    if (!this.store.get(id)) return null;
     this.tc.detach();
     this.helper.visible = false;
-    this.pathEdit = {
+    const session = {
       id,
       part: partIndex,
       index: null,
@@ -381,25 +343,22 @@ export class Editor {
       proxy: new THREE.Object3D(),
       root: null,
       frame: null,
-      line: null,
-      ring: null,
-      closed: false,
       dragging: false,
       dragMode: null,
       startMesh: null,
-      startRadius: 1,
+      ...extra,
     };
-    this.scene.add(this.pathEdit.proxy);
-    if (this.tool === 'rotate' || !this.tool) this.tool = 'translate';
-    this.buildPathHandles();
-    if (this.pathEdit) hintText('path edit — click a point · W move · R radius · esc done');
+    this[key] = session;
+    this.scene.add(session.proxy);
+    return session;
   }
 
-  exitPathEdit() {
-    if (!this.pathEdit) return;
-    this.disposePathVisuals();
-    this.scene.remove(this.pathEdit.proxy);
-    this.pathEdit = null;
+  exitLens(key) {
+    const s = this[key];
+    if (!s) return;
+    this.disposeLensVisuals(s);
+    this.scene.remove(s.proxy);
+    this[key] = null;
     this.tc.detach();
     this.tc.showX = this.tc.showY = this.tc.showZ = true;
     this.helper.visible = false;
@@ -407,26 +366,21 @@ export class Editor {
     this.attachGizmo();
   }
 
+  // the mesh part a session edits, from the live document
+  lensPart(s) {
+    return partsOf(this.store.get(s.id)?.mesh)[s.part] ?? null;
+  }
+
   // handle space is the part's own frame (scene ∘ entity ∘ part transform),
-  // so a handle's position IS a path coordinate — no conversion drift
-  buildPathHandles() {
-    const pe = this.pathEdit;
-    this.disposePathVisuals();
-    const comps = this.store.get(pe.id);
-    const mesh = comps?.mesh;
-    const part = (mesh?.parts ?? [mesh])[pe.part];
-    if (!part || !Array.isArray(part.path) || part.path.length < 2) {
-      this.exitPathEdit();
-      return;
-    }
-    pe.closed = part.closed ?? false;
+  // so a handle's pose IS a path/carve coordinate — no conversion drift
+  buildPartFrame(id, part) {
     const root = new THREE.Group();
-    const group = this.view.getGroup(pe.id);
+    const group = this.view.getGroup(id);
     if (group) {
       group.updateWorldMatrix(true, false);
       root.applyMatrix4(group.matrixWorld);
     } else {
-      const t = comps.transform ?? {};
+      const t = this.store.get(id)?.transform ?? {};
       root.position.set(...(t.position ?? [0, 0, 0]));
       root.rotation.set(...(t.rotation ?? [0, 0, 0]));
     }
@@ -440,6 +394,102 @@ export class Editor {
     root.add(frame);
     this.scene.add(root);
     root.updateWorldMatrix(true, true);
+    return { root, frame };
+  }
+
+  disposeLensVisuals(s) {
+    if (!s) return;
+    if (s.root) {
+      // handle geometries may come from the shared recipe cache (carve
+      // ghosts); materials are always the lens's own — disposeOwn knows
+      s.root.traverse((node) => disposeOwn(node));
+      this.scene.remove(s.root);
+    }
+    s.root = s.frame = null;
+    if ('line' in s) s.line = s.ring = null;
+    s.handles = [];
+  }
+
+  // the data changed under the session (echo, undo, another agent): rebuild
+  // the handles and re-select what was selected, if it still exists
+  refreshLens(key, rebuild, reselect) {
+    const s = this[key];
+    if (!s || s.dragging) return;
+    const index = s.index;
+    rebuild();
+    const next = this[key];
+    if (!next) return; // the part vanished — session closed
+    if (index !== null && index < next.handles.length) reselect(index);
+    else {
+      next.index = null;
+      this.tc.detach();
+      this.helper.visible = false;
+    }
+  }
+
+  pickLens(event, handles, indexKey, select) {
+    this.raycaster.setFromCamera(pointerNDC(event, this.pointer), this.camera);
+    const hits = this.raycaster.intersectObjects(handles, false);
+    if (hits.length) select(hits[0].object.userData[indexKey]);
+    // a miss keeps the mode — deliberate exit only (esc), so a sloppy
+    // click near a thin handle never dumps you back to entity selection
+  }
+
+  // drag lifecycle shared by every lens: capture the mesh on grab, commit
+  // one mesh op (with undo) on release
+  lensDragChanged(s, dragging, onStart, commit) {
+    if (s.index === null) return;
+    if (dragging) {
+      s.dragging = true;
+      s.dragMode = this.tool;
+      s.startMesh = structuredClone(this.store.get(s.id)?.mesh ?? null);
+      onStart?.();
+    } else {
+      s.dragging = false;
+      const value = commit();
+      s.proxy.scale.set(1, 1, 1);
+      if (!value) return;
+      this.commitMeshOp(s.id, s.startMesh, value);
+    }
+  }
+
+  commitMeshOp(id, startMesh, value) {
+    const redo = [{ op: 'set', id, component: 'mesh', value }];
+    this.send(redo);
+    this.history.push([{ op: 'set', id, component: 'mesh', value: startMesh }], redo);
+  }
+
+  // ---- path edit: tube splines as grabbable points ----
+  // The inspector's numbers are exact but blind; this is the hands-on lens.
+  // Click a control point, W drags it with the same translate gizmo entities
+  // use, R scales its radius — one axis, because a spline point has
+  // thickness, not volume, and rotation doesn't exist for it at all. The
+  // tube itself rebuilds on release, not per frame: a carve-heavy tube
+  // re-runs CSG every rebuild, so the orange spline and the radius ring are
+  // the live preview while dragging.
+
+  editPath(id, partIndex = 0) {
+    const s = this.enterLens('pathEdit', id, partIndex, { line: null, ring: null, closed: false, startRadius: 1 });
+    if (!s) return;
+    if (this.tool === 'rotate' || !this.tool) this.tool = 'translate';
+    this.buildPathHandles();
+    if (this.pathEdit) hintText('path edit — click a point · W move · R radius · esc done');
+  }
+
+  exitPathEdit() {
+    this.exitLens('pathEdit');
+  }
+
+  buildPathHandles() {
+    const pe = this.pathEdit;
+    this.disposeLensVisuals(pe);
+    const part = this.lensPart(pe);
+    if (!part || !Array.isArray(part.path) || part.path.length < 2) {
+      this.exitPathEdit();
+      return;
+    }
+    pe.closed = part.closed ?? false;
+    const { root, frame } = this.buildPartFrame(pe.id, part);
     pe.root = root;
     pe.frame = frame;
 
@@ -458,47 +508,18 @@ export class Editor {
     pe.line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pe.closed ? [...pts, pts[0]] : pts), xray('#ffa94d', 0.9));
     pe.line.renderOrder = 999;
     frame.add(pe.line);
-    pe.ring = new THREE.Line(unitCircle(), xray('#7df9ff', 0.8));
+    pe.ring = new THREE.Line(circleGeometry(1, 48), xray('#7df9ff', 0.8));
     pe.ring.renderOrder = 999;
     pe.ring.visible = false;
     frame.add(pe.ring);
   }
 
-  disposePathVisuals() {
-    const pe = this.pathEdit;
-    if (!pe) return;
-    if (pe.root) {
-      pe.root.traverse((node) => {
-        node.geometry?.dispose();
-        node.material?.dispose();
-      });
-      this.scene.remove(pe.root);
-    }
-    pe.root = pe.frame = pe.line = pe.ring = null;
-    pe.handles = [];
-  }
-
   refreshPathHandles() {
-    const pe = this.pathEdit;
-    if (!pe || pe.dragging) return;
-    const index = pe.index;
-    this.buildPathHandles();
-    if (!this.pathEdit) return; // the part lost its path — session closed
-    if (index !== null && index < pe.handles.length) this.selectPathPoint(index);
-    else {
-      pe.index = null;
-      this.tc.detach();
-      this.helper.visible = false;
-    }
+    this.refreshLens('pathEdit', () => this.buildPathHandles(), (i) => this.selectPathPoint(i));
   }
 
   pickPathPoint(event) {
-    this.pointer.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects(this.pathEdit.handles, false);
-    if (hits.length) this.selectPathPoint(hits[0].object.userData.pathIndex);
-    // a miss keeps the mode — deliberate exit only (esc), so a sloppy
-    // click near a thin spline never dumps you back to entity selection
+    this.pickLens(event, this.pathEdit.handles, 'pathIndex', (i) => this.selectPathPoint(i));
   }
 
   selectPathPoint(i) {
@@ -531,21 +552,7 @@ export class Editor {
 
   onPathDragChanged(dragging) {
     const pe = this.pathEdit;
-    if (pe.index === null) return;
-    if (dragging) {
-      pe.dragging = true;
-      pe.dragMode = this.tool;
-      pe.startMesh = structuredClone(this.store.get(pe.id)?.mesh ?? null);
-      pe.startRadius = this.pointRadius(pe.index);
-    } else {
-      pe.dragging = false;
-      const value = this.pathCommitMesh();
-      pe.proxy.scale.set(1, 1, 1);
-      if (!value) return;
-      const redo = [{ op: 'set', id: pe.id, component: 'mesh', value }];
-      this.send(redo);
-      this.history.push([{ op: 'set', id: pe.id, component: 'mesh', value: pe.startMesh }], redo);
-    }
+    this.lensDragChanged(pe, dragging, () => (pe.startRadius = this.pointRadius(pe.index)), () => this.pathCommitMesh());
   }
 
   onPathChange() {
@@ -563,7 +570,7 @@ export class Editor {
   pathCommitMesh() {
     const pe = this.pathEdit;
     const mesh = structuredClone(this.store.get(pe.id)?.mesh ?? null);
-    const part = mesh ? (mesh.parts ?? [mesh])[pe.part] : null;
+    const part = mesh ? partsOf(mesh)[pe.part] : null;
     if (!part || !Array.isArray(part.path)) return null;
     if (pe.dragMode === 'scale') {
       const radii = fullRadii(part);
@@ -577,8 +584,7 @@ export class Editor {
   }
 
   pointRadius(i) {
-    const mesh = this.store.get(this.pathEdit.id)?.mesh;
-    const part = (mesh?.parts ?? [mesh])[this.pathEdit.part];
+    const part = this.lensPart(this.pathEdit);
     return part?.path ? fullRadii(part)[i] : 1;
   }
 
@@ -612,85 +618,31 @@ export class Editor {
   // the "children" exist only as this lens, never as nested entities.
 
   editCarves(id, partIndex = 0) {
-    if (this.player.gameMode) return;
-    if (this.mode !== 'create') this.enterCreate();
-    this.select(id); // also tears down any previous path/hole session
-    if (!this.store.get(id)) return;
-    this.tc.detach();
-    this.helper.visible = false;
-    this.carveEdit = {
-      id,
-      part: partIndex,
-      index: null,
-      handles: [],
-      proxy: new THREE.Object3D(),
-      root: null,
-      frame: null,
-      dragging: false,
-      dragMode: null,
-      startMesh: null,
-      startEntry: null,
-    };
-    this.scene.add(this.carveEdit.proxy);
+    const s = this.enterLens('carveEdit', id, partIndex, { startEntry: null });
+    if (!s) return;
     if (!this.tool) this.tool = 'translate';
     this.buildCarveHandles();
     if (this.carveEdit) hintText('hole edit — click a cutter · W move E turn R size · N new ⌫ remove · esc done');
   }
 
   exitCarveEdit() {
-    if (!this.carveEdit) return;
-    this.disposeCarveVisuals();
-    this.scene.remove(this.carveEdit.proxy);
-    this.carveEdit = null;
-    this.tc.detach();
-    this.tc.showX = this.tc.showY = this.tc.showZ = true;
-    this.helper.visible = false;
-    hintText('');
-    this.attachGizmo();
-  }
-
-  carvePart() {
-    const ce = this.carveEdit;
-    const mesh = this.store.get(ce.id)?.mesh;
-    return (mesh?.parts ?? [mesh])[ce.part] ?? null;
+    this.exitLens('carveEdit');
   }
 
   carveEntry(i) {
-    const part = this.carvePart();
+    const part = this.lensPart(this.carveEdit);
     return Array.isArray(part?.carve) ? part.carve[i] : null;
   }
 
-  // handle space is the part's own frame (scene ∘ entity ∘ part transform),
-  // so a handle's pose IS a carve coordinate — no conversion drift
   buildCarveHandles() {
     const ce = this.carveEdit;
-    this.disposeCarveVisuals();
-    const comps = this.store.get(ce.id);
-    const part = this.carvePart();
+    this.disposeLensVisuals(ce);
+    const part = this.lensPart(ce);
     if (!part) {
       this.exitCarveEdit();
       return;
     }
-    const root = new THREE.Group();
-    const group = this.view.getGroup(ce.id);
-    if (group) {
-      group.updateWorldMatrix(true, false);
-      root.applyMatrix4(group.matrixWorld);
-    } else {
-      const t = comps.transform ?? {};
-      root.position.set(...(t.position ?? [0, 0, 0]));
-      root.rotation.set(...(t.rotation ?? [0, 0, 0]));
-    }
-    const frame = new THREE.Group();
-    frame.position.set(...(part.position ?? [0, 0, 0]));
-    frame.rotation.set(...(part.rotation ?? [0, 0, 0]));
-    if (part.scale) {
-      if (Array.isArray(part.scale)) frame.scale.set(...part.scale);
-      else frame.scale.setScalar(part.scale);
-    }
-    root.add(frame);
-    this.scene.add(root);
-    root.updateWorldMatrix(true, true);
+    const { root, frame } = this.buildPartFrame(ce.id, part);
     ce.root = root;
     ce.frame = frame;
     (Array.isArray(part.carve) ? part.carve : []).forEach((c, i) => {
@@ -714,42 +666,12 @@ export class Editor {
     });
   }
 
-  disposeCarveVisuals() {
-    const ce = this.carveEdit;
-    if (!ce) return;
-    if (ce.root) {
-      ce.root.traverse((node) => {
-        // geometries come from the shared recipe cache — only the ghost
-        // materials are ours to dispose
-        if (node.geometry && !node.geometry.userData?.shared) node.geometry.dispose();
-        node.material?.dispose();
-      });
-      this.scene.remove(ce.root);
-    }
-    ce.root = ce.frame = null;
-    ce.handles = [];
-  }
-
   refreshCarveHandles() {
-    const ce = this.carveEdit;
-    if (!ce || ce.dragging) return;
-    const index = ce.index;
-    this.buildCarveHandles();
-    if (!this.carveEdit) return; // the part vanished — session closed
-    if (index !== null && index < ce.handles.length) this.selectCarve(index);
-    else {
-      ce.index = null;
-      this.tc.detach();
-      this.helper.visible = false;
-    }
+    this.refreshLens('carveEdit', () => this.buildCarveHandles(), (i) => this.selectCarve(i));
   }
 
   pickCarve(event) {
-    this.pointer.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects(this.carveEdit.handles, false);
-    if (hits.length) this.selectCarve(hits[0].object.userData.carveIndex);
-    // a miss keeps the mode — deliberate exit only (esc)
+    this.pickLens(event, this.carveEdit.handles, 'carveIndex', (i) => this.selectCarve(i));
   }
 
   selectCarve(i) {
@@ -784,21 +706,12 @@ export class Editor {
 
   onCarveDragChanged(dragging) {
     const ce = this.carveEdit;
-    if (ce.index === null) return;
-    if (dragging) {
-      ce.dragging = true;
-      ce.dragMode = this.tool;
-      ce.startMesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
-      ce.startEntry = structuredClone(this.carveEntry(ce.index) ?? {});
-    } else {
-      ce.dragging = false;
-      const value = this.carveCommitMesh();
-      ce.proxy.scale.set(1, 1, 1);
-      if (!value) return;
-      const redo = [{ op: 'set', id: ce.id, component: 'mesh', value }];
-      this.send(redo);
-      this.history.push([{ op: 'set', id: ce.id, component: 'mesh', value: ce.startMesh }], redo);
-    }
+    this.lensDragChanged(
+      ce,
+      dragging,
+      () => (ce.startEntry = structuredClone(this.carveEntry(ce.index) ?? {})),
+      () => this.carveCommitMesh(),
+    );
   }
 
   onCarveChange() {
@@ -820,7 +733,7 @@ export class Editor {
   carveCommitMesh() {
     const ce = this.carveEdit;
     const mesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
-    const part = mesh ? (mesh.parts ?? [mesh])[ce.part] : null;
+    const part = mesh ? partsOf(mesh)[ce.part] : null;
     const entry = part && Array.isArray(part.carve) ? part.carve[ce.index] : null;
     if (!entry) return null;
     const h = ce.handles[ce.index];
@@ -846,7 +759,7 @@ export class Editor {
     const ce = this.carveEdit;
     const startMesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
     const mesh = structuredClone(startMesh);
-    const part = mesh ? (mesh.parts ?? [mesh])[ce.part] : null;
+    const part = mesh ? partsOf(mesh)[ce.part] : null;
     if (!part) return;
     this.raycaster.setFromCamera(_screenCenter, this.camera);
     const group = this.view.getGroup(ce.id);
@@ -856,9 +769,7 @@ export class Editor {
     const local = ce.frame.worldToLocal(_v);
     part.carve = Array.isArray(part.carve) ? part.carve : [];
     part.carve.push({ shape: 'box', size: [2, 2, 2], position: [r2(local.x), r2(local.y), r2(local.z)] });
-    const redo = [{ op: 'set', id: ce.id, component: 'mesh', value: mesh }];
-    this.send(redo);
-    this.history.push([{ op: 'set', id: ce.id, component: 'mesh', value: startMesh }], redo);
+    this.commitMeshOp(ce.id, startMesh, mesh);
     // the commit echo rebuilds the handles — then hand the newborn the gizmo
     const newborn = part.carve.length - 1;
     setTimeout(() => {
@@ -871,14 +782,12 @@ export class Editor {
     if (ce.index === null) return;
     const startMesh = structuredClone(this.store.get(ce.id)?.mesh ?? null);
     const mesh = structuredClone(startMesh);
-    const part = mesh ? (mesh.parts ?? [mesh])[ce.part] : null;
+    const part = mesh ? partsOf(mesh)[ce.part] : null;
     if (!part || !Array.isArray(part.carve) || !part.carve[ce.index]) return;
     part.carve.splice(ce.index, 1);
     if (!part.carve.length) delete part.carve;
     ce.index = null;
-    const redo = [{ op: 'set', id: ce.id, component: 'mesh', value: mesh }];
-    this.send(redo);
-    this.history.push([{ op: 'set', id: ce.id, component: 'mesh', value: startMesh }], redo);
+    this.commitMeshOp(ce.id, startMesh, mesh);
   }
 
   startOrbit(e) {
@@ -1027,11 +936,6 @@ export class Editor {
   }
 }
 
-function isTyping() {
-  const el = document.activeElement;
-  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
-}
-
 // where a bodiless entity lives, judged from whichever component is spatial
 function dataPosition(comps) {
   if (comps.transform?.position) return comps.transform.position;
@@ -1050,10 +954,6 @@ function dataPosition(comps) {
   return null;
 }
 
-function r2(v) {
-  return Math.round(v * 100) / 100;
-}
-
 const _v = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _q = new THREE.Quaternion();
@@ -1064,18 +964,8 @@ const _screenCenter = new THREE.Vector2(0, 0);
 // per path point — the tube maps radius i to point i, clamping past the
 // end, so this expansion reproduces the existing shape exactly
 function fullRadii(part) {
-  const radii = Array.isArray(part.radii) ? part.radii : [part.radii ?? part.radius ?? 3];
+  const radii = tubeRadii(part);
   return part.path.map((_, i) => radii[Math.min(radii.length - 1, i)]);
-}
-
-// closed strip, not LineLoop — WebGPU silently drops line-loop topology
-function unitCircle(segs = 48) {
-  const points = [];
-  for (let i = 0; i <= segs; i++) {
-    const a = (i / segs) * Math.PI * 2;
-    points.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)));
-  }
-  return new THREE.BufferGeometry().setFromPoints(points);
 }
 
 function hintText(text) {

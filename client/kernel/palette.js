@@ -1,5 +1,7 @@
 import * as THREE from 'three/webgpu';
-import { makeGeometry } from './geometry.js';
+import { makeGeometry, disposeOwn } from './geometry.js';
+import { pointerNDC } from './dom.js';
+import { r2 } from '../../shared/num.js';
 
 const BASE = `http://${location.hostname}:${__GAIA_PORT__}`;
 
@@ -74,10 +76,9 @@ export class Palette {
   disarm() {
     if (this.ghost) {
       this.view.scene.remove(this.ghost);
-      this.ghost.traverse((node) => {
-        if (node.geometry && !node.geometry.userData?.shared) node.geometry.dispose();
-        node.material?.dispose(); // ghost materials are its own (basic, translucent)
-      });
+      // ghost materials are its own (basic, translucent); geometries may
+      // come from the shared recipe cache — disposeOwn knows the difference
+      this.ghost.traverse((node) => disposeOwn(node));
       this.ghost = null;
     }
     this.armed = null;
@@ -118,8 +119,7 @@ export class Palette {
     if (!this.armed || !this.ghost) return;
     const terrain = this.terrainGroup();
     if (!terrain) return;
-    this.pointer.set((event.clientX / window.innerWidth) * 2 - 1, -(event.clientY / window.innerHeight) * 2 + 1);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+    this.raycaster.setFromCamera(pointerNDC(event, this.pointer), this.camera);
     const hits = this.raycaster.intersectObject(terrain, true);
     if (!hits.length) {
       this.ghost.visible = false;
@@ -148,8 +148,4 @@ export class Palette {
     this.send([{ op: 'spawn', id, components }]);
     this.history.push([{ op: 'despawn', id }], [{ op: 'spawn', id, components }]);
   }
-}
-
-function r2(v) {
-  return Math.round(v * 100) / 100;
 }

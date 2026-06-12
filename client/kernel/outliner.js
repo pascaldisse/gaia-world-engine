@@ -3,6 +3,8 @@
 // triggers, water volumes, ambience patches, the environment itself.
 // Searchable; doubles as the gizmo-category switchboard.
 
+import { div, span } from './dom.js';
+
 const ICONS = [
   ['presence', '◉'],
   ['spawn', '⌖'],
@@ -199,17 +201,4 @@ export class Outliner {
       }
     }
   }
-}
-
-function div(cls) {
-  const el = document.createElement('div');
-  el.className = cls;
-  return el;
-}
-
-function span(cls, text) {
-  const el = document.createElement('span');
-  el.className = cls;
-  el.textContent = text;
-  return el;
 }

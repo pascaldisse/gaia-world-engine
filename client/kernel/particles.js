@@ -63,6 +63,12 @@ export function updateParticles(state, time) {
   if (spec.streak && (tx || tz)) {
     quat = _quat.setFromUnitVectors(_down, _dir.set(tx, -1, tz).normalize());
   }
+  // the ground under a mote moves slowly (terrain is smooth, motes wander
+  // meters) but heightAt is 4-octave fbm — the single hottest call in a
+  // storm. Cache per particle, refreshed staggered every 10 frames: fresh
+  // enough to follow terrain streaming in, 10× fewer noise evaluations.
+  const grounds = (state.grounds ??= new Float32Array(count).fill(NaN));
+  const frame = (state.frame = (state.frame ?? 0) + 1);
   for (let i = 0; i < count; i++) {
     const ax = anchors[i * 2];
     const az = anchors[i * 2 + 1];
@@ -75,15 +81,18 @@ export function updateParticles(state, time) {
       const fall = (time * speed * 10 + ph * h * 7) % h;
       x += tx * fall;
       z += tz * fall;
-      y = heightAt(x, z) + h - fall;
+      if (Number.isNaN(grounds[i]) || (frame + i) % 10 === 0) grounds[i] = heightAt(x, z);
+      y = grounds[i] + h - fall;
     } else {
       const r = motion.radius ?? 2.5;
       x = ax + Math.sin(time * 0.37 * speed + ph * 6.283) * r + Math.sin(time * 0.11 * speed + ph * 13) * r * 0.6;
       z = az + Math.cos(time * 0.29 * speed + ph * 6.283) * r + Math.cos(time * 0.07 * speed + ph * 17) * r * 0.6;
-      y = heightAt(x, z) + (motion.height ?? 1.8) + Math.sin(time * 0.8 * speed + ph * 9) * (motion.bob ?? 0.6);
+      if (Number.isNaN(grounds[i]) || (frame + i) % 10 === 0) grounds[i] = heightAt(x, z);
+      y = grounds[i] + (motion.height ?? 1.8) + Math.sin(time * 0.8 * speed + ph * 9) * (motion.bob ?? 0.6);
       if (motion.floor !== undefined) y = Math.max(y, motion.floor);
     }
-    m.makeTranslation(x, y, z);
+    if (quat) m.compose(_pos.set(x, y, z), quat, _one);
+    else m.makeTranslation(x, y, z);
     mesh.setMatrixAt(i, m);
   }
   mesh.instanceMatrix.needsUpdate = true;

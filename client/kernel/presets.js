@@ -30,6 +30,11 @@ import {
 // Shader presets as data: a mesh part says {preset: "water"} and gets a TSL
 // node material. A failed preset falls back to a standard material — a bad
 // shader must never take the world down.
+
+// the presets that ARE the sky: sheets the editor's skybox toggle hides
+// (the abyss/stone backdrops are scenery, not sky — they stay)
+export const SKY_PRESETS = new Set(['sky', 'overcast', 'clouds']);
+
 export function makePresetMaterial(part) {
   try {
     switch (part.preset) {

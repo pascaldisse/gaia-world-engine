@@ -1,4 +1,5 @@
 import { normalizeScenes, sceneAt, activeScenes } from '../../shared/scenes.js';
+import { mergeIntoLibrary } from '../../shared/ops.js';
 
 // Client-side streaming policy: track which scene the player is in, keep that
 // scene + its neighbors + the always-scenes (backdrops) resident — and scenes
@@ -31,14 +32,11 @@ export class Scenes {
   }
 
   // the `scene` op: a scene's world.json entry edited live (bounds, load
-  // volumes, neighbors…) — merge into the raw form and re-derive everything
+  // volumes, neighbors…) — the same merge rule the server applies, then
+  // re-derive everything
   applySceneOp(op) {
     if (!this.raw?.scenes) return;
-    const meta = (this.raw.scenes[op.name] = this.raw.scenes[op.name] ?? {});
-    for (const [key, value] of Object.entries(op.value ?? {})) {
-      if (value === null) delete meta[key];
-      else meta[key] = value;
-    }
+    mergeIntoLibrary(this.raw.scenes, op.name, op.value ?? {});
     this.index = normalizeScenes(this.raw);
     this.activeKey = null; // force a streaming re-evaluation next update
   }

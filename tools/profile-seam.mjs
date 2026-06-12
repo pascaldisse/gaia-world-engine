@@ -1,34 +1,14 @@
 // One-off: CPU-profile the page across a scene seam and print the hottest
-// functions by self time. Reuses the cdp.mjs connection pattern.
-import WebSocket from 'ws';
+// functions by self time.
+import { connectCdp } from './cdp-lib.mjs';
 
-const port = process.env.CDP_PORT ?? 9222;
-const clientPort = process.env.GAIA_CLIENT_PORT ?? '5173';
-const targets = await (await fetch(`http://localhost:${port}/json`)).json();
-const page = targets.find((t) => t.type === 'page' && t.url.includes(`:${clientPort}`));
-if (!page) {
-  console.error(`no :${clientPort} page`);
-  process.exit(1);
-}
-const ws = new WebSocket(page.webSocketDebuggerUrl);
-await new Promise((resolve) => ws.on('open', resolve));
-let seq = 0;
-const pending = new Map();
-ws.on('message', (raw) => {
-  const msg = JSON.parse(raw);
-  if (pending.has(msg.id)) pending.get(msg.id)(msg);
-});
-function send(method, params = {}) {
-  const id = ++seq;
-  ws.send(JSON.stringify({ id, method, params }));
-  return new Promise((resolve) => pending.set(id, resolve));
-}
+const { ws, send } = await connectCdp();
 const evalJs = (expression) => send('Runtime.evaluate', { expression, returnByValue: true });
 
 await send('Profiler.enable');
 await send('Profiler.setSamplingInterval', { interval: 200 });
 await send('Profiler.start');
-await evalJs(process.argv[2] ?? 'gaia.player.position.set(0, 3.5, 22); gaia.player.velocityY = 0;');
+await evalJs(process.argv[2] ?? 'gaia.player.position.set(0, 3.5, 22); gaia.player.vy = 0;');
 await new Promise((r) => setTimeout(r, 4000));
 const { result } = await send('Profiler.stop');
 const profile = result.profile;

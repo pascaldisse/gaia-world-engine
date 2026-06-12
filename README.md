@@ -58,18 +58,19 @@ URL starts a tab muted).
   view/move/rotate/scale tools, **F** frames the selection.
 - Hold **RMB** to fly (WASD + Q/E down/up), **V** latches flight,
   **⌥-drag** orbits the selection, scroll dollies.
-- The **outliner** (left) lists every entity grouped by zone — searchable,
+- The **outliner** (left) lists every entity grouped by scene — searchable,
   and the only way to reach the bodiless ones: triggers, water volumes,
   ambience patches, the environment itself. Click selects, double-click
-  flies there.
+  flies there; the ⛭ on a scene group opens its streaming entry (bounds,
+  load volumes) in the inspector.
 - **Gizmos** draw the invisible data as x-ray overlays: collider boxes
   (green walkable, red blocker), trigger volumes, water surfaces, light and
-  sound ranges, ferry routes with direction arrows, scatter footprints, zone
-  bounds. The selected entity always shows its own; the chips at the top of
-  the outliner switch whole categories on.
+  sound ranges, ferry routes with direction arrows, scatter footprints,
+  scene bounds and load cages. The selected entity always shows its own;
+  the chips at the top of the outliner switch whole categories on.
 - The **inspector** is schema-aware: every component shows what it means,
   every field has a tooltip and a sane slider range, and the add menu
-  covers the whole vocabulary. A runtime strip shows the entity's zone,
+  covers the whole vocabulary. A runtime strip shows the entity's scene,
   whether it is streamed in, and where the kernel actually has it.
 - **L** opens the **world log**: the live op stream — watch triggers fire,
   weather write the sky, agents edit — filterable, with presence noise
@@ -82,8 +83,11 @@ URL starts a tab muted).
 - Lifting a grounded entity with the Y arrow edits its terrain-relative
   `ground.offset`, so it hovers with the ground it belongs to.
 
-World state persists in `world/world.json`; delete it to re-seed from
-`world/seed.json`.
+State lives as **scene files**: `world/scenes/<name>.json` holds the entity
+documents (the source of truth, committed to git), `world/world.json` is the
+superscene — which scenes exist and how they compose. Every dev edit writes
+back into the scene files; the player layer saves separately. See "The scene
+model" below.
 
 ## How it works
 
@@ -100,12 +104,17 @@ event   transient broadcast (journaled, never persisted)
 ```
 
 ```
-reset   re-seed a zone (or the world) — entities with a `persist` component,
-        presences, and unzoned entities (world state) keep their current truth
+reset   re-read a scene's files from disk and re-seed it (or the whole
+        world) — entities with a `persist` component, presences, and
+        unclaimed entities (world state) keep their current truth
 use     a presence uses an entity's `interact` component on purpose
         ({op:'use', id, by}) — the server gates range/when/cooldown and
         applies the component's event + ops. Send it alone: it expands
         against the world as it was BEFORE the batch it travels in.
+scene   edit a scene's world.json entry live ({op:'scene', name, value} —
+        bounds, neighbors, load volumes; null deletes a key)
+material edit world/materials.json live ({op:'material', name, value}) —
+        clients rebuild whatever references the name
 ```
 
 `merge` on a missing entity materializes it — world flags appear on first
@@ -184,31 +193,50 @@ A world is a directory, not a fork of the engine:
 GAIA_WORLD=/path/to/project/world npm run dev
 ```
 
-The engine loads that directory's `seed.json`, `prefabs.json`, and
-`assets/`, and persists its `world.json` there — so games live in their own
+The engine loads that directory's `scenes/`, `world.json`, `prefabs/`,
+`materials.json`, `game.json`, and `assets/` — so games live in their own
 repos. Without `GAIA_WORLD`, the engine's own `world/` (the hub world above)
-is used.
+is used. Worlds run side by side: `GAIA_PORT` moves the world server,
+`GAIA_CLIENT_PORT` moves vite, `GAIA_SAVE` names the player save.
 
-### Zones: one seamless world, streamed
+### The scene model: one world, one state
 
-A world with a `manifest.json` is **zoned** — many independently authored
-levels assembled into one coherent world-space:
+A world is `world/world.json` — the **superscene**: which scenes exist and
+how they compose (bounds discs, neighbors, `load` volumes, world defaults
+like `voidY`) — plus `world/scenes/<name>.json`: pure entity documents keyed
+by id, world-space. The scene files are THE source of truth: read at boot
+and on `reset`, and every dev edit (gizmo drag, inspector field, palette
+stamp, debug-menu save) writes back into them — Unity semantics, change a
+thing in the editor and the scene file changes. The player layer (presences,
+`persist` entities, entities no scene claims) lives apart in
+`world/saves/player_<GAIA_SAVE>_state.json` (gitignored): scenes always win
+on boot, the save only overlays the player's own.
 
 ```json
-{ "zones": [
-  { "name": "shore",    "origin": [0,0,0],      "bounds": { "center": [0,0], "radius": 300 }, "neighbors": ["caves"] },
-  { "name": "caves",    "origin": [40,20,-420], "bounds": { "center": [0,-420], "radius": 200 }, "neighbors": ["shore"] },
-  { "name": "backdrop", "origin": [0,0,0],      "always": true }
-] }
+{ "voidY": -120, "scenes": {
+  "shore":    { "bounds": { "center": [0,0],    "radius": 300 }, "neighbors": ["caves"] },
+  "caves":    { "bounds": { "center": [0,-420], "radius": 200 }, "neighbors": ["shore"],
+                "load": [{ "center": [10,-380], "radius": 30, "y": [-40, 10] }] },
+  "backdrop": { "always": true }
+} }
 ```
 
-Zone seeds (`zones/<name>/seed.json`) are authored zone-local; the server
-places them (origin + yaw) and stamps each entity with its zone. Clients
-stream invisibly: only the current zone, its neighbors, and `always` zones
-(backdrops — far scenery at true world positions) are built, a few entities
-per frame so nothing ever hitches. Each zone can carry its own `terrain` and
-`environment`; agent senses scope to zones the same way the renderer does.
-No manifest = one implicit zone, exactly as before.
+Clients stream invisibly: the current scene, its neighbors, and `always`
+scenes (backdrops) are resident; a scene with `load` volumes streams in only
+while the observer stands inside one (the Dark Souls model). The whole world
+warms once at load, then streaming is pure visibility — nothing builds or
+compiles mid-play. Scene entries may be **prefab instances**
+(`{"prefab": "torch", ...deltas}`) that deep-merge `world/prefabs/<name>.json`
+under their deltas; `world/materials.json` holds named looks mesh parts
+reference by name. Editing files on disk while the server runs? Send a
+`reset` op — it re-reads from disk (the pickup gesture for generator
+re-runs). A world with no world.json and one scene file is the blank page:
+a single implicit always-loaded scene named `main`.
+
+A world with a `game.json` gets a **title screen** (NEW GAME / LEVEL
+SELECT): levels are pure data — `{ id, name, spawn, reset, ops }`, the ops
+running with `$id` resolved to the choosing presence. `?level=<id>` deep-
+links straight into one.
 
 ## Component vocabulary
 
@@ -221,9 +249,10 @@ ranges, and enums — is `shared/schema.js`, served live at `GET /schema`.
   - shapes: `box(size)`, `sphere(radius)`, `cylinder(radiusTop,radiusBottom,height)`,
     `cone(radius,height)`, `torus(radius,tube)`, `octahedron(radius)`,
     `icosahedron(radius)`, `plane(size)`
-  - `preset: glow|flame|water|hologram|beam` — TSL shader materials as data;
-    `visible:false` parts collide without rendering; `solid:false` opts out of
-    collision; `fog:false` makes backdrop silhouettes immune to zone fog
+  - `preset: glow|flame|water|hologram|beam|sky|overcast|clouds|abyss|stone`
+    — TSL shader materials as data; `visible:false` parts collide without
+    rendering; `solid:false` opts out of collision; `fog:false` makes
+    backdrop silhouettes immune to scene fog
 - `light` — `{type: point|spot|directional, color, intensity, distance, offset, castShadow}`
 - `sound` — `{kind: hum|chime|patch|sample, ambient?, level, refDistance}`
   - `patch`: `{layers:[{source: noise|sine|square|sawtooth|triangle, freq, filter, gain, lfo, reverb}]}` — layered ambience as data
@@ -232,7 +261,7 @@ ranges, and enums — is `shared/schema.js`, served live at `GET /schema`.
 - `behavior` — one or an array of `{type: spin|bob|orbit|path|pulse|flicker, ...}`
   (`path` follows waypoints at constant speed on the world clock — ferries,
   patrols; a waypoint's 4th number is a dwell: seconds parked there — stops)
-- `terrain` — `{seed, size, segments, amplitude, frequency, color}` (per zone)
+- `terrain` — `{seed, size, segments, amplitude, frequency, color}` (per scene)
 - `collider` — `{boxes:[{size, position, blocker?}]}` — analytic surfaces
   (entity-relative, yaw-aware): walkable tops make decks and bridges standable
   (and rideable when the entity moves); `blocker: true` boxes push bodies out — walls
@@ -252,28 +281,29 @@ ranges, and enums — is `shared/schema.js`, served live at `GET /schema`.
   keeps its current state (the *Braid* rule — death resets all but the woven)
 - `spawn` — `{position, yaw, gameMode?}` — where players enter (`gameMode:
   true` starts them with editing locked); also the void return: falling past
-  the manifest's `voidY` (default −120, per-zone overridable) teleports a
+  world.json's `voidY` (default −120, per-scene overridable) teleports a
   body back to its last safe ground, or the spawn point if it never had one
 - `scatter` — `{seed, count, area, instance:{parts}, scale, tilt, density, minHeight, maxHeight}` — instanced copies, terrain-following, noise-clustered
 - `particles` — `{seed, count, size, color, area, motion:{type: drift|rain, ...}}` — animated instanced motes
 - `environment` — `{background, fog, exposure, hemisphere, sun, ambient, bloom, audio}` —
   world mood as one patchable entity (`ambient: {color, intensity}` is the
   skylight: a true global light, the thing to raise when "more light" is the note)
-- `weather` — `{lightning, minGap, maxGap, rainCycle, rainAmount}` — server-simulated events
-- `zone` — `{name}` — stamped by the server in zoned worlds
+- `weather` — `{lightning, minGap, maxGap, rainCycle, rainAmount, rainBase}` — server-simulated events
+- `scene` — `{name}` — stamped by the server: which scene file owns the entity
+- `prefab` — `{name}` — this entity is an instance of `world/prefabs/<name>.json`
 
 ## Architecture
 
 ```
-server/          canonical world store, patch hub (ws+http), op journal,
-                 sense API, intent engine, weather sim
+server/          canonical world store, scene files + write-back, patch hub
+                 (ws+http), op journal, sense API, intent engine, weather sim
 client/kernel/   renderer, store mirror, view reconciler, terrain, player,
-                 editor, audio synth, behaviors, zones
-shared/          pure functions every observer must agree on:
-                 terrain math, motion, zone placement
+                 editor (+ path/hole lenses), audio synth, behaviors, scenes
+shared/          pure functions every observer must agree on: terrain math,
+                 motion, scene composition, op semantics, the schema
 tools/           patch.mjs (raw ops), agent.mjs (sense + act CLI),
                  cdp.mjs (DevTools protocol: eval + DOM screenshots)
-world/           the default hub world (seed, prefabs, assets)
+world/           the default hub world (scenes, world.json, prefabs, assets)
 ```
 
 State lives on the server; the vite client hot-reloads freely around it.

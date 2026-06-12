@@ -18,8 +18,11 @@ import { Scenes } from './kernel/scenes.js';
 import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
-import { setMaterialLibrary } from './kernel/geometry.js';
+import { setMaterialLibrary, mergeMaterial, partsOf } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
+import { isTyping } from './kernel/dom.js';
+import { substitute } from '../shared/ops.js';
+import { r2 } from '../shared/num.js';
 
 const statusEl = document.getElementById('status');
 const countEl = document.getElementById('count');
@@ -50,7 +53,6 @@ const behaviors = new Behaviors({ store, view, clock });
 const presenceId = `player-${clientId}`;
 view.ownPresence = presenceId;
 let pendingShot = null;
-let materialLib = {};
 
 const net = connect({
   url: `ws://${location.hostname}:${__GAIA_PORT__}`,
@@ -58,9 +60,8 @@ const net = connect({
   onSnapshot: (entities, time, world, game, materials) => {
     clock.offset = time - performance.now() / 1000;
     // named materials resolve at mesh build — the library must be known
-    // before the snapshot turns into meshes
-    materialLib = materials ?? {};
-    setMaterialLibrary(materialLib);
+    // before the snapshot turns into meshes (geometry.js owns the copy)
+    setMaterialLibrary(materials ?? {});
     let spawnComp = null;
     for (const comps of Object.values(entities)) {
       if (comps.spawn) {
@@ -144,18 +145,15 @@ const net = connect({
       } else if (op.op === 'material') {
         // library edit: re-resolve and rebuild whatever references the name —
         // shared caches make untouched parts free
-        if (op.value === null) delete materialLib[op.name];
-        else materialLib[op.name] = { ...(materialLib[op.name] ?? {}), ...op.value };
-        setMaterialLibrary(materialLib);
+        mergeMaterial(op.name, op.value);
         for (const [id, comps] of store.entities) {
-          const parts = comps.mesh?.parts ?? (comps.mesh ? [comps.mesh] : []);
-          if (parts.some((p) => p.material === op.name)) view.applyComponent(id, 'mesh');
+          if (partsOf(comps.mesh).some((p) => p.material === op.name)) view.applyComponent(id, 'mesh');
         }
       }
     }
     store.applyOps(ops);
     countEl.textContent = store.entities.size;
-    panel.refresh();
+    panel.refresh(ops);
     econsole.add(ops, from);
     handleEvents(ops);
   },
@@ -210,7 +208,8 @@ function applyLevel(level, { lock = true } = {}) {
   const ops = [];
   if (level.reset) ops.push({ op: 'reset' });
   for (const op of level.ops ?? []) {
-    ops.push(JSON.parse(JSON.stringify(op).replaceAll('"$id"', JSON.stringify(presenceId))));
+    // the same $-token convention triggers and interacts use (shared/ops.js)
+    ops.push(substitute(structuredClone(op), { $id: presenceId, $now: r2(clock.now()) }));
   }
   if (ops.length) net.send(ops);
   // the menu's job is done — from here the overlay is a plain pause screen
@@ -311,8 +310,7 @@ if (new URLSearchParams(location.search).has('mute')) applyMuted(true, false);
 else if (localStorage.getItem('gaia-muted') === '1') applyMuted(true, false);
 document.addEventListener('keydown', (e) => {
   if (e.code !== 'KeyM' || e.metaKey || e.ctrlKey || e.altKey) return;
-  const el = document.activeElement;
-  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
+  if (isTyping()) return;
   applyMuted(!userMuted);
 });
 
@@ -391,9 +389,7 @@ const viewbar = {
 // ~ toggles the debug panel: live look-dev knobs
 const debugEl = document.getElementById('debug');
 document.addEventListener('keydown', (e) => {
-  if (e.code !== 'Backquote') return;
-  const el = document.activeElement;
-  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+  if (e.code !== 'Backquote' || isTyping()) return;
   debugEl.style.display = debugEl.style.display === 'flex' ? 'none' : 'flex';
   if (debugEl.style.display === 'flex') highlightDebugKnob();
 });
@@ -457,45 +453,49 @@ debugKnob('rain-intensity', (v) => {
 // reads back reliably in the same task that drew it.
 let pendingSnapshot = false;
 document.addEventListener('keydown', (e) => {
-  if (e.key !== '+' || e.metaKey || e.ctrlKey || e.altKey) return;
-  const el = document.activeElement;
-  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+  if (e.key !== '+' || e.metaKey || e.ctrlKey || e.altKey || isTyping()) return;
   pendingSnapshot = true;
 });
-function captureSnapshot() {
-  pendingSnapshot = false;
+
+// WebGPU canvas → png data URL; only reliable in the same task that drew it
+function canvasToDataURL(cb) {
   renderer.domElement.toBlob((blob) => {
     if (!blob) return;
     const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const res = await fetch(`http://${location.hostname}:${__GAIA_PORT__}/snapshot`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            image: reader.result,
-            player: {
-              id: presenceId,
-              position: [r2(player.position.x), r2(player.position.y), r2(player.position.z)],
-              yaw: r2(player.yaw),
-              pitch: r2(player.pitch),
-              scene: scenes.current,
-            },
-          }),
-        });
-        const { file } = await res.json();
-        console.log(`[gaia] snapshot ${file}`);
-        const prev = statusEl.textContent;
-        statusEl.textContent = `snapshot ${file}`;
-        setTimeout(() => {
-          if (statusEl.textContent.startsWith('snapshot')) statusEl.textContent = prev;
-        }, 2500);
-      } catch (err) {
-        console.warn('[gaia] snapshot failed', err);
-      }
-    };
+    reader.onload = () => cb(reader.result);
     reader.readAsDataURL(blob);
   }, 'image/png');
+}
+
+function captureSnapshot() {
+  pendingSnapshot = false;
+  canvasToDataURL(async (image) => {
+    try {
+      const res = await fetch(`http://${location.hostname}:${__GAIA_PORT__}/snapshot`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          image,
+          player: {
+            id: presenceId,
+            position: [r2(player.position.x), r2(player.position.y), r2(player.position.z)],
+            yaw: r2(player.yaw),
+            pitch: r2(player.pitch),
+            scene: scenes.current,
+          },
+        }),
+      });
+      const { file } = await res.json();
+      console.log(`[gaia] snapshot ${file}`);
+      const prev = statusEl.textContent;
+      statusEl.textContent = `snapshot ${file}`;
+      setTimeout(() => {
+        if (statusEl.textContent.startsWith('snapshot')) statusEl.textContent = prev;
+      }, 2500);
+    } catch (err) {
+      console.warn('[gaia] snapshot failed', err);
+    }
+  });
 }
 
 // the debug menu drives with arrow keys: ↑/↓ pick a row, ←/→ nudge a
@@ -562,8 +562,6 @@ function saveDebug() {
     setTimeout(() => (el.textContent = 'save'), 1600);
   }
 }
-// the old localStorage override layer is gone — clear any stale residue
-localStorage.removeItem('gaia-debug');
 
 const debugLinks = {
   'rain-link': () => showDebugPage('rain'),
@@ -646,7 +644,7 @@ player.onEvent = (name, data) => {
 };
 
 // L toggles the world log: the op stream, live (?log=1 starts it open)
-const econsole = new EventConsole({ el: document.getElementById('console') });
+const econsole = new EventConsole({ el: document.getElementById('console'), store });
 if (new URLSearchParams(location.search).has('log')) econsole.toggle();
 
 // everything that AUTHORS the world sends dev-tagged ops: the server writes
@@ -737,16 +735,7 @@ function publishPresence(now) {
 function captureShot() {
   const id = pendingShot;
   pendingShot = null;
-  renderer.domElement.toBlob((blob) => {
-    if (!blob) return;
-    const reader = new FileReader();
-    reader.onload = () => net.sendRaw({ type: 'screenshot', id, data: reader.result.split(',')[1] });
-    reader.readAsDataURL(blob);
-  }, 'image/png');
-}
-
-function r2(v) {
-  return Math.round(v * 100) / 100;
+  canvasToDataURL((data) => net.sendRaw({ type: 'screenshot', id, data: data.split(',')[1] }));
 }
 
 let last = performance.now();

@@ -1,6 +1,20 @@
 import * as THREE from 'three/webgpu';
 import { Brush, Evaluator, SUBTRACTION, HOLLOW_SUBTRACTION } from 'three-bvh-csg';
 import { makePresetMaterial } from './presets.js';
+import { mergeIntoLibrary } from '../../shared/ops.js';
+
+// the mesh single-part-vs-parts convention, decided once
+export function partsOf(mesh) {
+  return mesh ? mesh.parts ?? [mesh] : [];
+}
+
+// the tube radius convention, decided once: `radii` may be a per-point
+// array, a single number, or legacy `radius` — consumers (the tube builder,
+// the gizmo rings, the edit-path lens) index it clamped past the end, so
+// they all draw the same tube. The 3 default is correctness-bearing.
+export function tubeRadii(part) {
+  return Array.isArray(part.radii) ? part.radii : [part.radii ?? part.radius ?? 3];
+}
 
 // Shared mesh-recipe builders: entity meshes, scatter instances, palette ghosts.
 //
@@ -180,7 +194,7 @@ function buildTubeGeometry(part) {
   const curve = new THREE.CatmullRomCurve3(pts, closed, 'centripetal');
   const segs = Math.max(2, part.tubularSegments ?? pts.length * 12);
   const radial = Math.max(3, part.radialSegments ?? 14);
-  const radii = Array.isArray(part.radii) ? part.radii : [part.radii ?? part.radius ?? 3];
+  const radii = tubeRadii(part);
   const n = pts.length;
   const rOf = (i) => radii[Math.min(radii.length - 1, ((i % n) + n) % n)];
   // scalar Catmull-Rom over the control radii — same uniform-per-segment
@@ -267,6 +281,12 @@ function buildTubeGeometry(part) {
 let materialLibrary = {};
 export function setMaterialLibrary(lib) {
   materialLibrary = lib ?? {};
+}
+
+// the `material` op, client side: merge into the named entry (null deletes)
+// — geometry owns the library, so there is exactly one copy of it
+export function mergeMaterial(name, value) {
+  mergeIntoLibrary(materialLibrary, name, value);
 }
 
 function resolveMaterial(part) {

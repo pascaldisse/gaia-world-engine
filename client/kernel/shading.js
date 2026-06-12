@@ -5,20 +5,24 @@ import * as THREE from 'three/webgpu';
 // noon), wireframe (the geometry itself). Implemented as a material override
 // sweep across the entity groups: the lit materials stay untouched in their
 // shared cache, every mesh just borrows a derived MeshBasicMaterial while
-// the mode is on. The sweep runs per frame so streamed-in builds convert the
-// frame they attach. Editor chrome (gizmos, selection boxes, the transform
-// helper) lives outside the groups and never converts.
+// the mode is on. The sweep re-runs when view.buildVersion moves (a build,
+// a show, a mesh edit), so streamed-in builds convert the frame they attach
+// without paying a whole-world traverse on the frames in between. Editor
+// chrome (gizmos, selection boxes, the transform helper) lives outside the
+// groups and never converts.
 export class Shading {
   constructor({ view, renderer }) {
     this.view = view;
     this.renderer = renderer;
     this.mode = 'lit';
+    this.sweptVersion = -1; // view.buildVersion the last sweep saw
     this.cache = new Map(); // source material uuid + mode -> derived material
   }
 
   setMode(mode) {
     if (mode === this.mode) return;
     this.mode = mode;
+    this.sweptVersion = -1; // force the next update() to sweep
     if (mode !== 'lit') return; // update() converts lazily, new builds included
     for (const group of this.view.groups.values()) {
       group.traverse((node) => {
@@ -37,6 +41,8 @@ export class Shading {
   update() {
     if (this.mode === 'lit') return;
     this.renderer.toneMappingExposure = 1;
+    if (this.view.buildVersion === this.sweptVersion) return;
+    this.sweptVersion = this.view.buildVersion;
     for (const group of this.view.groups.values()) {
       group.traverse((node) => {
         if (!node.isMesh || node.userData.shadingMode === this.mode) return;

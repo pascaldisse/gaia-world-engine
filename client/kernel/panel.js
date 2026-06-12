@@ -1,5 +1,5 @@
 import { SCHEMA, componentDefaults, fieldInfo } from '../../shared/schema.js';
-import { div, span, button } from './dom.js';
+import { div, span, button, isTyping } from './dom.js';
 
 // The inspector is a lens over the entity document: controls are generated
 // from the JSON itself, so every component — present or future — is editable
@@ -19,7 +19,7 @@ const RANGES = {
 const COMPONENT_DEFAULTS = componentDefaults();
 
 export class Panel {
-  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditPath, onEditCarves }) {
+  constructor({ el, store, view, scenes, send, history, onDuplicate, onDelete, onEditMesh, onPickHole, onAddHole, getMeshEdit }) {
     this.el = el;
     this.store = store;
     this.view = view;
@@ -28,18 +28,33 @@ export class Panel {
     this.history = history;
     this.onDuplicate = onDuplicate;
     this.onDelete = onDelete;
-    this.onEditPath = onEditPath;
-    this.onEditCarves = onEditCarves;
+    this.onEditMesh = onEditMesh;
+    this.onPickHole = onPickHole;
+    this.onAddHole = onAddHole;
+    this.getMeshEdit = getMeshEdit; // () => the editor's live mesh-edit session (or null)
     this.id = null;
     this.sceneName = null;
     this.tab = 'fields';
+    this.selectedComponent = null; // section picked for ⌘⌫ removal
     this.interacting = false;
     this.commitTimer = null;
     el.addEventListener('pointerdown', () => (this.interacting = true));
     window.addEventListener('pointerup', () => (this.interacting = false));
+    // there is no remove-× on components (too easy to hit by accident):
+    // click a section to select it, ⌘⌫ removes it — the Mac delete gesture
+    document.addEventListener('keydown', (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.code !== 'Backspace') return;
+      if (isTyping() || !this.id || !this.selectedComponent) return;
+      if (this.el.style.display === 'none') return;
+      e.preventDefault();
+      const name = this.selectedComponent;
+      this.selectedComponent = null;
+      this.setComponent(name, null);
+    });
   }
 
   show(id) {
+    if (id !== this.id) this.selectedComponent = null;
     this.id = id;
     this.sceneName = null;
     this.el.style.display = 'flex';
@@ -222,13 +237,31 @@ export class Panel {
   }
 
   renderFields(body, comps) {
+    const meshEdit = this.getMeshEdit?.();
+    const editingMesh = meshEdit?.id === this.id;
     for (const name of Object.keys(comps)) {
       const section = div('panel-section');
+      if (name === this.selectedComponent) section.classList.add('selected');
       const head = div('section-head');
       const title = span('section-name', name);
       if (SCHEMA[name]?.doc) title.title = SCHEMA[name].doc;
       head.append(title);
-      head.append(button('×', () => this.setComponent(name, null)));
+      // click selects the component (⌘⌫ removes the selected one)
+      head.addEventListener('click', (e) => {
+        if (e.target.tagName === 'BUTTON') return;
+        this.selectedComponent = this.selectedComponent === name ? null : name;
+        for (const s of body.querySelectorAll('.panel-section')) s.classList.remove('selected');
+        if (this.selectedComponent) section.classList.add('selected');
+      });
+      // ONE door into hands-on mesh editing: spline points and holes,
+      // whatever the mesh has — the editor lens decides what to show
+      if (name === 'mesh') {
+        const editBtn = button(editingMesh ? 'done' : 'edit', () => {
+          editBtn.blur();
+          this.onEditMesh?.(this.id);
+        });
+        head.append(editBtn);
+      }
       section.append(head);
       if (SCHEMA[name]?.doc) section.append(div('section-doc', SCHEMA[name].doc));
       const work = structuredClone(comps[name]);
@@ -239,22 +272,10 @@ export class Panel {
         setTimeout(() => this.render(), 160);
       });
       section.append(content);
-      // tube parts get a door into the world: Edit Path hands the spline to
-      // the editor (click a point, W moves it, R scales its thickness) —
-      // and Edit Holes does the same for the boolean cutters (`carve`):
-      // ghost meshes you grab with the entity gizmos
-      if (name === 'mesh') {
-        const parts = comps.mesh?.parts ?? [comps.mesh];
-        parts.forEach((part, i) => {
-          const tag = parts.length > 1 ? ` · part ${i}` : '';
-          if (part?.shape === 'tube' && Array.isArray(part.path) && part.path.length >= 2) {
-            section.append(button(`edit path${tag}`, () => this.onEditPath?.(this.id, i)));
-          }
-          if (!part) return;
-          const n = Array.isArray(part.carve) ? part.carve.length : 0;
-          section.append(button(`edit holes (${n})${tag}`, () => this.onEditCarves?.(this.id, i)));
-        });
-      }
+      // in mesh edit mode the holes show up like children of the mesh —
+      // click one here (or its ghost in the world) to grab it. The data
+      // stays the part's flat `carve` array; this list is just the lens.
+      if (name === 'mesh' && editingMesh) section.append(this.renderHoles(comps, meshEdit));
       body.append(section);
     }
 
@@ -269,6 +290,34 @@ export class Panel {
     };
     addRow.append(select);
     body.append(addRow);
+  }
+
+  // the holes, listed like children of the mesh while edit mode is on —
+  // click to grab one in the world, + hole births one where you look
+  renderHoles(comps, meshEdit) {
+    const wrap = div('holes');
+    const parts = comps.mesh ? comps.mesh.parts ?? [comps.mesh] : [];
+    parts.forEach((part, pi) => {
+      const carves = Array.isArray(part?.carve) ? part.carve : [];
+      carves.forEach((c, i) => {
+        const tag = parts.length > 1 ? ` · part ${pi}` : '';
+        const row = div('hole-row', `◻ hole ${i}${tag} — ${c.shape ?? 'box'}`);
+        const sel = meshEdit.sel;
+        if (sel?.kind === 'cutter' && sel.part === pi && sel.index === i) row.classList.add('selected');
+        row.onclick = () => {
+          for (const sib of wrap.querySelectorAll('.hole-row')) sib.classList.remove('selected');
+          row.classList.add('selected');
+          this.onPickHole?.(pi, i);
+        };
+        wrap.append(row);
+      });
+    });
+    const add = button('+ hole', () => {
+      add.blur();
+      this.onAddHole?.();
+    });
+    wrap.append(add);
+    return wrap;
   }
 
   // renders holder[key] into parent; mutates holder in place and calls onEdit
@@ -384,6 +433,9 @@ export class Panel {
     }
     if (value && typeof value === 'object') {
       for (const k of Object.keys(value)) {
+        // holes never render as raw fields — they live in mesh edit mode,
+        // as ghost meshes in the world and child rows in this inspector
+        if (comp === 'mesh' && k === 'carve') continue;
         this.renderValue(parent, value, k, comp, onEdit, onRestructure);
       }
       return;

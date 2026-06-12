@@ -662,8 +662,10 @@ const panel = new Panel({
   history,
   onDuplicate: (id) => editor.duplicate(id),
   onDelete: (id) => editor.delete(id),
-  onEditPath: (id, part) => editor.editPath(id, part),
-  onEditCarves: (id, part) => editor.editCarves(id, part),
+  onEditMesh: (id) => editor.editMesh(id),
+  onPickHole: (part, index) => editor.selectHandle({ kind: 'cutter', part, index }),
+  onAddHole: () => editor.addCarve(),
+  getMeshEdit: () => editor.meshEdit,
 });
 const palette = new Palette({
   el: document.getElementById('palette'),

@@ -170,9 +170,11 @@ Screenshot discipline:
   page over CDP and prints the hottest functions — use it before guessing,
   and verify hitches with a rAF frame-time probe
   (`window.__t=performance.now()` … measure deltas), not by feel.
-- Teleporting a player/agent ACROSS scenes in one jump can trip the OLD
-  scene's `voidY` for one frame (the player respawns at the world spawn).
-  Real movement never does this; for tests, teleport in two steps or check
+- Teleporting a player/agent ACROSS scenes by setting `gaia.player.position`
+  in one jump can trip the OLD scene's `voidY` for one frame (the player
+  respawns at the world spawn). Real movement never does this; for tests,
+  prefer the `warp` component (below) — it moves streaming/voidY/safe-ground
+  with the body in the same frame — or teleport in two steps and check
   `gaia.scenes.current` after.
 - A `light` component ON a presence entity is a carried light. For its own
   client it rides the camera (offset in the camera's flat frame, z < 0 =
@@ -182,6 +184,25 @@ Screenshot discipline:
   flame-keeper trigger pattern).
 - Presence `scene` stamps update server-side as they move — senses scope by
   where the player actually IS, not where they connected.
+- MOVING A PLAYER from world logic: set a `warp` component ON the presence
+  (`{position, yaw?, pitch?, fade?}` — position is an EYE pose like spawn).
+  The owning client executes it — body, streaming, voidY and last-safe move
+  together, `fade` masks the cut with a dark dip — then clears the component
+  (edge-fired). Works from interact/trigger ops via `id: "$id"` (teleporter
+  doors as pure data), from daemons (checkpoint respawns), from level ops.
+  The client still owns its body: a warp on a menu-frozen client is ignored
+  and burned.
+- CAMERA RIGS are scene data: a `camera` component on the scene's environment
+  entity (`GET /schema` documents it). `mode: "side"` is the fixed-frame 2.5D
+  camera — fixed yaw/pitch, follows the body from `distance`/`height`, WASD
+  moves in the fixed frame, the own presence mesh RENDERS (worlds should
+  dress presences via level/daemon ops — the default is the pale head
+  sphere), the carried light rides the body, no crosshair, and E picks the
+  nearest usable interactable around the body (server range rules, minus the
+  slack). Scenes without a camera stay first-person; creator mode always
+  keeps the free camera, and `gaia.player.rig` shows the live spec. CDP
+  play-tests drive it exactly like first person (`keys.add`), but yaw-based
+  facing checks should read `gaia.player.bodyYaw`.
 
 ## Other ground rules
 

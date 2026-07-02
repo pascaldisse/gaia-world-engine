@@ -37,7 +37,19 @@ const effects = new Effects({ scene, audio });
 const environment = new Environment({ renderer, scene, hemi, sun, post, audio });
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
-const scenes = new Scenes({ store, view, environment });
+view.player = player;
+// a scene's `camera` component drives the rig: side mode fixes the frame,
+// shows the body, and retires the crosshair (E picks by the body instead)
+const scenes = new Scenes({
+  store,
+  view,
+  environment,
+  onCamera: (spec) => {
+    player.rig = spec ?? null;
+    view.showOwnBody = !!spec;
+    syncCrosshair();
+  },
+});
 const shading = new Shading({ view, renderer });
 const viewFx = new ViewFx({ scene, view, environment, post });
 
@@ -130,10 +142,17 @@ const net = connect({
     scenes.setWorld(world);
     scenes.update(player.position);
     store.applySnapshot(entities);
+    // the scene was current before its entities existed (setWorld precedes
+    // the snapshot apply) — now that they do, derive its camera rig
+    scenes.applyCamera();
     countEl.textContent = store.entities.size;
     // while the title menu is up there is no body in the world — the
     // presence spawns when a level is chosen (and re-spawns on reconnect)
     if (!overlay.dataset.menu) ensurePresence();
+    // a warp that landed while we were away still executes (edge = the value
+    // existing, not the op arriving — reconnects must not strand the body)
+    const pendingWarp = store.get(presenceId)?.warp;
+    if (pendingWarp?.position) applyWarp(pendingWarp);
   },
   onOps: (ops, from) => {
     // scene ops edit the world file, not an entity — streaming re-derives live
@@ -153,6 +172,12 @@ const net = connect({
     }
     store.applyOps(ops);
     countEl.textContent = store.entities.size;
+    for (const op of ops) {
+      // a warp landed on OUR presence: world logic moved the body
+      if (op.id === presenceId && op.component === 'warp' && op.value?.position) applyWarp(op.value);
+      // a scene's camera rig edited live — re-derive the active one
+      if (op.component === 'camera') scenes.applyCamera();
+    }
     panel.refresh(ops);
     econsole.add(ops, from);
     handleEvents(ops);
@@ -217,6 +242,31 @@ function applyLevel(level, { lock = true } = {}) {
   menuEl.style.display = 'none';
   overlaySubEl.textContent = 'click to continue';
   if (lock) renderer.domElement.requestPointerLock();
+}
+
+// the `warp` component: the one sanctioned way for world logic (a daemon, a
+// trigger's ops, a level) to move a player — set it on the presence and the
+// OWNING client executes it. The client still owns its body: it moves itself,
+// carries streaming + voidY + safe-ground along in the same frame (a cross-
+// scene warp can never void-bounce), publishes the arrival, and clears the
+// component so the warp is edge-fired like a trigger.
+function applyWarp(spec) {
+  const clear = [{ op: 'set', id: presenceId, component: 'warp', value: null }];
+  if (!spec?.position || player.frozen) {
+    // no body yet (title menu) or nothing to do — just burn the component
+    net.send(clear);
+    return;
+  }
+  player.warpTo(spec);
+  scenes.update(player.position);
+  player.voidY = scenes.currentVoidY;
+  if (spec.fade) environment.dip(spec.fade);
+  const { x, y, z } = player.position;
+  net.send([
+    ...clear,
+    { op: 'merge', id: presenceId, component: 'transform', value: { position: [r2(x), r2(y), r2(z)] } },
+    { op: 'merge', id: presenceId, component: 'presence', value: { yaw: r2(player.bodyYaw) } },
+  ]);
 }
 
 function buildTitleScreen(game) {
@@ -721,9 +771,10 @@ const editor = new Editor({
   modeEl: document.getElementById('mode'),
 });
 
-document.addEventListener('pointerlockchange', () => {
-  crosshairEl.style.display = player.locked && !player.editorMode ? 'block' : 'none';
-});
+function syncCrosshair() {
+  crosshairEl.style.display = player.locked && !player.editorMode && !player.rig ? 'block' : 'none';
+}
+document.addEventListener('pointerlockchange', syncCrosshair);
 
 // debug handle: poke the kernel from the devtools console (or CDP)
 window.gaia = { store, view, scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, viewFx, sim, setDrawMode, setStopped };
@@ -733,13 +784,15 @@ let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };
 function publishPresence(now) {
   if (now - lastPresence.t < 300 || !store.get(presenceId)) return;
   const { x, y, z } = player.position;
+  // bodyYaw is the facing the world should see — identical to the look yaw in
+  // first person, the movement direction under a camera rig
   const moved = Math.hypot(x - lastPresence.x, y - lastPresence.y, z - lastPresence.z) > 0.3;
-  const turned = Math.abs(player.yaw - lastPresence.yaw) > 0.15;
+  const turned = Math.abs(player.bodyYaw - lastPresence.yaw) > 0.15;
   if (!moved && !turned) return;
-  lastPresence = { x, y, z, yaw: player.yaw, t: now };
+  lastPresence = { x, y, z, yaw: player.bodyYaw, t: now };
   net.send([
     { op: 'merge', id: presenceId, component: 'transform', value: { position: [r2(x), r2(y), r2(z)] } },
-    { op: 'merge', id: presenceId, component: 'presence', value: { yaw: r2(player.yaw) } },
+    { op: 'merge', id: presenceId, component: 'presence', value: { yaw: r2(player.bodyYaw) } },
   ]);
 }
 

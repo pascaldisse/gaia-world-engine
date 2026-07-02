@@ -7,10 +7,11 @@ import { mergeIntoLibrary } from '../../shared/ops.js';
 // Streaming is invisible — scenes are built before they can be seen or
 // entered, and builds are time-sliced in the view.
 export class Scenes {
-  constructor({ store, view, environment }) {
+  constructor({ store, view, environment, onCamera }) {
     this.store = store;
     this.view = view;
     this.environment = environment;
+    this.onCamera = onCamera;
     this.raw = null; // the world file as authored — what the editor edits
     this.index = null;
     this.current = null;
@@ -71,8 +72,23 @@ export class Scenes {
     }
     if (changed) {
       this.applyEnvironment(first);
+      this.applyCamera();
       this.view.updateAmbience();
     }
+  }
+
+  // crossing into a scene adopts its camera rig too — a scene with a `camera`
+  // component (usually on its environment entity) declares HOW it is seen;
+  // scenes without one hand the frame back to first person
+  applyCamera() {
+    let spec = null;
+    for (const comps of this.store.entities.values()) {
+      if (comps.camera && comps.scene?.name === this.current) {
+        spec = comps.camera;
+        break;
+      }
+    }
+    this.onCamera?.(spec && spec.mode !== 'first' ? spec : null);
   }
 
   // crossing into a scene adopts its mood — crossfaded, so a seam is a slow

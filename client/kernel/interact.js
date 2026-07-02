@@ -66,6 +66,26 @@ export class Interact {
     return null;
   }
 
+  // under a camera rig there is no look-ray to aim — the BODY picks: the
+  // nearest usable interactable whose radius covers where the body stands.
+  // Same 3D eye-to-origin distance the server checks (minus its 2m slack),
+  // so the prompt never promises what the server would refuse.
+  pickByBody() {
+    let best = null;
+    const p = this.player.position;
+    for (const [id, comps] of this.store.entities) {
+      const act = comps?.interact;
+      if (!act) continue;
+      const group = this.view.getGroup(id);
+      if (!group || group.userData.hidden) continue;
+      const d = Math.hypot(group.position.x - p.x, group.position.y - p.y, group.position.z - p.z);
+      if (d > (act.radius ?? 4)) continue;
+      if (act.when && !this.matches(act.when)) continue;
+      if (!best || d < best.distance) best = { id, distance: d };
+    }
+    return best;
+  }
+
   // the looked-at entity's interact component, if the player may use it now —
   // same gates the server applies, so the prompt never lies
   usableAct(picked) {
@@ -132,11 +152,12 @@ export class Interact {
       this.updateHint();
       return;
     }
-    if (this.player.gameMode) {
-      // no grabbing in a game world — but interactables still answer E
+    if (this.player.gameMode || this.player.rig) {
+      // no grabbing in a game world (or under a rig — nothing to aim with),
+      // but interactables still answer E
       if (this.holding) this.drop();
       this.setHover(null);
-      const picked = this.pick();
+      const picked = this.player.rig ? this.pickByBody() : this.pick();
       const act = this.usableAct(picked);
       this.usable = act ? picked.id : null;
       this.usePrompt = act?.prompt ?? 'use';

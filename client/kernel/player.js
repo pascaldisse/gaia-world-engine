@@ -7,6 +7,7 @@ import { r2 } from '../../shared/num.js';
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _move = new THREE.Vector3();
+const _camTarget = new THREE.Vector3();
 
 export class Player {
   constructor({ camera, dom, overlay, view }) {
@@ -38,6 +39,14 @@ export class Player {
     this.voidY = -120;
     this.lastSafe = null; // last static ground pose — void falls return here
     this.onEvent = null; // (name, data) => {} — splash/sinking/drown/void hooks
+    // data-driven camera rig (the scene's `camera` component, set by Scenes).
+    // Under a rig the view holds a FIXED yaw/pitch and follows the body from
+    // distance/height — the 2.5D side-on frame. WASD moves in the rig's frame,
+    // the mouse steers nothing, and bodyYaw (the way the body faces — what the
+    // world renders and publishes) turns toward the movement instead of the look.
+    this.rig = null;
+    this.bodyYaw = 0;
+    this.camPos = null; // damped rig camera — null = pick up from wherever the camera is
     // frozen: a title menu is up — the world plays behind the card but the
     // body doesn't exist yet (no input, no gravity, no void teleports); the
     // camera just holds the menu shot until a level is chosen
@@ -54,6 +63,7 @@ export class Player {
     });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
+      if (this.rig && !this.editorMode) return; // the rig owns the frame
       this.yaw -= e.movementX * 0.0022;
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * 0.0022));
     });
@@ -65,6 +75,7 @@ export class Player {
     const pose = this.spawnPose ?? { position: [0, 2, 22], yaw: 0 };
     this.position.set(...(pose.position ?? [0, 2, 22]));
     this.yaw = pose.yaw ?? 0;
+    this.bodyYaw = this.yaw;
     this.pitch = 0;
     this.velocity.set(0, 0, 0);
     this.vy = 0;
@@ -72,6 +83,26 @@ export class Player {
     this.sinking = false;
     this.swimTime = 0;
     this.platform = null;
+  }
+
+  // the one sanctioned outside hand on the body: a `warp` component landed on
+  // our presence and the world wants us somewhere. Settles all motion state and
+  // makes the destination the safe ground — the caller moves streaming/voidY
+  // with it so a cross-scene warp can never void-bounce.
+  warpTo({ position, yaw, pitch } = {}) {
+    if (position) this.position.set(...position);
+    if (yaw !== undefined) {
+      this.yaw = yaw;
+      this.bodyYaw = yaw;
+    }
+    if (pitch !== undefined) this.pitch = Math.max(-1.45, Math.min(1.45, pitch));
+    this.velocity.set(0, 0, 0);
+    this.vy = 0;
+    this.platform = null;
+    this.swimming = false;
+    this.sinking = false;
+    this.swimTime = 0;
+    this.lastSafe = { x: this.position.x, y: this.position.y, z: this.position.z };
   }
 
   update(dt) {
@@ -119,6 +150,10 @@ export class Player {
 
     const speedBase = crouching ? 3 : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 14 : 6;
     const speed = this.swimming && !flying ? speedBase * 0.4 : speedBase;
+    // under a rig, movement lives in the rig's fixed frame (the editor's
+    // flythrough and noclip always keep the free first-person frame)
+    const rig = this.rig && !this.editorMode && !flying ? this.rig : null;
+    const moveYaw = rig ? rig.yaw ?? 0 : this.yaw;
     // Unity-style flythrough moves along the view direction (pitch included)
     const forward = flying
       ? _forward.set(
@@ -126,8 +161,8 @@ export class Player {
           Math.sin(this.pitch),
           -Math.cos(this.yaw) * Math.cos(this.pitch),
         )
-      : _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-    const right = _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+      : _forward.set(-Math.sin(moveYaw), 0, -Math.cos(moveYaw));
+    const right = _right.set(Math.cos(moveYaw), 0, -Math.sin(moveYaw));
 
     const move = _move.set(0, 0, 0);
     if (canMove) {
@@ -148,6 +183,20 @@ export class Player {
 
     this.velocity.lerp(move, Math.min(1, dt * (this.swimming && !flying ? 4 : 10)));
     this.position.addScaledVector(this.velocity, dt);
+
+    // the body faces the way it looks — except under a rig, where the look is
+    // fixed and the body turns toward wherever it is actually going
+    if (rig) {
+      const vx = this.velocity.x;
+      const vz = this.velocity.z;
+      if (vx * vx + vz * vz > 0.25) {
+        const want = Math.atan2(-vx, -vz);
+        const d = Math.atan2(Math.sin(want - this.bodyYaw), Math.cos(want - this.bodyYaw));
+        this.bodyYaw += d * Math.min(1, dt * 10);
+      }
+    } else {
+      this.bodyYaw = this.yaw;
+    }
 
     if (!this.editorMode && !this.noclip) {
       // fell out of the world: return to the last safe ground
@@ -267,8 +316,29 @@ export class Player {
       }
     }
 
-    this.camera.position.copy(this.position);
-    this.euler.set(this.pitch, this.yaw, 0);
-    this.camera.quaternion.setFromEuler(this.euler);
+    if (rig) {
+      // the rig's frame: pulled back along the fixed yaw, lifted, leading the
+      // body by its own velocity, damped — a dolly on rails, never a cut
+      const ryaw = rig.yaw ?? 0;
+      _camTarget
+        .set(
+          this.position.x + Math.sin(ryaw) * (rig.distance ?? 14),
+          this.position.y + (rig.height ?? 3),
+          this.position.z + Math.cos(ryaw) * (rig.distance ?? 14),
+        )
+        .addScaledVector(this.velocity, (rig.lookAhead ?? 0) / 6);
+      // first frame under the rig picks up from wherever the camera was — the
+      // damp then glides it onto the rails (first-person → side is a shot, not a cut)
+      if (!this.camPos) this.camPos = this.camera.position.clone();
+      this.camPos.lerp(_camTarget, Math.min(1, dt * (rig.damp ?? 5)));
+      this.camera.position.copy(this.camPos);
+      this.euler.set(rig.pitch ?? 0, ryaw, 0);
+      this.camera.quaternion.setFromEuler(this.euler);
+    } else {
+      this.camPos = null;
+      this.camera.position.copy(this.position);
+      this.euler.set(this.pitch, this.yaw, 0);
+      this.camera.quaternion.setFromEuler(this.euler);
+    }
   }
 }

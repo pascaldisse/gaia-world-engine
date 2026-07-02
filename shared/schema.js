@@ -264,6 +264,28 @@ export const SCHEMA = {
       reverb: { doc: 'world reverb send', range: [0, 1] },
     },
   },
+  camera: {
+    doc: 'how the current scene is SEEN — put it on the scene\'s environment entity. mode "side" is the fixed-frame 2.5D rig: the view holds a fixed yaw/pitch and follows the body from distance/height, WASD moves in the fixed frame (the mouse steers nothing), your own presence mesh renders and turns toward its movement, the carried light rides the body, and E picks the nearest usable interactable around the body instead of a look-ray. Scenes without a camera stay first-person; the editor always keeps the free camera',
+    default: { mode: 'side', yaw: 1.5708, pitch: -0.14, distance: 14, height: 3.5, damp: 5 },
+    fields: {
+      mode: { doc: 'rig kind ("first" = explicit default)', enum: ['first', 'side'] },
+      yaw: { doc: 'fixed view yaw (radians): 1.5708 looks along -x, so screen-right is -z', range: [-3.1416, 3.1416] },
+      pitch: { doc: 'fixed view pitch (radians, negative looks down)', range: [-1.45, 1.45] },
+      distance: { doc: 'camera pull-back from the body (meters)', range: [2, 60] },
+      height: { doc: 'camera lift above the body eye (meters)', range: [-5, 30] },
+      lookAhead: { doc: 'lead the body in its movement direction (meters at walk speed)', range: [0, 10] },
+      damp: { doc: 'follow smoothing (higher = tighter on the rails)', range: [1, 20] },
+    },
+  },
+  warp: {
+    doc: 'server-directed motion for a player: SET this on a presence entity (interact/trigger ops via id "$id", a daemon, level ops) and the owning client moves its own body there, updates streaming + voidY + safe ground in the same frame (a cross-scene warp cannot void-bounce), then clears the component — edge-fired like a trigger. The one sanctioned outside hand on a body: checkpoint respawns, doors, elevators between scenes',
+    fields: {
+      position: { doc: 'destination [x, y, z] — the EYE pose, like spawn (ground + ~1.7)', range: [-400, 600] },
+      yaw: { doc: 'facing after arrival (radians); omitted keeps the current facing', range: [-3.1416, 3.1416] },
+      pitch: { doc: 'look pitch after arrival (radians)', range: [-1.45, 1.45] },
+      fade: { doc: 'seconds of dark dip masking the cut (omitted = hard cut)', range: [0, 5] },
+    },
+  },
   weather: {
     doc: 'server-simulated sky: lightning strikes and rain cycles',
     default: { lightning: true, minGap: 8, maxGap: 40, rainCycle: 90, rainAmount: 0.5 },

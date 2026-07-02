@@ -39,6 +39,12 @@ export class View {
     this.camera = camera;
     this.renderer = renderer;
     this.groups = new Map();
+    // under a camera rig the protagonist is the BODY, not the lens: the own
+    // presence renders (showOwnBody), follows the player at frame rate (the
+    // 300ms presence trickle is for everyone else), and carries its light on
+    // the body instead of the camera. main.js flips this with the rig.
+    this.showOwnBody = false;
+    this.player = null;
     this.lights = new Map(); // direct lights (spot/directional/shadow) — build-time only
     this.sounds = new Map();
     this.particleSystems = new Map();
@@ -105,7 +111,7 @@ export class View {
   show(id) {
     const group = this.groups.get(id);
     if (!group || !group.userData.hidden) return;
-    group.visible = id !== this.ownPresence;
+    group.visible = id !== this.ownPresence || this.showOwnBody;
     group.userData.hidden = false;
     this.buildVersion++;
     const components = this.store.get(id);
@@ -140,6 +146,20 @@ export class View {
       if (!this.groups.has(id) && comps) {
         this.build(id);
         parts -= comps.mesh?.parts?.length ?? 1;
+      }
+    }
+    // the visible own body rides the LOCAL player at frame rate, facing the
+    // way it moves — everyone else still sees the 300ms presence trickle
+    if (this.ownPresence) {
+      const own = this.groups.get(this.ownPresence);
+      if (own) {
+        if (this.showOwnBody && this.player) {
+          if (!own.userData.hidden) own.visible = true;
+          own.position.copy(this.player.position);
+          own.rotation.y = this.player.bodyYaw;
+        } else {
+          own.visible = false;
+        }
       }
     }
     this.updateLights();
@@ -328,7 +348,7 @@ export class View {
     if (!components) return;
     const group = new THREE.Group();
     group.name = id;
-    if (id === this.ownPresence) group.visible = false; // don't render your own head
+    if (id === this.ownPresence && !this.showOwnBody) group.visible = false; // don't render your own head
     if (!this.warming && !this.isActive(components)) {
       // out-of-scene entities build resident-but-asleep: no draw, no sound,
       // no light slot — show() wakes them when their scene streams in
@@ -381,6 +401,11 @@ export class View {
         if (!this.activeScenes || !components.scene || components.scene.name === this.currentScene) {
           this.environment?.apply(value);
         }
+        break;
+      case 'presence':
+        // other players' bodies face their published yaw (your own body
+        // follows the local player in update() at frame rate instead)
+        if (id !== this.ownPresence && value?.yaw !== undefined) group.rotation.y = value.yaw;
         break;
     }
   }
@@ -552,11 +577,18 @@ export class View {
         // offset is in the camera's FLAT frame (yaw only, so looking down
         // doesn't bury it in the floor): z < 0 carries it ahead of you,
         // lighting where you're going instead of glaring where you stand.
+        // Under a camera rig the lens is meters away from the protagonist —
+        // the light rides the BODY instead, in the body's flat frame.
         const [ox, oy, oz] = c.spec.offset ?? [0, 0, 0];
-        this.camera.getWorldDirection(_lightDir);
-        _lightDir.y = 0;
-        _lightDir.normalize();
-        slot.light.position.copy(this.camera.position).addScaledVector(_lightDir, -oz);
+        if (this.showOwnBody && this.player) {
+          _lightDir.set(-Math.sin(this.player.bodyYaw), 0, -Math.cos(this.player.bodyYaw));
+          slot.light.position.copy(this.player.position).addScaledVector(_lightDir, -oz);
+        } else {
+          this.camera.getWorldDirection(_lightDir);
+          _lightDir.y = 0;
+          _lightDir.normalize();
+          slot.light.position.copy(this.camera.position).addScaledVector(_lightDir, -oz);
+        }
         slot.light.position.y += oy;
         slot.light.position.x += -_lightDir.z * ox;
         slot.light.position.z += _lightDir.x * ox;

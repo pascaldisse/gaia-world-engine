@@ -1600,5 +1600,44 @@
         }
       ]
     }
+  },
+  "nyari-avatar": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        18
+      ],
+      "rotation": [
+        0,
+        3.141592653589793,
+        0
+      ]
+    },
+    "ground": {
+      "offset": 0
+    },
+    "mesh": {
+      "vrm": {
+        "src": "/assets/vrm/nyari-final.vrm",
+        "edits": {
+          "colors": {
+            "neckAccessory": "#5b2a86",
+            "tops": "#2c1742",
+            "iris": "#7a1128"
+          },
+          "expressions": {
+            "happy": 0.4
+          },
+          "bones": {
+            "head": 1.05
+          }
+        },
+        "animation": {
+          "clip": "/assets/vrma/test.vrma",
+          "loop": true
+        }
+      }
+    }
   }
 }

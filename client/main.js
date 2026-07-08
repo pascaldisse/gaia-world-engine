@@ -17,6 +17,9 @@ import { Environment } from './kernel/environment.js';
 import { Scenes } from './kernel/scenes.js';
 import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
+import { CharacterCreator } from './plugins/character-creator.js';
+import { VrmEditor } from './plugins/vrm-editor.js';
+import { updateVrms } from './kernel/vrm.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { setMaterialLibrary, mergeMaterial, partsOf } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
@@ -770,6 +773,21 @@ const editor = new Editor({
   shading,
   modeEl: document.getElementById('mode'),
 });
+const characterCreator = new CharacterCreator({
+  store,
+  send: net.sendDev,
+  history,
+  editor,
+  player,
+});
+const vrmEditor = new VrmEditor({
+  store,
+  view,
+  send: net.sendDev,
+  history,
+  editor,
+  player,
+});
 
 function syncCrosshair() {
   crosshairEl.style.display = player.locked && !player.editorMode && !player.rig ? 'block' : 'none';
@@ -777,7 +795,27 @@ function syncCrosshair() {
 document.addEventListener('pointerlockchange', syncCrosshair);
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = { store, view, scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, viewFx, sim, setDrawMode, setStopped };
+window.gaia = {
+  store,
+  view,
+  scenes,
+  gizmos,
+  outliner,
+  editor,
+  panel,
+  econsole,
+  environment,
+  player,
+  audio,
+  net,
+  shading,
+  viewFx,
+  sim,
+  characterCreator,
+  vrmEditor,
+  setDrawMode,
+  setStopped,
+};
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };
@@ -813,6 +851,9 @@ renderer.setAnimationLoop(() => {
   // Effects keep running: spawn/despawn tweens are edit feedback, and a
   // frozen scaleOut would leave deleted entities haunting the scene.
   if (!sim.stopped) behaviors.update(dt);
+  // VRM avatars tick every frame (spring-bone hair/skirt physics, expression
+  // fades) — even under ■ stop: a frozen face is edit feedback gone wrong
+  updateVrms(dt);
   effects.update(dt);
   environment.update(dt);
   if (!sim.stopped) {

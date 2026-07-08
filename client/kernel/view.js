@@ -5,6 +5,7 @@ import { SKY_PRESETS } from './presets.js';
 import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
+import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 
 // In the node renderer the SET of scene lights is part of every material's
 // shader cache key (LightsNode hashes light.id + castShadow) — adding or
@@ -455,11 +456,49 @@ export class View {
   applyMesh(group, recipe) {
     for (const child of [...group.children]) {
       if (child.userData.kind === 'mesh-part') {
+        if (child.userData.vrm) liveVrms.delete(child.userData.vrm);
         disposeObject(child);
         group.remove(child);
       }
     }
+    if (group.userData.vrm) {
+      liveVrms.delete(group.userData.vrm);
+      delete group.userData.vrm;
+    }
     if (!recipe) return;
+    // VRM avatar source: `mesh.vrm = { src, edits }` — the whole avatar mounts
+    // as one mesh-part child so the primitive dispose/rebuild path owns it.
+    // Async: the loaded scene attaches when ready, guarded against a newer
+    // applyMesh having replaced this recipe in the meantime.
+    if (recipe.vrm?.src) {
+      const spec = recipe.vrm;
+      group.userData.vrmToken = (group.userData.vrmToken ?? 0) + 1;
+      const token = group.userData.vrmToken;
+      loadVRM(spec.src)
+        .then((vrm) => {
+          if (group.userData.vrmToken !== token) {
+            // superseded while loading — discard
+            disposeObject(vrm.scene);
+            return;
+          }
+          applyVrmEdits(vrm, spec.edits ?? {});
+          vrm.userData = vrm.userData ?? {};
+          vrm.userData.idle = spec.idle; // undefined = defaults, false = off, {} = tuned
+          // data-driven clip: `mesh.vrm.animation = { clip, loop, speed }`
+          if (spec.animation?.clip) {
+            playClip(vrm, spec.animation).catch((err) => console.warn('[gaia] vrma failed', spec.animation.clip, err));
+          }
+          vrm.scene.userData.kind = 'mesh-part';
+          vrm.scene.userData.vrm = vrm;
+          if (spec.scale) vrm.scene.scale.setScalar(spec.scale);
+          group.add(vrm.scene);
+          group.userData.vrm = vrm;
+          liveVrms.add(vrm);
+          this.buildVersion++;
+        })
+        .catch((err) => console.warn('[gaia] vrm load failed', spec.src, err));
+      if (!recipe.parts) return; // pure-VRM recipe: no primitive parts to build
+    }
     for (const part of partsOf(recipe)) {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
       // preset parts (water, flame, glow, hologram) are visual, not walkable

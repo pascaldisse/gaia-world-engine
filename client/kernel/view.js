@@ -484,6 +484,8 @@ export class View {
           applyVrmEdits(vrm, spec.edits ?? {});
           vrm.userData = vrm.userData ?? {};
           vrm.userData.idle = spec.idle; // undefined = defaults, false = off, {} = tuned
+          vrm.userData.dance = spec.dance; // { style, bpm, energy } — beat-locked groove
+          vrm.userData.group = group; // locomotion nerve: velocity measured per frame
           // data-driven clip: `mesh.vrm.animation = { clip, loop, speed }`
           if (spec.animation?.clip) {
             playClip(vrm, spec.animation).catch((err) => console.warn('[gaia] vrma failed', spec.animation.clip, err));

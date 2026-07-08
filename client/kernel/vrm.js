@@ -331,6 +331,98 @@ function applyIdle(vrm, t, spec) {
   }
 }
 
+// ---- layer 1.5: procedural locomotion + dance ---------------------------------
+// The walk cycle is MATH, not an asset: a phase-driven gait (legs scissor,
+// arms counter-swing, body bob) whose speed follows actual world velocity —
+// the locomotion nerve. view.js measures each avatar group's velocity per
+// frame and sets vrm.userData.speed; anything that moves an entity (agent
+// intents, behaviors, ops) gets a walking body for free. Dance is the same
+// trick in a different key: `mesh.vrm.dance = { style, bpm, energy }`.
+function applyWalk(vrm, t, speed) {
+  const bone = (name) => vrm.humanoid?.getNormalizedBoneNode(name);
+  // stride frequency scales with speed (Froude-ish): ~2.2 steps/s at 1.5 m/s
+  const freq = 2.2 * Math.min(1.6, Math.max(0.5, speed / 1.5));
+  const ph = (vrm._walkPhase = (vrm._walkPhase ?? 0) + freq * Math.PI * 2 * (t - (vrm._walkT ?? t)));
+  vrm._walkT = t;
+  const w = Math.min(1, speed / 0.4); // blend weight: fade gait in above a crawl
+  const swing = 0.55 * w;
+  const s = Math.sin(ph);
+  const c = Math.cos(ph);
+  const set = (name, axis, v) => {
+    const b = bone(name);
+    if (b) b.rotation[axis] = v;
+  };
+  set('leftUpperLeg', 'x', s * swing);
+  set('rightUpperLeg', 'x', -s * swing);
+  // knees bend only on the back-swing (no hyperextension)
+  set('leftLowerLeg', 'x', Math.max(0, -s) * -0.9 * w);
+  set('rightLowerLeg', 'x', Math.max(0, s) * -0.9 * w);
+  // arms counter-swing, slightly relaxed from the idle drop
+  const armDrop = 1.15;
+  const lu = bone('leftUpperArm');
+  const ru = bone('rightUpperArm');
+  if (lu) {
+    lu.rotation.z = armDrop;
+    lu.rotation.x = -s * 0.35 * w;
+  }
+  if (ru) {
+    ru.rotation.z = -armDrop;
+    ru.rotation.x = s * 0.35 * w;
+  }
+  // bob + lean: two footfalls per stride cycle
+  const hips = bone('hips');
+  if (hips) {
+    hips.rotation.y = s * 0.06 * w;
+    hips.rotation.x = 0.05 * w; // slight forward lean into the motion
+  }
+  set('spine', 'y', -s * 0.05 * w);
+  set('head', 'y', s * 0.03 * w);
+}
+
+// dance: beat-locked full-body groove. Deterministic from world time — every
+// client sees the same move on the same beat. energy 0..1 scales amplitude.
+function applyDance(vrm, t, spec) {
+  const bone = (name) => vrm.humanoid?.getNormalizedBoneNode(name);
+  const bpm = spec.bpm ?? 108;
+  const e = spec.energy ?? 0.8;
+  const beat = (t * bpm) / 60;
+  const ph = beat * Math.PI; // half-cycle per beat: sway alternates L/R
+  const s = Math.sin(ph);
+  const c = Math.cos(ph);
+  const bounce = Math.abs(Math.sin(ph)) * -0.06 * e;
+  const set = (name, axis, v) => {
+    const b = bone(name);
+    if (b) b.rotation[axis] = v;
+  };
+  const hips = bone('hips');
+  if (hips) {
+    hips.rotation.z = s * 0.12 * e;
+    hips.rotation.y = c * 0.15 * e;
+  }
+  set('spine', 'z', -s * 0.1 * e);
+  set('chest', 'y', -c * 0.12 * e);
+  set('head', 'z', s * 0.08 * e);
+  set('head', 'y', Math.sin(ph * 0.5) * 0.15 * e);
+  // arms: alternating raise-and-pump, elbows alive
+  const lu = bone('leftUpperArm');
+  const ru = bone('rightUpperArm');
+  if (lu) {
+    lu.rotation.z = 1.15 - Math.max(0, s) * 1.5 * e;
+    lu.rotation.x = -Math.max(0, s) * 0.6 * e;
+  }
+  if (ru) {
+    ru.rotation.z = -1.15 + Math.max(0, -s) * 1.5 * e;
+    ru.rotation.x = -Math.max(0, -s) * 0.6 * e;
+  }
+  set('leftLowerArm', 'z', 0.3 + Math.max(0, s) * 0.8 * e);
+  set('rightLowerArm', 'z', -0.3 - Math.max(0, -s) * 0.8 * e);
+  // legs: weight shift with a little knee spring
+  set('leftUpperLeg', 'x', Math.max(0, s) * -0.15 * e);
+  set('rightUpperLeg', 'x', Math.max(0, -s) * -0.15 * e);
+  set('leftLowerLeg', 'x', bounce * 3);
+  set('rightLowerLeg', 'x', bounce * 3);
+}
+
 // ---- layer 2: clip playback (.vrma — VRM Animation, VRMC_vrm_animation) ------
 // A clip is CONTENT (a humanoid-retargetable file in /assets/vrma/); which clip
 // an avatar plays is DATA: `mesh.vrm.animation = { clip, loop, speed, fade }`.
@@ -396,13 +488,35 @@ let _idleT = 0;
 export function updateVrms(dt) {
   _idleT += dt;
   for (const vrm of liveVrms) {
-    // clip owns the skeleton when playing; idle owns it otherwise. Blink stays
-    // procedural either way (clips rarely carry eyelids; ours always blink).
-    if (vrm.userData?.clipOwnsPose) {
-      vrm.userData.mixer?.update(dt);
-      if (vrm.userData?.idle !== false) applyIdle(vrm, _idleT, { ...(vrm.userData?.idle || {}), breath: 0, sway: 0, arms: 0 });
-    } else if (vrm.userData?.idle !== false) {
-      applyIdle(vrm, _idleT, vrm.userData?.idle);
+    // locomotion nerve: velocity measured from the entity group's world
+    // position — whatever moves the entity (intents, behaviors, ops) makes
+    // the body walk, no coupling to any mover
+    const grp = vrm.userData?.group;
+    if (grp && dt > 0) {
+      const p = grp.position;
+      const last = vrm._lastPos ?? (vrm._lastPos = p.clone());
+      const v = Math.hypot(p.x - last.x, p.z - last.z) / dt;
+      // smooth: fast attack, slow release, so a streamed hop doesn't flicker
+      const prev = vrm.userData.speed ?? 0;
+      vrm.userData.speed = v > prev ? Math.min(v, prev + dt * 20) : Math.max(v, prev - dt * 6);
+      last.copy(p);
+    }
+    // who owns the skeleton, in priority order: dance > clip > walk > idle.
+    // Blink stays procedural in every state (ours always blink).
+    const u = vrm.userData ?? {};
+    const blinkOnly = { ...(u.idle || {}), breath: 0, sway: 0, arms: 0 };
+    if (u.dance) {
+      applyDance(vrm, _idleT, u.dance);
+      if (u.idle !== false) applyIdle(vrm, _idleT, blinkOnly);
+    } else if (u.clipOwnsPose) {
+      u.mixer?.update(dt);
+      if (u.idle !== false) applyIdle(vrm, _idleT, blinkOnly);
+    } else if ((u.speed ?? 0) > 0.08) {
+      applyWalk(vrm, _idleT, u.speed);
+      if (u.idle !== false) applyIdle(vrm, _idleT, blinkOnly);
+    } else if (u.idle !== false) {
+      vrm._walkPhase = 0;
+      applyIdle(vrm, _idleT, u.idle);
     }
     vrm.update(dt);
   }

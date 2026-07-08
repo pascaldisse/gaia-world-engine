@@ -159,10 +159,24 @@ export function applyVrmBones(vrm, bones = {}) {
   }
 }
 
+// raw scene nodes by name substring — reaches non-humanoid bones (J_Sec_*_Bust*,
+// skirt, hair roots) that the humanoid map doesn't know
+export function applyVrmNodes(vrm, nodes = {}) {
+  for (const [needle, scale] of Object.entries(nodes)) {
+    vrm.scene.traverse((obj) => {
+      if (!obj.isBone && !obj.isObject3D) return;
+      if (!obj.name?.includes(needle)) return;
+      if (Array.isArray(scale)) obj.scale.set(scale[0] ?? 1, scale[1] ?? 1, scale[2] ?? 1);
+      else obj.scale.setScalar(Number(scale) || 1);
+    });
+  }
+}
+
 export function applyVrmEdits(vrm, edits = {}) {
   if (edits.colors) applyVrmColors(vrm, edits.colors);
   if (edits.expressions) applyVrmExpressions(vrm, edits.expressions);
   if (edits.bones) applyVrmBones(vrm, edits.bones);
+  if (edits.nodes) applyVrmNodes(vrm, edits.nodes);
 }
 
 // ---- export: in-place GLB round-trip (spec §8) --------------------------------
@@ -498,10 +512,22 @@ export function updateVrms(dt) {
     if (grp && dt > 0) {
       const p = grp.position;
       const last = vrm._lastPos ?? (vrm._lastPos = p.clone());
-      const v = Math.hypot(p.x - last.x, p.z - last.z) / dt;
+      const dx = p.x - last.x;
+      const dz = p.z - last.z;
+      const v = Math.hypot(dx, dz) / dt;
       // smooth: fast attack, slow release, so a streamed hop doesn't flicker
       const prev = vrm.userData.speed ?? 0;
       vrm.userData.speed = v > prev ? Math.min(v, prev + dt * 20) : Math.max(v, prev - dt * 6);
+      // face the direction of travel: the body turns, not just slides.
+      // heading is relative to the group's own yaw (transform owns the group).
+      if (v > 0.15) {
+        const heading = Math.atan2(dx, dz) - grp.rotation.y;
+        const cur = vrm.scene.rotation.y;
+        let diff = heading - cur;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        vrm.scene.rotation.y = cur + diff * Math.min(1, dt * 8);
+      }
       last.copy(p);
     }
     // who owns the skeleton, in priority order: dance > clip > walk > idle.
@@ -514,7 +540,7 @@ export function updateVrms(dt) {
     } else if (u.clipOwnsPose) {
       u.mixer?.update(dt);
       if (u.idle !== false) applyIdle(vrm, _idleT, blinkOnly);
-    } else if ((u.speed ?? 0) > 0.08) {
+    } else if ((u.speed ?? 0) > 0.04) {
       applyWalk(vrm, _idleT, u.speed);
       if (u.idle !== false) applyIdle(vrm, _idleT, blinkOnly);
     } else if (u.idle !== false) {

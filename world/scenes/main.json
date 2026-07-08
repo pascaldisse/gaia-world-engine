@@ -103,6 +103,13 @@
       ],
       "radius": 120,
       "speed": 0.04
+    },
+    "transform": {
+      "position": [
+        0,
+        28,
+        -25
+      ]
     }
   },
   "stone-1": {
@@ -1627,17 +1634,30 @@
             "iris": "#7a1128"
           },
           "expressions": {
-            "happy": 0.4
+            "happy": 0.35
           },
           "bones": {
             "head": 1.05
+          },
+          "nodes": {
+            "Bust": [
+              1.06,
+              1.05,
+              1.08
+            ]
           }
-        },
-        "animation": {
-          "clip": "/assets/vrma/test.vrma",
-          "loop": true
         }
       }
+    },
+    "behavior": {
+      "type": "orbit",
+      "radius": 3.5,
+      "speed": 0.28,
+      "center": [
+        0,
+        0,
+        17
+      ]
     }
   }
 }

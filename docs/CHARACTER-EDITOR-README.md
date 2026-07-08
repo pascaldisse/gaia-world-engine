@@ -1,23 +1,50 @@
 # GAIA Character Editor — build index
 
-> **PHASE 1: BUILT & VERIFIED LIVE** (2026-07-08, Nyari). What now exists:
+> **PHASE 1 + ANIMATION: BUILT & VERIFIED LIVE** (2026-07-08, Nyari, branch
+> `vrm-avatars`: 07f6b3f → 499fe83 → abda13a → 7702a61). What now exists:
+>
+> **Avatars as world data** — `mesh.vrm = { src, edits, idle, dance, animation }`
+> (schema: `shared/schema.js → mesh.fields.vrm`):
 > - `client/kernel/vrm.js` — load (MToonNodeMaterial → WebGPU ✓), semantic slot
->   map, edits-as-data (`colors`/`expressions`/`bones`/`meta`), per-frame
->   `vrm.update` registry, and the §8 in-place GLB round-trip
->   (`patchVrmBytes`/`exportVRM`) — Node-tested: no-edit round-trip JSON-identical,
->   BIN byte-identical, patched file verified by independent `vrmtool.py`.
-> - `client/kernel/view.js` — `mesh.vrm = { src, edits }` mounts a VRM as a
->   mesh-part (async, token-guarded, dispose-owned); avatars are entity DATA on
->   the patch protocol: `set mesh` ops restyle a live avatar for every client.
-> - `client/plugins/vrm-editor.js` — press **V** in creator mode: template
->   dropdown (4 bases in `client/assets/vrm/`), color slots + expression +
->   bone-proportion sliders enumerated from the loaded file, meta, spawn/update
->   as world ops, export baked `.vrm`.
-> - Verified in the live world via CDP: spawn op → 67 meshes, 54-bone humanoid
->   resolves, expressions drive morphs (screenshot: smiling), spring-bone hair
->   inits, recolor-via-op works (cyan bow → violet, live).
-> Remaining: Phase 2 (parametric `.vroid` layer), texture-layer painting,
-> VRM 1.0 export switch.
+>   map, edits-as-data (`colors`/`expressions`/`bones`/`nodes`/`meta`), per-frame
+>   registry, and the §8 in-place GLB round-trip (`patchVrmBytes`/`exportVRM`) —
+>   Node-tested: no-edit round-trip JSON-identical, BIN byte-identical, patched
+>   file verified by independent `vrmtool.py`. `edits.nodes` scales raw bones by
+>   name substring (J_Sec bust/skirt chains — body customization past the
+>   humanoid map).
+> - `client/kernel/view.js` — mounts the VRM as a mesh-part (async,
+>   token-guarded, dispose-owned); `set mesh` ops restyle a live avatar for
+>   every client. Measures each avatar's world velocity per frame (the
+>   locomotion nerve).
+> - `client/plugins/vrm-editor.js` — press **V** in creator mode: templates,
+>   color slots + expressions + bone proportions enumerated from the loaded
+>   file, meta, spawn/update as ops, export baked `.vrm`.
+>
+> **Animation stack** (skeleton priority: dance > clip > walk > idle; blink
+> always runs):
+> - *Idle* — procedural breath/sway/blink/arms; per-entity `idle` spec.
+> - *Walk* — phase-driven gait fed by measured velocity: whatever moves the
+>   entity (agent intents, behaviors, ops) makes the body walk; the avatar
+>   turns to face its direction of travel.
+> - *Dance* — `dance: { bpm, energy }`, beat-locked to the world clock.
+> - *Clips* — `.vrma` (VRMC_vrm_animation) via three-vrm-animation, humanoid
+>   retargeting + crossfade; 6 motion-pack clips in `client/assets/vrma/`.
+>
+> **Verified live** (CDP + headless Brave): spawn op → 67 meshes / 54 bones;
+> expressions drive morphs; spring bones (hair + skirt + J_Sec bust) simulate;
+> recolor-by-op; Relax.vrma mocap playback; eternal orbit walk-test
+> (`nyari-avatar` circles [0,0,17] r=3.5 in scene main — the standing
+> regression check for locomotion). Agent embodiment proven end-to-end:
+> `agent-nyari` presence wears the VRM and walks/faces/says via
+> `tools/agent.mjs` intents.
+>
+> **Gotcha:** verification browser needs
+> `--disable-backgrounding-occluded-windows` — macOS pauses rAF for covered
+> windows and the whole client freezes (fireflies included).
+>
+> Remaining: Phase 2 (parametric `.vroid` layer below), texture-layer painting,
+> VRM 1.0 export switch, walk-cycle mocap clip to replace the procedural gait,
+> animation triggers (greet on approach).
 
 Goal: a VRoid-compatible character editor plugin for GAIA-World-Engine.
 The format/compatibility groundwork is **done**; this file tells the builder

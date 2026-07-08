@@ -389,38 +389,41 @@ function applyDance(vrm, t, spec) {
   const ph = beat * Math.PI; // half-cycle per beat: sway alternates L/R
   const s = Math.sin(ph);
   const c = Math.cos(ph);
-  const bounce = Math.abs(Math.sin(ph)) * -0.06 * e;
   const set = (name, axis, v) => {
     const b = bone(name);
     if (b) b.rotation[axis] = v;
   };
+  // grounded groove: weight shifts side to side, knees spring on the beat,
+  // body stays stacked over the feet — sway, not flail
   const hips = bone('hips');
   if (hips) {
-    hips.rotation.z = s * 0.12 * e;
-    hips.rotation.y = c * 0.15 * e;
+    hips.rotation.z = s * 0.08 * e;
+    hips.rotation.y = s * 0.1 * e;
   }
-  set('spine', 'z', -s * 0.1 * e);
-  set('chest', 'y', -c * 0.12 * e);
-  set('head', 'z', s * 0.08 * e);
-  set('head', 'y', Math.sin(ph * 0.5) * 0.15 * e);
-  // arms: alternating raise-and-pump, elbows alive
+  set('spine', 'z', -s * 0.06 * e);
+  set('chest', 'z', -s * 0.05 * e);
+  set('chest', 'y', c * 0.08 * e);
+  set('head', 'z', s * 0.05 * e);
+  set('head', 'y', -s * 0.09 * e);
+  // knees: spring down on every beat (both legs, small)
+  const spring = Math.abs(s) * 0.22 * e;
+  set('leftUpperLeg', 'x', -spring * 0.5);
+  set('rightUpperLeg', 'x', -spring * 0.5);
+  set('leftLowerLeg', 'x', -spring);
+  set('rightLowerLeg', 'x', -spring);
+  // arms: stay low and groove — elbows swing with the beat, no T-flail
   const lu = bone('leftUpperArm');
   const ru = bone('rightUpperArm');
   if (lu) {
-    lu.rotation.z = 1.15 - Math.max(0, s) * 1.5 * e;
-    lu.rotation.x = -Math.max(0, s) * 0.6 * e;
+    lu.rotation.z = 1.05 - Math.max(0, s) * 0.35 * e;
+    lu.rotation.x = s * 0.15 * e;
   }
   if (ru) {
-    ru.rotation.z = -1.15 + Math.max(0, -s) * 1.5 * e;
-    ru.rotation.x = -Math.max(0, -s) * 0.6 * e;
+    ru.rotation.z = -1.05 - Math.max(0, -s) * 0.35 * e;
+    ru.rotation.x = -s * 0.15 * e;
   }
-  set('leftLowerArm', 'z', 0.3 + Math.max(0, s) * 0.8 * e);
-  set('rightLowerArm', 'z', -0.3 - Math.max(0, -s) * 0.8 * e);
-  // legs: weight shift with a little knee spring
-  set('leftUpperLeg', 'x', Math.max(0, s) * -0.15 * e);
-  set('rightUpperLeg', 'x', Math.max(0, -s) * -0.15 * e);
-  set('leftLowerLeg', 'x', bounce * 3);
-  set('rightLowerLeg', 'x', bounce * 3);
+  set('leftLowerArm', 'z', 0.5 + s * 0.25 * e);
+  set('rightLowerArm', 'z', -0.5 + s * 0.25 * e);
 }
 
 // ---- layer 2: clip playback (.vrma — VRM Animation, VRMC_vrm_animation) ------

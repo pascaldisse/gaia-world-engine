@@ -314,6 +314,48 @@ export const SCHEMA = {
   },
 };
 
+// ---- senses: machine-native perception (the rain codebook) -------------------
+// rain is NOT prose: aligned integer grids sampled from the world's substrate,
+// designed for a language model's eye (a column read downward IS a motion).
+// Declared once here; every frame after that is pure signal.
+// Client organ: client/kernel/rain.js (window.gaia.rain) · tool: tools/rain.mjs
+export const SENSES = {
+  rain: {
+    doc: 'token-grid perception. Units: cm, deg, cm/s — integers only. "·" = not yet measurable. Header carries convictions (!CODE) computed from the same columns.',
+    proprio: {
+      doc: 'body sense: one row per tick (hz), sampled from BONE WORLD POSITIONS vs terrain — measurements, never the animator\'s variables, so the sense cannot inherit the body\'s bugs',
+      chans: {
+        t: 'tick index',
+        px: 'world x (cm)', pz: 'world z (cm)',
+        spd: 'ground speed over the tick (cm/s)',
+        hdg: 'direction of travel (deg)',
+        fac: 'MEASURED body facing — shoulder line × up, ground-projected (deg)',
+        err: 'wrap180(fac − hdg): 0 = walking forward, ±180 = walking backwards',
+        hipY: 'hips height above terrain (cm)',
+        LFy: 'left sole above terrain (cm; toe bone)', RFy: 'right sole (cm)',
+        LFf: 'left foot forward-of-hips along heading (cm)', RFf: 'right (cm)',
+      },
+      convictions: {
+        '!BACK': 'mean |err| > 135 — body faces away from travel',
+        '!SKEW': 'mean |err| > 45 — facing lags travel',
+        '!FLOAT': 'no sole ever within 6cm of ground while moving',
+        '!SINK': 'a sole below −6cm — clipping into terrain',
+        '!STIFF': 'moving but stride columns flat — sliding, not stepping',
+      },
+    },
+    fov: {
+      doc: 'eyes: entities projected into the viewer\'s frame, FOV-culled, range-culled, nearest first. Navigate: turn until brg→0, advance until dst shrinks. World direction to a row = fac + brg.',
+      chans: {
+        brg: 'bearing relative to facing (deg, −180..180; 0 = dead ahead)',
+        dst: 'ground distance (cm)',
+        ele: 'height relative to viewer (cm)',
+        kind: 'avatar | presence | mesh | light | first component',
+        id: 'entity id (feed to describe/face/query for detail)',
+      },
+    },
+  },
+};
+
 // fields the server SIMULATES at runtime — dev write-back strips them so a
 // scene file keeps its authored values instead of whatever the sim last
 // computed (the `scene` stamp gets the same treatment, hardcoded)

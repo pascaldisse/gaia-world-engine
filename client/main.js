@@ -17,6 +17,7 @@ import { Environment } from './kernel/environment.js';
 import { Scenes } from './kernel/scenes.js';
 import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
+import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { setMaterialLibrary, mergeMaterial, partsOf } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
@@ -777,7 +778,7 @@ function syncCrosshair() {
 document.addEventListener('pointerlockchange', syncCrosshair);
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = { store, view, scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, viewFx, sim, setDrawMode, setStopped };
+window.gaia = { store, view, rain: makeRain({ store, view }), scenes, gizmos, outliner, editor, panel, econsole, environment, player, audio, net, shading, viewFx, sim, setDrawMode, setStopped };
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };

@@ -55,7 +55,9 @@
 > travel-facing math), `!FLOAT footmin=76` (orbit without `ground:true`),
 > `!STIFF` (server-impulse motion read as speed 0 → sliding-window velocity
 > in `updateVrms`). All three now sample `OK`; the eternal orbit walker is
-> the standing regression check.
+> the standing regression check. **Operator's manual for agents:
+> [`docs/RAIN.md`](RAIN.md)** — read it before making any claim about motion
+> or placement in this world.
 >
 > Remaining: Phase 2 (parametric `.vroid` layer below), texture-layer painting,
 > VRM 1.0 export switch, walk-cycle mocap clip to replace the procedural gait,

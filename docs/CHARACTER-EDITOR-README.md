@@ -42,9 +42,25 @@
 > `--disable-backgrounding-occluded-windows` — macOS pauses rAF for covered
 > windows and the whole client freezes (fireflies included).
 >
+> **rain — machine-native perception** (2026-07-09). Screenshots can't see
+> motion bugs (a still frame looks identical walking forwards or backwards;
+> pixels don't carry foot-vs-terrain distance). `client/kernel/rain.js` +
+> `tools/rain.mjs` replace prose senses with aligned integer token grids —
+> a column read downward IS a motion. Codebook: `shared/schema.js → SENSES.rain`.
+> Two organs: `proprio` (skeleton vs terrain over time, MEASURED from bone
+> world positions + the shoulder line, never the animator's variables) and
+> `fov` (entities as bearing/distance/elevation rows, FOV+range culled —
+> navigable eyes, no renderer needed). First test convicted and fixed three
+> real bugs in one session: `!BACK err=178` (facing off by π → +π in the
+> travel-facing math), `!FLOAT footmin=76` (orbit without `ground:true`),
+> `!STIFF` (server-impulse motion read as speed 0 → sliding-window velocity
+> in `updateVrms`). All three now sample `OK`; the eternal orbit walker is
+> the standing regression check.
+>
 > Remaining: Phase 2 (parametric `.vroid` layer below), texture-layer painting,
 > VRM 1.0 export switch, walk-cycle mocap clip to replace the procedural gait,
-> animation triggers (greet on approach).
+> animation triggers (greet on approach), server-side rain (same codebook
+> computed from world state, for fully headless agents).
 
 Goal: a VRoid-compatible character editor plugin for GAIA-World-Engine.
 The format/compatibility groundwork is **done**; this file tells the builder

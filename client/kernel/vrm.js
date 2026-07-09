@@ -510,25 +510,35 @@ export function updateVrms(dt) {
     // the body walk, no coupling to any mover
     const grp = vrm.userData?.group;
     if (grp && dt > 0) {
+      // velocity over a sliding window, not per-frame: server-driven movers
+      // arrive as impulses (one jump, then stillness) and per-frame smoothing
+      // reads that as speed≈0 — rain convicted it (#rain !STIFF: body sliding
+      // at 3m/s with dead stride columns). The window spreads impulses into
+      // a continuous speed, so streamed motion walks like local motion.
       const p = grp.position;
-      const last = vrm._lastPos ?? (vrm._lastPos = p.clone());
-      const dx = p.x - last.x;
-      const dz = p.z - last.z;
-      const v = Math.hypot(dx, dz) / dt;
-      // smooth: fast attack, slow release, so a streamed hop doesn't flicker
-      const prev = vrm.userData.speed ?? 0;
-      vrm.userData.speed = v > prev ? Math.min(v, prev + dt * 20) : Math.max(v, prev - dt * 6);
-      // face the direction of travel: the body turns, not just slides.
-      // heading is relative to the group's own yaw (transform owns the group).
-      if (v > 0.15) {
-        const heading = Math.atan2(dx, dz) - grp.rotation.y;
-        const cur = vrm.scene.rotation.y;
-        let diff = heading - cur;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        vrm.scene.rotation.y = cur + diff * Math.min(1, dt * 8);
+      const hist = vrm._posHist ?? (vrm._posHist = []);
+      hist.push([_idleT, p.x, p.z]);
+      while (hist.length > 2 && _idleT - hist[0][0] > 0.45) hist.shift();
+      const [t0, x0, z0] = hist[0];
+      const span = _idleT - t0;
+      if (span > 0.08) {
+        const dx = p.x - x0;
+        const dz = p.z - z0;
+        const v = Math.hypot(dx, dz) / span;
+        vrm.userData.speed = v;
+        // face the direction of travel: the body turns, not just slides.
+        // heading is relative to the group's own yaw (transform owns the group).
+        // +π: after rotateVRM0 the mesh faces -Z at yaw 0 — convicted by rain
+        // (#rain proprio err≈180, walking backwards) and corrected empirically.
+        if (v > 0.15) {
+          const heading = Math.atan2(dx, dz) - grp.rotation.y + Math.PI;
+          const cur = vrm.scene.rotation.y;
+          let diff = heading - cur;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          vrm.scene.rotation.y = cur + diff * Math.min(1, dt * 8);
+        }
       }
-      last.copy(p);
     }
     // who owns the skeleton, in priority order: dance > clip > walk > idle.
     // Blink stays procedural in every state (ours always blink).

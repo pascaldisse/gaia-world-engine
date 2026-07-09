@@ -20,6 +20,7 @@ import { ViewFx } from './kernel/viewfx.js';
 import { CharacterCreator } from './plugins/character-creator.js';
 import { VrmEditor } from './plugins/vrm-editor.js';
 import { updateVrms } from './kernel/vrm.js';
+import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { setMaterialLibrary, mergeMaterial, partsOf } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
@@ -798,6 +799,7 @@ document.addEventListener('pointerlockchange', syncCrosshair);
 window.gaia = {
   store,
   view,
+  rain: makeRain({ store, view }),
   scenes,
   gizmos,
   outliner,

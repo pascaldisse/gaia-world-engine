@@ -9,6 +9,11 @@ movement, placement, or facing. "It looks right" is not evidence; `OK` is.
 
 Everything below is verified live — the sample outputs are real captures.
 
+`fov` works for any rendered entity. `proprio` is specifically a VRM body
+sense: it requires an entity whose mounted mesh has a `vrm` body, and returns
+`!NOBODY` for any other entity. The hub world does not seed a VRM avatar;
+choose one in a world that provides it.
+
 ## Prerequisites (once per session)
 
 1. Dev stack running: `npm run dev` (server :8420, vite :5173).
@@ -126,13 +131,14 @@ evals collide on re-declared consts.
   0.45 s sliding window (`updateVrms`); if you sample velocity yourself, window
   it too.
 
-## The standing regression check
+## The standing regression check (VRM worlds)
 
 ```bash
-node tools/rain.mjs proprio nyari-avatar
+node tools/rain.mjs proprio <vrm-avatar-id>
 ```
 
-The eternal walker circles the grove at [0,0,17] r=3.5, grounded. Header must
-say `OK`. If you touched anything near locomotion, VRM mounting, terrain, or
-behaviors and this convicts — you broke it. It saw `!BACK !FLOAT !STIFF`
-before any human did; trust it over your eyes.
+For a world that supplies a walking VRM avatar (for example `nyari-avatar` in
+the Naruko worktree), the header must say `OK`. If you touched anything near
+locomotion, VRM mounting, terrain, or behaviors and this convicts — you broke
+it. It saw `!BACK !FLOAT !STIFF` before any human did; trust it over your
+eyes.

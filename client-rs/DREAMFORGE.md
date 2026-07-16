@@ -31,6 +31,16 @@ Every subsystem must hold this invariant:
   far = coarse/sleeping) so content scale never forces authoring compromises
 - authoring: no import knobs, no LOD authoring, no lightmap UVs, no
   "optimize scene" pass. Drop it in. It works.
+- WORLD: UNIVERSE SCALE, ZERO LOADING (Pascal 07-16). World size NEVER
+  appears in frame cost — cost ∝ what the observer touches. No loading
+  screens, no level-load concept, no authored streaming volumes — residency
+  is invisible background machinery (geometry pages, texture tiles, physics
+  islands, procedural materialization all one law). World = procedural DAG
+  base + edit deltas, materialized lazily around observers. Isaac → Dark
+  Souls → No Man's Sky: SAME system, no special cases; NMS must run on this
+  engine. Consequence day one: camera-relative rendering + hierarchical/
+  64-bit coordinates (f32 breaks km from origin — architecture, not
+  optimization)
 
 ## Pillars (all ratified 07-16, Pascal)
 1. ONE CLIENT — Tauri + wgpu native; web client dies at parity (whip 161)
@@ -163,7 +173,10 @@ These concepts DO NOT EXIST in engine schema, API, editor, or docs — not
 disabled, ABSENT:
 - **bake** (light, mesh, or anything else) · **lightmap** · **authored LOD**
   · **optimize/import-quality knobs** · **"generate LODs" button** ·
-  **manual UV mapping** · **manual rigging as a required step**
+  **manual UV mapping** · **manual rigging as a required step** ·
+  **loading screen** · **level loading** · **authored streaming volumes**
+  (old engine's world.json `load` volumes → auto-derived residency;
+  behavior preserved on import, concept retired)
 Everything is dynamic, on the fly, self-adapting to the machine it runs on.
 If a design draft needs one of these words, the design is wrong — redesign.
 

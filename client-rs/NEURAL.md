@@ -16,8 +16,20 @@ write-down of what it buys, so budgets assume it correctly.
   surrogate hot-swappable for the exact path (truth-checkable, testable).
   "Hallucination that looks like simulation" (Pascal) is admitted exactly
   where a wrong guess cannot change an outcome that matters.
-- All neural = GPU compute MLPs, fp16, subgroup ops (ANE ruled OUT — no
-  per-frame API; CoreML gives no scheduling control; evidence final).
+- Neural execution, REVISED 07-16 (Pascal: "we find a way" — he was right;
+  evidence: research/metal4-neural-recon.md): METAL 4 (macOS 26, M1+ floor
+  confirmed via SDK headers) ships MTLTensor + MTL4MachineLearningCommandEncoder
+  — runs networks IN the GPU command timeline, auto-dispatching GPU-or-ANE
+  per model with machineLearning-stage barriers. A real per-frame ANE path.
+  Placement: portable baseline = wgpu compute MLPs (fp16, subgroups — wgpu
+  has NO tensor surface, confirmed); Metal-native fast path = ML-encoder
+  package behind a capability trait (pillar 7 shape), models eligible for
+  ANE offload = denoiser/upscaler/radiance-cache/surrogates — freeing GPU
+  ALU for path tracing. MetalFX frame interpolation + RT-denoised upscaler
+  = same macOS 26 floor (RT-denoised needs M3+ — triangle-RT gate, not
+  ours). Requirement: Pascal's Mac on macOS 26 Tahoe for the fast path.
+  UNCONFIRMED (flagged): M1 ANE per-frame latency under the encoder —
+  first Metal-native spike measures it before anything depends on it.
 
 ## Render ledger (published numbers → our expected gains)
 | Component | Evidence | Gain |

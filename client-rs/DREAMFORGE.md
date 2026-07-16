@@ -250,3 +250,32 @@ If a design draft needs one of these words, the design is wrong — redesign.
   textures, simple surface. Old VRoid-ish impl = reference only. First
   outputs: the nari avatar (reference/naruko/nari-seifuku-red.png,
   exact) + the naruko cat.
+
+## ADVERSARY LAW (Pascal 07-16, after Bun's Rust rewrite — bun.com/blog/bun-in-rust)
+Bun precedent: porting guide as law → implementation agent → ≥2
+adversarial reviewers (separate contexts) → fix pass → commit;
+conformance suite = ground truth. Caught real use-after-free that
+compiled clean. Kelley caveat absorbed: adversaries ≠ trust — the human
+gate stays load-bearing.
+
+Our pipeline, every coding pass, no exceptions:
+1. BUILDER (sol|opus) finishes its lane.
+2. ADVERSARY = the OTHER model, fresh context (opus reviews sol, sol
+   reviews opus — cross-model beats Bun's same-model setup: different
+   blind spots).
+3. Adversary mandate — findings only, NEVER edits code:
+   a. SPEC CONFORMANCE: implementation vs the ruling docs (DREAMFORGE
+      laws + amendments, RENDER/RAIN/PHYSICS/GEOMETRY/NARUKO, FEATURES
+      contract) — cite doc line per finding.
+   b. ACCURACY: re-run every gate independently; hunt Goodharting, fake
+      tests, pixel assertions that assert nothing.
+   c. ARCHITECTURE: approach soundness, performance implications (M1
+      frame-cost law), hidden costs, collisions with pillars ahead.
+   d. LAW HUNT: hardcoding, /tmp, main-thread work, special-casing,
+      forbidden vocabulary.
+   Output: verdict table per law + file:line findings, each tagged
+   MUST-FIX or ADVISORY.
+4. FIX pass: must-fix findings go back to the builder model with the
+   critique verbatim.
+5. MONAD final review: builder result + adversary critique + own-eyes
+   gates → accept/fix/reject, merge. Pascal sees the wave's pixels.

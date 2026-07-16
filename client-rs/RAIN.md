@@ -52,9 +52,19 @@ exactly these channels (motion vectors + depth + engine buffers), Isaac-
 class embodied models eat depth/segmentation natively — networks reading
 engine channels IS the published state of the art; we make it the
 agent-facing sense.
-- Resolution + rate = agent-chosen params (default 128² @ 10Hz — params
-  w/ defaults, never hardcoded); cost ≈ a vis-buffer pass without
-  material shading — cheap by construction on our pipeline.
+- CONTEXT DIET (Pascal 07-16: "all at once will just blow the context") —
+  zoom-is-meaning applied to perception, foveal by design:
+  · LAYERS individually viewable: each channel = its own requestable
+    layer (depth-only, motion-only, ids-only…) — never the full stack
+    unless asked
+  · RESOLUTION PYRAMID: 8×8 glance → 32² regard → 128² study →
+    attention-fetch (real geometry) — cost grows only with curiosity
+  · CAPTIONS per layer: one-line computed summary ("motion: 3 movers, max
+    2.1m/s NE, 1 opposing facing") — DEFAULT MODE = captions + glance
+    grid; full layers pulled on demand
+  · DIFF STREAM: changed texels past noise floor only, never full frames
+  All resolutions/rates/floors = params w/ defaults (never hardcoded);
+  cost ≈ vis-buffer pass without material shading — cheap by construction.
 - ATTENTION FETCH (Neo focusing): agent marks a region → engine returns
   the underlying geometry itself — cluster vertices, SDF region, entity
   component data — arbitrary zoom into structure, no screenshot.
@@ -88,3 +98,7 @@ RN5 Matrix vision: agent reads structured channels (depth/normal/motion/
     ids) from its eye pose; verifies a backwards walker from the motion
     channel ALONE (no labels); attention-fetch returns real cluster
     vertices for a marked region. PLAY-IT law: through a live agent.
+RN6 context diet: a full session at captions+glance default stays under a
+    fixed token budget (param) while the agent still detects a spawned
+    anomaly by pulling ONE layer at ONE deeper level — measured tokens
+    pasted in the gate.

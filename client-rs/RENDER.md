@@ -126,8 +126,9 @@ R5 upscale: MetalFX interop + own temporal fallback. Gate: 60fps native-
 R6 scale: billion-triangle content test (Scthe proved 1.7B in a BROWSER —
    native must beat it), streaming pages under flight.
 
-## Open questions for Pascal
-1. Approve hw-vis-first on M1 (sw-vis gated to capable hardware)?
-2. Aggregates-as-volume design (foliage → density field at distance) —
-   GEOMETRY.md amendment next?
-3. R-milestone order vs physics: interleave PHYSICS after R2 or after R4?
+## Rulings (Pascal 07-16: "you do whatever works, performance first")
+1. ✅ hw-vis-first on M1; sw-vis capability-gated. RULED.
+2. ✅ foliage/aggregates → density field at distance, clusters near, blend
+   automatic — GEOMETRY.md amendment queued. RULED.
+3. OPEN: physics interleave point (after R2 or R4) — waits on Pascal's own
+   physics pass (PHYSICS.md hold).

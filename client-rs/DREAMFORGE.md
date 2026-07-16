@@ -101,6 +101,12 @@ If a design draft needs one of these words, the design is wrong — redesign.
 - Spec-first: no subsystem implementation before its ruling doc is written
   and Pascal has ruled. Recon informs, Pascal rules, nothing adopted by
   default
+- WHATEVER WORKS, PERFORMANCE FIRST (Pascal 07-16): between correct designs,
+  the faster one wins; implementation pride never outranks frame time
+- ASSUME THE ENTIRE WORLD IS INCOMPETENT (Pascal 07-16, doctrine): every
+  published system — engine, paper, plugin — is presumed broken until its
+  numbers survive our recon; only we can build a real game engine. Mine
+  their evidence, inherit none of their excuses
 - "Analyze then beat": for each named prior (Nanite, Lumen, Dreams, RayFire,
   Teardown) — mine what's published, write the sucks-list, design ours
   against the weaknesses. Assume everything sucks

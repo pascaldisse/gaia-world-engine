@@ -38,14 +38,32 @@ computed exactly (never guessed), streamed as flags in the same diff.
 Native physics makes most of these FREE: the solver already computes
 contacts/penetrations per substep — convictions read them, no second sim.
 
-### Seeing MODELS (failure #1, fixed by native client)
-- fov tokens grow appearance fields: {kind, model/prefab name, dims,
-  dominant materials, animation state} — from ECS, exact.
-- ★ Native advantage the browser rain never had: the renderer's
-  VISIBILITY BUFFER is ground truth for "what is actually on screen" —
-  fov occlusion becomes exact (cluster visible = seen), no raycast
-  approximations. Depth from the tracer gives true line-of-sight.
-- Pixel keyframe organ stays for material/look verification (≤1Hz).
+### MATRIX VISION (Pascal correction 07-16: labels ≠ vision — "you see
+### the vertices... see by seeing the data")
+The agent's retina = a PER-AGENT STRUCTURED RENDER: a low-res buffer from
+the agent's eye pose where every texel carries CHANNELS, not colors:
+  { entityId, clusterId, depth, normal, worldPos, motionVector,
+    materialId, animPhase }
+— the same G-buffer/vis-buffer stack the renderer already computes; the
+agent sees the world's VECTOR TRUTH projected to its viewpoint. No pixel
+roundtrip ever ("render to pixels → VLM → vectors again" = the stupid
+path, forbidden). NVIDIA precedent: DLSS/Ray Reconstruction consume
+exactly these channels (motion vectors + depth + engine buffers), Isaac-
+class embodied models eat depth/segmentation natively — networks reading
+engine channels IS the published state of the art; we make it the
+agent-facing sense.
+- Resolution + rate = agent-chosen params (default 128² @ 10Hz — params
+  w/ defaults, never hardcoded); cost ≈ a vis-buffer pass without
+  material shading — cheap by construction on our pipeline.
+- ATTENTION FETCH (Neo focusing): agent marks a region → engine returns
+  the underlying geometry itself — cluster vertices, SDF region, entity
+  component data — arbitrary zoom into structure, no screenshot.
+- Motion vectors give the agent MOTION PERCEPTION directly (the
+  backwards-walker is visible in the velocity channel itself, before the
+  conviction lint even fires).
+- Entity labels/tokens remain as the cheap SUMMARY layer riding on top
+  (fast attention/diffing) — a caption on vision, never the vision.
+- Pixel keyframe organ stays for look/material verification only (≤1Hz).
 
 ## Architecture (native)
 - rain-sense package: ECS queries + solver contact taps + vis-buffer taps
@@ -66,3 +84,7 @@ RN2 convictions v1: place a half-sunk crate + a backwards walker in a test
 RN3 --watch wiring: agent context receives continuous diffs; agent
     narrates a world change without being asked.
 RN4 vis-buffer fov: occluded entity absent from fov until exposed.
+RN5 Matrix vision: agent reads structured channels (depth/normal/motion/
+    ids) from its eye pose; verifies a backwards walker from the motion
+    channel ALONE (no labels); attention-fetch returns real cluster
+    vertices for a marked region. PLAY-IT law: through a live agent.

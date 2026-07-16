@@ -5,6 +5,7 @@ pub mod component;
 pub mod protocol;
 pub mod scheduler;
 pub mod world;
+pub mod world_loading;
 
 pub use command_buffer::{DeferredEntity, EcbPlaybackBoundary, EntityCommandBuffer, EntityTarget};
 pub use component::{
@@ -17,6 +18,7 @@ pub use scheduler::{
     DEFAULT_MAX_FIXED_STEPS, FIXED, INITIALIZATION, PRESENTATION, SIMULATION,
 };
 pub use world::{EcsWorld, Entity, QuerySpec, WorldOptions, DEFAULT_ARCHETYPE_CAPACITY};
+pub use world_loading::{load_world_dir, LoadedWorld};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

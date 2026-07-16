@@ -6,7 +6,7 @@
     }
   },
   "world_spawn": {
-    "spawn": { "position": [0, 4, 38], "yaw": 3.14159 }
+    "spawn": { "position": [0, 4, 38], "yaw": 0 }
   },
   "naruko_terra": {
     "transform": { "position": [0, 0, 0] },
@@ -24,10 +24,10 @@
     "transform": { "position": [0, -1.5, -60] },
     "mesh": { "parts": [
       { "shape": "box", "size": [2000, 0.3, 1200], "position": [0, 0, -500], "color": "#141032" },
-      { "shape": "box", "size": [40, 0.05, 1.2], "position": [-20, 0.2, -30], "color": "#37e0ff", "emissive": true },
-      { "shape": "box", "size": [1.2, 0.05, 60], "position": [-38, 0.2, -60], "color": "#37e0ff", "emissive": true },
-      { "shape": "box", "size": [55, 0.05, 1.2], "position": [15, 0.2, -95], "color": "#2bb8d9", "emissive": true },
-      { "shape": "box", "size": [1.2, 0.05, 45], "position": [42, 0.2, -55], "color": "#37e0ff", "emissive": true }
+      { "shape": "box", "size": [40, 0.05, 1.2], "position": [-20, 0.2, -30], "color": "#37e0ff", "emissive": "#37e0ff" },
+      { "shape": "box", "size": [1.2, 0.05, 60], "position": [-38, 0.2, -60], "color": "#37e0ff", "emissive": "#37e0ff" },
+      { "shape": "box", "size": [55, 0.05, 1.2], "position": [15, 0.2, -95], "color": "#2bb8d9", "emissive": "#2bb8d9" },
+      { "shape": "box", "size": [1.2, 0.05, 45], "position": [42, 0.2, -55], "color": "#37e0ff", "emissive": "#37e0ff" }
     ] }
   },
   "lighthouse_rock": {
@@ -42,7 +42,7 @@
     "mesh": { "parts": [
       { "shape": "cylinder", "radius": 4.5, "height": 34, "position": [0, 17, 0], "color": "#2e2440" },
       { "shape": "cylinder", "radius": 5.5, "height": 2, "position": [0, 35, 0], "color": "#1c1426" },
-      { "shape": "sphere", "radius": 2.6, "position": [0, 37.5, 0], "color": "#f3e9ff", "emissive": true },
+      { "shape": "sphere", "radius": 2.6, "position": [0, 37.5, 0], "color": "#f3e9ff", "emissive": "#f3e9ff" },
       { "shape": "cone", "radius": 4, "height": 5, "position": [0, 41.5, 0], "color": "#1c1426" }
     ] }
   }

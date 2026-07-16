@@ -142,6 +142,18 @@ pub struct MeshPart {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<Vec<Number>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius: Option<Number>,
+    #[serde(rename = "radiusTop", skip_serializing_if = "Option::is_none")]
+    pub radius_top: Option<Number>,
+    #[serde(rename = "radiusBottom", skip_serializing_if = "Option::is_none")]
+    pub radius_bottom: Option<Number>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<Number>,
+    #[serde(rename = "radialSegments", skip_serializing_if = "Option::is_none")]
+    pub radial_segments: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
@@ -149,6 +161,8 @@ pub struct MeshPart {
     pub position: Option<Vec<Number>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rotation: Option<Vec<Number>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<NumberOrNumbers>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -327,6 +341,8 @@ pub struct Terrain {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Environment {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky: Option<Sky>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fog: Option<Value>,
@@ -338,6 +354,18 @@ pub struct Environment {
     pub sun: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bloom: Option<Value>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Sky {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub horizon: Option<String>,
     #[serde(flatten)]
     pub extra: JsonMap,
 }

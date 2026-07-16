@@ -1,7 +1,9 @@
+mod scene;
+
 use std::{
     io::{Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
-    num::NonZeroU64,
+    path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -11,38 +13,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gaia_core::{Core, GaiaPackage};
+use gaia_core::{Core, GaiaPackage, load_world_dir};
 use render_window::RenderWindowPackage;
+use scene::{FrameUniform, RenderScene, SceneParameters, Vertex, WORLD_SHADER};
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
+use wgpu::util::DeviceExt;
 
 const DEFAULT_NATIVE_PORT: u16 = 8430;
 const BYTES_PER_PIXEL: u32 = 4;
 const CAPTURE_SLOT_COUNT: usize = 3;
-
-const SHADER: &str = r#"
-struct Clock { time: f32, };
-@group(0) @binding(0) var<uniform> clock: Clock;
-
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) tint: vec3<f32>, };
-
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VertexOut {
-  var points = array<vec2<f32>, 3>(vec2(-0.62, -0.46), vec2(0.62, -0.46), vec2(0.0, 0.66));
-  let a = clock.time * 0.85;
-  let c = cos(a);
-  let s = sin(a);
-  let p = points[index];
-  var out: VertexOut;
-  out.position = vec4(c * p.x - s * p.y, s * p.x + c * p.y, 0.0, 1.0);
-  out.tint = vec3(0.22 + 0.20 * sin(a), 0.72, 1.0);
-  return out;
-}
-
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  return vec4(in.tint, 1.0);
-}
-"#;
 
 #[derive(Clone)]
 struct RenderWindowConfig {
@@ -55,6 +34,8 @@ struct RenderWindowConfig {
     native_port: u16,
     title: String,
     auto_test_ipc: bool,
+    world_path: PathBuf,
+    scene: SceneParameters,
 }
 
 impl RenderWindowConfig {
@@ -73,23 +54,52 @@ impl RenderWindowConfig {
                 .map_err(|_| format!("GAIA_NATIVE_PORT must be a port, got {value:?}"))?,
             Err(_) => DEFAULT_NATIVE_PORT,
         };
+        let integer = |name: &str, default: u32| -> Result<u32, String> {
+            match std::env::var(name) {
+                Ok(value) => value
+                    .parse::<u32>()
+                    .map_err(|_| format!("{name} must be an integer, got {value:?}")),
+                Err(_) => Ok(default),
+            }
+        };
         let auto_test_ipc = match std::env::var("SPIKE_AUTOTEST_IPC") {
             Ok(value) => value
                 .parse::<bool>()
                 .map_err(|_| format!("SPIKE_AUTOTEST_IPC must be true or false, got {value:?}"))?,
             Err(_) => false,
         };
+        let world_path = std::env::var_os("GAIA_WORLD")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../worlds/naruko"));
         let config = Self {
-            window_width: number("SPIKE_WINDOW_WIDTH", 960.0)?,
-            window_height: number("SPIKE_WINDOW_HEIGHT", 640.0)?,
+            window_width: number("GAIA_NATIVE_WIDTH", 960.0)?,
+            window_height: number("GAIA_NATIVE_HEIGHT", 640.0)?,
             panel_width: number("SPIKE_PANEL_WIDTH", 300.0)?,
             panel_height: number("SPIKE_PANEL_HEIGHT", 154.0)?,
             panel_margin: number("SPIKE_PANEL_MARGIN", 24.0)?,
-            fps: number("SPIKE_RENDER_FPS", 60.0)?,
+            fps: number("GAIA_NATIVE_FPS", 60.0)?,
             native_port,
-            title: std::env::var("SPIKE_WINDOW_TITLE")
+            title: std::env::var("GAIA_NATIVE_TITLE")
                 .unwrap_or_else(|_| "GAIA — render-window".into()),
             auto_test_ipc,
+            world_path,
+            scene: SceneParameters {
+                fov_y_degrees: number("GAIA_NATIVE_FOV", 60.0)? as f32,
+                near: number("GAIA_NATIVE_NEAR", 0.1)? as f32,
+                far: number("GAIA_NATIVE_FAR", 4_000.0)? as f32,
+                sky_top: std::env::var("GAIA_NATIVE_SKY_TOP").unwrap_or_else(|_| "#20152f".into()),
+                sky_horizon: std::env::var("GAIA_NATIVE_SKY_HORIZON")
+                    .unwrap_or_else(|_| "#9a627d".into()),
+                mesh_color: std::env::var("GAIA_NATIVE_MESH_COLOR")
+                    .unwrap_or_else(|_| "#9aa0a6".into()),
+                radial_segments: integer("GAIA_NATIVE_RADIAL_SEGMENTS", 24)?,
+                camera_position: [
+                    number("GAIA_NATIVE_CAMERA_X", 0.0)? as f32,
+                    number("GAIA_NATIVE_CAMERA_Y", 2.0)? as f32,
+                    number("GAIA_NATIVE_CAMERA_Z", 22.0)? as f32,
+                ],
+                camera_yaw: number("GAIA_NATIVE_CAMERA_YAW", 0.0)? as f32,
+            },
         };
         if config.window_width <= 0.0
             || config.window_height <= 0.0
@@ -405,19 +415,23 @@ struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    pipeline: wgpu::RenderPipeline,
-    clock_buffer: wgpu::Buffer,
-    clock_bind_group: wgpu::BindGroup,
+    sky_pipeline: wgpu::RenderPipeline,
+    mesh_pipeline: wgpu::RenderPipeline,
+    frame_buffer: wgpu::Buffer,
+    frame_bind_group: wgpu::BindGroup,
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
+    scene: RenderScene,
     offscreen: OffscreenTarget,
     pixel_order: PixelOrder,
     capture_sender: mpsc::Sender<CaptureReady>,
-    started: Instant,
 }
 
 impl Renderer {
     fn new(
         window: &tauri::Window,
         capture_sender: mpsc::Sender<CaptureReady>,
+        scene: RenderScene,
     ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let target = unsafe {
@@ -471,72 +485,118 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let clock_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("animation clock"),
-            size: NonZeroU64::new(std::mem::size_of::<f32>() as u64)
-                .unwrap()
-                .get(),
+        let frame = scene.frame_uniform(config.width, config.height);
+        let frame_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("world frame uniform"),
+            contents: bytemuck::bytes_of(&frame),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("clock layout"),
+            label: Some("world frame layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: NonZeroU64::new(std::mem::size_of::<f32>() as u64),
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<FrameUniform>() as u64
+                    ),
                 },
                 count: None,
             }],
         });
-        let clock_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("clock bind group"),
+        let frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("world frame bind group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: clock_buffer.as_entire_binding(),
+                resource: frame_buffer.as_entire_binding(),
             }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("triangle layout"),
+            label: Some("world pipeline layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("animated triangle shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            label: Some("W1 world shader"),
+            source: wgpu::ShaderSource::Wgsl(WORLD_SHADER.into()),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("animated triangle pipeline"),
+        let color_target = || wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky gradient pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_main"),
+                entry_point: Some("sky_vs"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                entry_point: Some("sky_fs"),
+                targets: &[Some(color_target())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
-            primitive: wgpu::PrimitiveState::default(),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
         });
+        let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("W1 primitive mesh pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("mesh_vs"),
+                buffers: &[Some(Vertex::layout())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("mesh_fs"),
+                targets: &[Some(color_target())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let vertex_count = u32::try_from(scene.vertices.len())
+            .map_err(|_| "world has too many W1 primitive vertices".to_string())?;
+        let vertex_bytes = bytemuck::cast_slice(&scene.vertices);
+        let vertex_buffer = if vertex_bytes.is_empty() {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("empty world vertices"),
+                size: std::mem::size_of::<Vertex>() as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: false,
+            })
+        } else {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("world primitive vertices"),
+                contents: vertex_bytes,
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        };
         let offscreen = OffscreenTarget::new(&device, format, config.width, config.height);
         eprintln!(
-            "[wgpu] raw-window-handle surface + offscreen framebuffer: {format:?} {}x{}",
+            "[wgpu] world vertices={vertex_count}; raw-window-handle surface + offscreen framebuffer: {format:?} {}x{}",
             config.width, config.height
         );
         Ok(Self {
@@ -544,13 +604,16 @@ impl Renderer {
             device,
             queue,
             config,
-            pipeline,
-            clock_buffer,
-            clock_bind_group,
+            sky_pipeline,
+            mesh_pipeline,
+            frame_buffer,
+            frame_bind_group,
+            vertex_buffer,
+            vertex_count,
+            scene,
             offscreen,
             pixel_order,
             capture_sender,
-            started: Instant::now(),
         })
     }
 
@@ -571,12 +634,10 @@ impl Renderer {
         }
     }
 
-    fn encode_triangle_pass(
+    fn encode_world_pass(
+        &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        pipeline: &wgpu::RenderPipeline,
-        clock_bind_group: &wgpu::BindGroup,
-        clear: wgpu::Color,
         label: &'static str,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -586,7 +647,7 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear),
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -595,17 +656,24 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, clock_bind_group, &[]);
+        pass.set_bind_group(0, &self.frame_bind_group, &[]);
+        pass.set_pipeline(&self.sky_pipeline);
         pass.draw(0..3, 0..1);
+        if self.vertex_count > 0 {
+            pass.set_pipeline(&self.mesh_pipeline);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..self.vertex_count, 0..1);
+        }
     }
 
     fn render(&mut self, size: PhysicalSize<u32>) {
         let _ = self.device.poll(wgpu::PollType::Poll);
         self.resize(size);
-        let seconds = self.started.elapsed().as_secs_f32();
+        let frame_uniform = self
+            .scene
+            .frame_uniform(self.config.width, self.config.height);
         self.queue
-            .write_buffer(&self.clock_buffer, 0, &seconds.to_ne_bytes());
+            .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_uniform));
         let surface_frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Some(frame),
@@ -617,38 +685,17 @@ impl Renderer {
             | wgpu::CurrentSurfaceTexture::Occluded
             | wgpu::CurrentSurfaceTexture::Validation => None,
         };
-        let pulse = 0.5 + 0.5 * (seconds * 0.7).sin();
-        let clear = wgpu::Color {
-            r: 0.025 + f64::from(pulse) * 0.04,
-            g: 0.05 + f64::from(pulse) * 0.07,
-            b: 0.12 + f64::from(pulse) * 0.13,
-            a: 1.0,
-        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render + framebuffer capture"),
+                label: Some("world render + framebuffer capture"),
             });
-        Self::encode_triangle_pass(
-            &mut encoder,
-            &self.offscreen.view,
-            &self.pipeline,
-            &self.clock_bind_group,
-            clear,
-            "offscreen triangle pass",
-        );
+        self.encode_world_pass(&mut encoder, &self.offscreen.view, "offscreen world pass");
         if let Some(frame) = &surface_frame {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            Self::encode_triangle_pass(
-                &mut encoder,
-                &view,
-                &self.pipeline,
-                &self.clock_bind_group,
-                clear,
-                "surface triangle pass",
-            );
+            self.encode_world_pass(&mut encoder, &view, "surface world pass");
         }
 
         if let Some(index) = self.offscreen.claim_slot() {
@@ -768,6 +815,17 @@ fn main() {
         core.package("render-window").unwrap().name,
         core.package("render-window").unwrap().version
     );
+    let loaded = load_world_dir(&config.world_path, &mut core.world)
+        .unwrap_or_else(|error| panic!("load GAIA_WORLD {}: {error}", config.world_path.display()));
+    let render_scene = RenderScene::from_ecs(&core.world, &config.scene)
+        .unwrap_or_else(|error| panic!("materialize GAIA world render: {error}"));
+    eprintln!(
+        "[world] {} scene(s)={:?} entities={} render_vertices={}",
+        loaded.path.display(),
+        loaded.scenes,
+        loaded.entity_count,
+        render_scene.vertices.len()
+    );
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![panel_pressed])
@@ -806,7 +864,8 @@ fn main() {
 
             let latest = Arc::new(RwLock::new(None));
             let capture_sender = spawn_capture_worker(latest.clone());
-            let renderer = Renderer::new(&window, capture_sender).map_err(std::io::Error::other)?;
+            let renderer = Renderer::new(&window, capture_sender, render_scene)
+                .map_err(std::io::Error::other)?;
             start_screenshot_server(native_port, latest).map_err(std::io::Error::other)?;
             let running = Arc::new(AtomicBool::new(true));
             app.manage(RuntimeState {

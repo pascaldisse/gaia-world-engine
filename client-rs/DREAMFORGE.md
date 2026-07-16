@@ -79,6 +79,23 @@ Every subsystem must hold this invariant:
      Animation equally easy
    - MUSIC + SOUND DESIGN à la Dreams — Pascal: "this one you can fucking
      copy" — THE sole copy license in the project
+   - ANIMATION = PUPPETEERING (Pascal 07-16): hand-keyframing is never the
+     required flow. Record limb-by-limb in LAYERS (Dreams model), merge to
+     one clip; keyframes remain visible, real, editable animation data. In
+     VR: controller+head puppeteering = personal mocap (Tvori model).
+     CAMERA: hold it, move it, record the take — that's cutscene authoring.
+     The pipeline must be FUN or it's wrong
+11. VR HYBRID (Pascal 07-16: "that was the point from the very beginning").
+    Endgame: EVERYTHING editable through VR — the interface built for 3D
+    world creation. Topology: Mac runs sim+render (perf home), headset =
+    editing interface over the same world data (a headset is just another
+    client — falls out of pillar 10); native Quest = open option later.
+    NOW: not the full VR system — a VR editor mock-up is in scope. Target:
+    Vision Pro / whatever affordable headset comes next. Reference bar:
+    Dreams VR + Tvori (VR content-creation engine: puppeteer mocap,
+    held-camera recording). Anti-reference: Unity EditorXR (scrapped).
+    XR laws parked in research/visionflow-recon.md apply (gaze-dive,
+    voice+hands, rope before descent)
 10. NODES = SURFACE, DATA = TRUTH (Pascal 07-16): AI agents are the
     engine's PRIMARY users — they interact with pure data (components/ops/
     schema, as today). Node graphs are the HUMAN view of that same data —

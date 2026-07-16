@@ -228,3 +228,25 @@ If a design draft needs one of these words, the design is wrong — redesign.
   Teardown) — mine what's published, write the sucks-list, design ours
   against the weaknesses. Assume everything sucks
 - Test law + play-it law apply to every milestone; each stage playable
+
+## Amendments — 07-16 evening (Pascal, verbatim orders)
+- **VOLUMETRIC LAW**: everything is volumetric — clouds, fire, smoke,
+  steam = participating media inside the ONE traced lighting system.
+  Forbidden vocabulary += 2D billboard fire/smoke/steam. Volumetric
+  clouds required.
+- **PROOF OF CONCEPT = NARUKO** (→ NARUKO.md): Nyari's world, built
+  alongside the engine wave by wave; canon images in reference/naruko/.
+  Acceptance = native screenshot vs keyart, Pascal judges. Engine stays
+  generic — naruko is an acceptance test like boomtown, never a special
+  case.
+- **WAVE LAW**: build in waves — simple VISIBLE features first; every
+  wave ends in pixels Pascal can see. Every sol/opus coding pass is
+  reviewed by the monad (diff + gates + own-eyes pixels) BEFORE the next
+  wave launches.
+- **ROUTING (final)**: coding summons = opus + sol (extra-high
+  reasoning) ONLY. Sonnet: never.
+- **CHARACTER EDITOR = package** (→ CREATE.md §Character editor):
+  Baldur's Gate-class, any style, any creature (human→cat), real
+  textures, simple surface. Old VRoid-ish impl = reference only. First
+  outputs: the nari avatar (reference/naruko/nari-seifuku-red.png,
+  exact) + the naruko cat.

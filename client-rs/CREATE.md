@@ -115,3 +115,15 @@ C5 procedural: node graph generates a terrain biome w/ spawned content at
    machinery. "convert" joins the forbidden vocabulary.
 2. ✅ audio = CPU realtime track (default accepted).
 3. ✅ milestone interleave = default (C-milestones follow R/P as scheduled).
+
+## Character editor package (ordered 07-16 — → NARUKO.md W5)
+- Package `char-editor`: parametric body/face/hair/outfit; any creature
+  (humanoid → quadruped); style-agnostic (anime → realistic); SIMPLE
+  surface, Baldur's Gate-class depth.
+- Real textures via the paint-on-mesh pipeline (no manual UV, no bake
+  gate); auto-rig on finish (editable); output = pure entity data any
+  world can use.
+- Old engine's VRoid-ish implementation = reference for scope only,
+  nothing inherited.
+- First deliverables: nari avatar (canon palette in NARUKO.md, exact
+  match to reference image) + naruko pink cat (red eyes, heart collar).

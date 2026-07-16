@@ -44,13 +44,20 @@ Every subsystem must hold this invariant:
 5. Virtualized geometry + textures — the never-optimize machinery; geometry
    virtualization is the SOLE pipeline, not a feature (RENDER spec, recon in
    flight)
-6. ONE LIGHTING SYSTEM — always-on, fully traced (Pascal escalation 07-16:
-   "ray tracing is not an option... there is no alternative"). Everything
-   rides one unified tracing engine: SDF/occupancy-mip traces + screen rays
-   + radiance caches on M1; hardware rays = same system, faster intersector,
-   on RT silicon. Unlimited dynamic lights, unlimited reflections. Quality =
-   INTERNAL detail levels (ray counts, cascade res, bounce depth) that adapt
-   to the machine — never a second lighting path, never a toggle
+6. ONE LIGHTING SYSTEM = REAL PATH TRACING (Pascal escalations 07-16: "ray
+   tracing is not an option... there is no alternative" → "real fucking
+   light that works like real fucking light"). Ground truth = Monte Carlo
+   path transport, one integrator: every light IS an emissive surface, the
+   sky is an emitter, reflections are just paths — nothing to configure,
+   nothing that can "not work". GRANTED: noisy + low internal res is fine
+   ("we're building an AI tool") — few paths/pixel, denoise, upscale;
+   presentation layer cleans what physics leaves rough. Tricks admitted
+   ONLY as variance reduction converging to the traced truth (ReSTIR
+   many-light sampling, radiance caches, screen reuse) — bias budget, never
+   an alternative model. Intersectors are swappable (SDF/occupancy mips on
+   M1, HW rays on RT silicon) — the transport is not.
+   FORBIDDEN FOREVER: reflection maps/probes · env-map lighting authority ·
+   light-count ceilings · "too many lights" as an error class
 7. Hardware-agnostic core — wgpu; platform fast paths (MetalFX, sparse
    textures, HW RT) behind capability traits with software fallbacks.
    Current optimization target: Pascal's MacBook (M1) — target moves,

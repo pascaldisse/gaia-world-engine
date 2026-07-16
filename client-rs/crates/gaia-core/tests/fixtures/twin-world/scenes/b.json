@@ -1,0 +1,6 @@
+{
+  "b_pillar": {
+    "transform": { "position": [10, 0, 0] },
+    "mesh": { "parts": [{ "shape": "cylinder", "radius": 1, "height": 4, "color": "#405080" }] }
+  }
+}

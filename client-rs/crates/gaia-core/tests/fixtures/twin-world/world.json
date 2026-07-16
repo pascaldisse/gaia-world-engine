@@ -1,0 +1,6 @@
+{
+  "scenes": {
+    "a": { "neighbors": ["b"] },
+    "b": { "load": [{ "center": [10, 0], "radius": 20, "y": [0, 8] }] }
+  }
+}

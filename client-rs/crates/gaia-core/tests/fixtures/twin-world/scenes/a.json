@@ -1,0 +1,12 @@
+{
+  "a_env": {
+    "environment": { "sky": { "top": "#111122", "horizon": "#332244" } }
+  },
+  "a_spawn": {
+    "spawn": { "position": [0, 2, 5], "yaw": 0 }
+  },
+  "a_box": {
+    "transform": { "position": [0, 0, 0] },
+    "mesh": { "parts": [{ "shape": "box", "size": [2, 2, 2], "color": "#804020" }] }
+  }
+}

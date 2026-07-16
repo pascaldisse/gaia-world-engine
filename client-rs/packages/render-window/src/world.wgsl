@@ -2,6 +2,9 @@ struct Frame {
   view_projection: mat4x4<f32>,
   sky_top: vec4<f32>,
   sky_horizon: vec4<f32>,
+  sun_direction: vec4<f32>,
+  sun_color: vec4<f32>,
+  ambient: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 
@@ -53,11 +56,14 @@ fn mesh_vs(in: MeshIn) -> MeshOut {
   return out;
 }
 
-// W1-only scaffolding → one deletable function; W4's integrator replaces it.
-fn scaffold_hemisphere_shade(normal: vec3<f32>) -> f32 {
+// First Light — the ONE deletable sun+ambient shading function.
+// Dies at Rite IV (Lumen Naturae) when the path integrator replaces it.
+fn first_light_shade(base: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
   let n = normalize(normal);
-  let hemisphere = n.y * 0.5 + 0.5;
-  return clamp(0.55 + 0.45 * hemisphere + 0.12 * n.x, 0.4, 1.0);
+  let ndl = max(dot(n, frame.sun_direction.xyz), 0.0);
+  let sun = frame.sun_color.rgb * frame.sun_color.a * ndl;
+  let ambient = frame.ambient.rgb * frame.ambient.a;
+  return base * (ambient + sun);
 }
 
 @fragment
@@ -65,5 +71,5 @@ fn mesh_fs(in: MeshOut) -> @location(0) vec4<f32> {
   if (in.emissive > 0.5) {
     return vec4<f32>(in.color, 1.0);
   }
-  return vec4<f32>(in.color * scaffold_hemisphere_shade(in.normal), 1.0);
+  return vec4<f32>(first_light_shade(in.color, in.normal), 1.0);
 }

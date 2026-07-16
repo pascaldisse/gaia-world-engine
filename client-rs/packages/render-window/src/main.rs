@@ -14,14 +14,17 @@ use std::{
 };
 
 use gaia_core::{Core, GaiaPackage, load_world_dir};
+use glam::Vec3;
 use render_window::RenderWindowPackage;
-use scene::{FrameUniform, RenderScene, SceneParameters, Vertex, WORLD_SHADER};
+use scene::first_light::FirstLightDefaults;
+use scene::{Camera, FrameUniform, RenderScene, SceneParameters, Vertex, WORLD_SHADER};
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
 use wgpu::util::DeviceExt;
 
 const DEFAULT_NATIVE_PORT: u16 = 8430;
 const BYTES_PER_PIXEL: u32 = 4;
 const CAPTURE_SLOT_COUNT: usize = 3;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[derive(Clone)]
 struct RenderWindowConfig {
@@ -99,6 +102,20 @@ impl RenderWindowConfig {
                     number("GAIA_NATIVE_CAMERA_Z", 22.0)? as f32,
                 ],
                 camera_yaw: number("GAIA_NATIVE_CAMERA_YAW", 0.0)? as f32,
+                camera_pitch: number("GAIA_NATIVE_CAMERA_PITCH", 0.0)? as f32,
+                first_light: FirstLightDefaults {
+                    sun_color: std::env::var("GAIA_NATIVE_SUN_COLOR")
+                        .unwrap_or_else(|_| "#ffe2b0".into()),
+                    sun_intensity: number("GAIA_NATIVE_SUN_INTENSITY", 1.1)? as f32,
+                    sun_position: [
+                        number("GAIA_NATIVE_SUN_X", 60.0)? as f32,
+                        number("GAIA_NATIVE_SUN_Y", 90.0)? as f32,
+                        number("GAIA_NATIVE_SUN_Z", 30.0)? as f32,
+                    ],
+                    ambient_color: std::env::var("GAIA_NATIVE_AMBIENT_COLOR")
+                        .unwrap_or_else(|_| "#8fb3ff".into()),
+                    ambient_intensity: number("GAIA_NATIVE_AMBIENT_INTENSITY", 0.32)? as f32,
+                },
             },
         };
         if config.window_width <= 0.0
@@ -253,7 +270,25 @@ fn write_response(
     stream.write_all(body)
 }
 
-fn handle_http(mut stream: TcpStream, latest: &LatestFrame) {
+fn respond_frame(stream: &mut TcpStream, frame: &CapturedFrame) {
+    match encode_png(frame) {
+        Ok(png) => {
+            let dimensions = format!("X-GAIA-Framebuffer: {}x{}\r\n", frame.width, frame.height);
+            let _ = write_response(stream, "200 OK", "image/png", &png, &dimensions);
+        }
+        Err(error) => {
+            let _ = write_response(
+                stream,
+                "500 Internal Server Error",
+                "text/plain; charset=utf-8",
+                error.as_bytes(),
+                "",
+            );
+        }
+    }
+}
+
+fn handle_http(mut stream: TcpStream, latest: &LatestFrame, scry: &mpsc::Sender<ScryRequest>) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut request = [0_u8; 4096];
     let Ok(read) = stream.read(&mut request) else {
@@ -264,25 +299,35 @@ fn handle_http(mut stream: TcpStream, latest: &LatestFrame) {
         .next()
         .unwrap_or_default()
         .to_owned();
-    if first_line.starts_with("GET /screenshot ") {
-        let frame = latest.read().ok().and_then(|frame| frame.clone());
-        match frame {
-            Some(frame) => match encode_png(&frame) {
-                Ok(png) => {
-                    let dimensions =
-                        format!("X-GAIA-Framebuffer: {}x{}\r\n", frame.width, frame.height);
-                    let _ = write_response(&mut stream, "200 OK", "image/png", &png, &dimensions);
-                }
-                Err(error) => {
-                    let _ = write_response(
-                        &mut stream,
-                        "500 Internal Server Error",
-                        "text/plain; charset=utf-8",
-                        error.as_bytes(),
-                        "",
-                    );
-                }
-            },
+    let mut tokens = first_line.split_whitespace();
+    let method = tokens.next().unwrap_or_default();
+    let target = tokens.next().unwrap_or_default();
+    if method != "GET" {
+        let _ = write_response(
+            &mut stream,
+            "405 Method Not Allowed",
+            "text/plain; charset=utf-8",
+            b"method not allowed\n",
+            "Allow: GET\r\n",
+        );
+        return;
+    }
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if path != "/screenshot" {
+        let _ = write_response(
+            &mut stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            b"not found\n",
+            "",
+        );
+        return;
+    }
+
+    // No query = exactly the prior behaviour: serve the latest live surface frame.
+    if query.is_empty() {
+        match latest.read().ok().and_then(|frame| frame.clone()) {
+            Some(frame) => respond_frame(&mut stream, &frame),
             None => {
                 let _ = write_response(
                     &mut stream,
@@ -293,26 +338,68 @@ fn handle_http(mut stream: TcpStream, latest: &LatestFrame) {
                 );
             }
         }
-    } else if first_line.starts_with("GET ") {
+        return;
+    }
+
+    // Moving eye: parse the pose overrides and ask the render thread for a fresh frame.
+    let params = match parse_scry_query(query) {
+        Ok(params) => params,
+        Err(error) => {
+            let _ = write_response(
+                &mut stream,
+                "400 Bad Request",
+                "text/plain; charset=utf-8",
+                error.as_bytes(),
+                "",
+            );
+            return;
+        }
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if scry
+        .send(ScryRequest {
+            params,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
         let _ = write_response(
             &mut stream,
-            "404 Not Found",
+            "503 Service Unavailable",
             "text/plain; charset=utf-8",
-            b"not found\n",
+            b"render thread unavailable\n",
             "",
         );
-    } else {
-        let _ = write_response(
-            &mut stream,
-            "405 Method Not Allowed",
-            "text/plain; charset=utf-8",
-            b"method not allowed\n",
-            "Allow: GET\r\n",
-        );
+        return;
+    }
+    match reply_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(frame)) => respond_frame(&mut stream, &frame),
+        Ok(Err(error)) => {
+            let _ = write_response(
+                &mut stream,
+                "500 Internal Server Error",
+                "text/plain; charset=utf-8",
+                error.as_bytes(),
+                "",
+            );
+        }
+        Err(_) => {
+            let _ = write_response(
+                &mut stream,
+                "504 Gateway Timeout",
+                "text/plain; charset=utf-8",
+                b"scry render timed out\n",
+                "",
+            );
+        }
     }
 }
 
-fn start_screenshot_server(port: u16, latest: LatestFrame) -> Result<(), String> {
+fn start_screenshot_server(
+    port: u16,
+    latest: LatestFrame,
+    scry: mpsc::Sender<ScryRequest>,
+) -> Result<(), String> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
         .map_err(|error| format!("bind GAIA_NATIVE_PORT {port}: {error}"))?;
     thread::Builder::new()
@@ -320,13 +407,15 @@ fn start_screenshot_server(port: u16, latest: LatestFrame) -> Result<(), String>
         .spawn(move || {
             for stream in listener.incoming() {
                 match stream {
-                    Ok(stream) => handle_http(stream, &latest),
+                    Ok(stream) => handle_http(stream, &latest, &scry),
                     Err(error) => eprintln!("[screenshot] HTTP accept failed: {error}"),
                 }
             }
         })
         .map_err(|error| format!("spawn screenshot HTTP server: {error}"))?;
-    eprintln!("[screenshot] GET http://127.0.0.1:{port}/screenshot");
+    eprintln!(
+        "[screenshot] GET http://127.0.0.1:{port}/screenshot (optional pos/yaw/pitch/fov/w/h)"
+    );
     Ok(())
 }
 
@@ -335,9 +424,28 @@ struct CaptureSlot {
     busy: Arc<AtomicBool>,
 }
 
+fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+    let depth = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("world depth buffer"),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    depth.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 struct OffscreenTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
     slots: Vec<CaptureSlot>,
     next_slot: usize,
     padded_bytes_per_row: u32,
@@ -362,6 +470,7 @@ impl OffscreenTarget {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_view = create_depth_view(device, width, height);
         let unpadded = width * BYTES_PER_PIXEL;
         let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = unpadded.div_ceil(alignment) * alignment;
@@ -384,6 +493,7 @@ impl OffscreenTarget {
         Self {
             texture,
             view,
+            depth_view,
             slots,
             next_slot: 0,
             padded_bytes_per_row,
@@ -423,6 +533,7 @@ struct Renderer {
     vertex_count: u32,
     scene: RenderScene,
     offscreen: OffscreenTarget,
+    surface_depth: wgpu::TextureView,
     pixel_order: PixelOrder,
     capture_sender: mpsc::Sender<CaptureReady>,
 }
@@ -485,7 +596,7 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
-        let frame = scene.frame_uniform(config.width, config.height);
+        let frame = scene.frame_uniform(config.width, config.height, &scene.camera);
         let frame_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("world frame uniform"),
             contents: bytemuck::bytes_of(&frame),
@@ -528,6 +639,22 @@ impl Renderer {
             blend: Some(wgpu::BlendState::REPLACE),
             write_mask: wgpu::ColorWrites::ALL,
         };
+        // Sky is the far backdrop: it fills colour but never occludes, so it never writes depth.
+        let sky_depth = wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        };
+        // Meshes write and test depth: the real depth buffer resolves interpenetration.
+        let mesh_depth = wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        };
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sky gradient pipeline"),
             layout: Some(&pipeline_layout),
@@ -547,7 +674,7 @@ impl Renderer {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(sky_depth),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -572,7 +699,7 @@ impl Renderer {
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(mesh_depth),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -595,8 +722,9 @@ impl Renderer {
             })
         };
         let offscreen = OffscreenTarget::new(&device, format, config.width, config.height);
+        let surface_depth = create_depth_view(&device, config.width, config.height);
         eprintln!(
-            "[wgpu] world vertices={vertex_count}; raw-window-handle surface + offscreen framebuffer: {format:?} {}x{}",
+            "[wgpu] world vertices={vertex_count}; raw-window-handle surface + offscreen framebuffer + depth: {format:?} {}x{}",
             config.width, config.height
         );
         Ok(Self {
@@ -612,6 +740,7 @@ impl Renderer {
             vertex_count,
             scene,
             offscreen,
+            surface_depth,
             pixel_order,
             capture_sender,
         })
@@ -631,6 +760,8 @@ impl Renderer {
                 self.config.width,
                 self.config.height,
             );
+            self.surface_depth =
+                create_depth_view(&self.device, self.config.width, self.config.height);
         }
     }
 
@@ -638,6 +769,7 @@ impl Renderer {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
         label: &'static str,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -651,7 +783,14 @@ impl Renderer {
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
@@ -669,9 +808,9 @@ impl Renderer {
     fn render(&mut self, size: PhysicalSize<u32>) {
         let _ = self.device.poll(wgpu::PollType::Poll);
         self.resize(size);
-        let frame_uniform = self
-            .scene
-            .frame_uniform(self.config.width, self.config.height);
+        let frame_uniform =
+            self.scene
+                .frame_uniform(self.config.width, self.config.height, &self.scene.camera);
         self.queue
             .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_uniform));
         let surface_frame = match self.surface.get_current_texture() {
@@ -690,12 +829,22 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("world render + framebuffer capture"),
             });
-        self.encode_world_pass(&mut encoder, &self.offscreen.view, "offscreen world pass");
+        self.encode_world_pass(
+            &mut encoder,
+            &self.offscreen.view,
+            &self.offscreen.depth_view,
+            "offscreen world pass",
+        );
         if let Some(frame) = &surface_frame {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_world_pass(&mut encoder, &view, "surface world pass");
+            self.encode_world_pass(
+                &mut encoder,
+                &view,
+                &self.surface_depth,
+                "surface world pass",
+            );
         }
 
         if let Some(index) = self.offscreen.claim_slot() {
@@ -754,6 +903,184 @@ impl Renderer {
             self.queue.present(frame);
         }
     }
+
+    /// The moving eye: render one frame from an arbitrary pose to a per-request
+    /// offscreen target and read it back synchronously. Runs on the render thread
+    /// (never the main thread); the surface frame loop is untouched.
+    fn capture_pose(&mut self, params: &ScryParams) -> Result<CapturedFrame, String> {
+        let width = params.width.unwrap_or(self.config.width).max(1);
+        let height = params.height.unwrap_or(self.config.height).max(1);
+        let fov = match params.fov {
+            Some(degrees) => {
+                if !(degrees > 0.0 && degrees < 180.0) {
+                    return Err("fov must be between 0 and 180 degrees".into());
+                }
+                degrees.to_radians()
+            }
+            None => self.scene.camera.fov_y_radians,
+        };
+        let camera = Camera {
+            eye: params
+                .pos
+                .map(Vec3::from_array)
+                .unwrap_or(self.scene.camera.eye),
+            yaw: params.yaw.unwrap_or(self.scene.camera.yaw),
+            pitch: params.pitch.unwrap_or(self.scene.camera.pitch),
+            fov_y_radians: fov,
+            near: self.scene.camera.near,
+            far: self.scene.camera.far,
+        };
+        let frame_uniform = self.scene.frame_uniform(width, height, &camera);
+        self.queue
+            .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_uniform));
+
+        let target = OffscreenTarget::new(&self.device, self.config.format, width, height);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("scry pose render + capture"),
+            });
+        self.encode_world_pass(
+            &mut encoder,
+            &target.view,
+            &target.depth_view,
+            "scry world pass",
+        );
+        let slot = &target.slots[0];
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &slot.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let buffer = slot.buffer.clone();
+        let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
+        let callback_buffer = buffer.clone();
+        encoder.map_buffer_on_submit(&buffer, wgpu::MapMode::Read, .., move |result| {
+            let mapped = result.map_err(|error| error.to_string());
+            if mapped.is_err() {
+                // Nothing to unmap on failure.
+                let _ = callback_buffer;
+            }
+            let _ = done_tx.send(mapped.map(|_| ()));
+        });
+        self.queue.submit(Some(encoder.finish()));
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        done_rx
+            .recv()
+            .map_err(|error| format!("scry readback channel closed: {error}"))??;
+        let mapped = buffer
+            .get_mapped_range(..)
+            .map_err(|error| format!("scry framebuffer map: {error}"))?;
+        let row_bytes = (width * BYTES_PER_PIXEL) as usize;
+        let mut rgba = Vec::with_capacity(row_bytes * height as usize);
+        for row in mapped
+            .chunks(target.padded_bytes_per_row as usize)
+            .take(height as usize)
+        {
+            rgba.extend_from_slice(&row[..row_bytes]);
+        }
+        if matches!(self.pixel_order, PixelOrder::Bgra) {
+            for pixel in rgba.chunks_exact_mut(BYTES_PER_PIXEL as usize) {
+                pixel.swap(0, 2);
+            }
+        }
+        drop(mapped);
+        buffer.unmap();
+        Ok(CapturedFrame {
+            width,
+            height,
+            rgba,
+        })
+    }
+}
+
+/// Optional moving-eye overrides parsed from `GET /screenshot?...`.
+/// All absent = exactly the default spawn-pose capture.
+#[derive(Clone, Debug, Default)]
+struct ScryParams {
+    pos: Option<[f32; 3]>,
+    yaw: Option<f32>,
+    pitch: Option<f32>,
+    fov: Option<f32>,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+struct ScryRequest {
+    params: ScryParams,
+    reply: mpsc::Sender<Result<CapturedFrame, String>>,
+}
+
+fn parse_finite_f32(value: &str, name: &str) -> Result<f32, String> {
+    let parsed: f32 = value
+        .parse()
+        .map_err(|_| format!("{name} must be a number, got {value:?}"))?;
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        Err(format!("{name} must be finite, got {value:?}"))
+    }
+}
+
+fn parse_scry_query(query: &str) -> Result<ScryParams, String> {
+    let mut params = ScryParams::default();
+    for pair in query.split('&').filter(|segment| !segment.is_empty()) {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("query segment {pair:?} must be key=value"))?;
+        match key {
+            "pos" => {
+                let coords: Vec<&str> = value.split(',').collect();
+                if coords.len() != 3 {
+                    return Err(format!("pos must be x,y,z, got {value:?}"));
+                }
+                params.pos = Some([
+                    parse_finite_f32(coords[0], "pos.x")?,
+                    parse_finite_f32(coords[1], "pos.y")?,
+                    parse_finite_f32(coords[2], "pos.z")?,
+                ]);
+            }
+            "yaw" => params.yaw = Some(parse_finite_f32(value, "yaw")?),
+            "pitch" => params.pitch = Some(parse_finite_f32(value, "pitch")?),
+            "fov" => params.fov = Some(parse_finite_f32(value, "fov")?),
+            "w" => {
+                params.width = Some(
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|width| *width > 0)
+                        .ok_or_else(|| format!("w must be a positive integer, got {value:?}"))?,
+                )
+            }
+            "h" => {
+                params.height = Some(
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|height| *height > 0)
+                        .ok_or_else(|| format!("h must be a positive integer, got {value:?}"))?,
+                )
+            }
+            other => return Err(format!("unknown scry parameter {other:?}")),
+        }
+    }
+    Ok(params)
 }
 
 struct RuntimeState {
@@ -866,7 +1193,9 @@ fn main() {
             let capture_sender = spawn_capture_worker(latest.clone());
             let renderer = Renderer::new(&window, capture_sender, render_scene)
                 .map_err(std::io::Error::other)?;
-            start_screenshot_server(native_port, latest).map_err(std::io::Error::other)?;
+            let (scry_tx, scry_rx) = mpsc::channel::<ScryRequest>();
+            start_screenshot_server(native_port, latest, scry_tx)
+                .map_err(std::io::Error::other)?;
             let running = Arc::new(AtomicBool::new(true));
             app.manage(RuntimeState {
                 running: running.clone(),
@@ -877,6 +1206,11 @@ fn main() {
                     let mut renderer = renderer;
                     let mut deadline = Instant::now();
                     while running.load(Ordering::Acquire) {
+                        // Service moving-eye requests off the frame loop's hot path.
+                        while let Ok(request) = scry_rx.try_recv() {
+                            let frame = renderer.capture_pose(&request.params);
+                            let _ = request.reply.send(frame);
+                        }
                         if let Ok(size) = window.inner_size() {
                             renderer.render(size);
                         }

@@ -1,9 +1,14 @@
-# NODES — DreamForge node scripting surface (DRAFT for Pascal's ruling, 2026-07-16)
+# VISIONFLOW — DreamForge's node system (DRAFT, named by Pascal 2026-07-16)
 
-Laws served: pillar 10 (nodes = surface, data = truth; AI agents = primary
-users) · pillar 12 (multiplayer is for making) · VisionFlow = Pascal's own
-reference spec (research/visionflow-recon.md — the Book of the Eye).
-"Better than Blueprints" = the acceptance bar.
+VISIONFLOW = THE name (Pascal ruling 07-16): ALL node-based surfaces are
+ONE system — programming/logic nodes · shader graphs · animation trees ·
+behavior trees · procedural generation. 3D, spatial, UI-LAYER ONLY — all
+just data underneath, manipulated as easily by AI as by hand. The
+Blueprints/Dreams-microchips equivalent, built to beat both.
+Ruling absorbed: VisionFlow = (a) the engine's node surface, Game Beneath
+folded in (closes DOSSIER §6's open call).
+Laws served: pillar 10 · pillar 12 · the Book of the Eye (research/
+visionflow-recon.md). "Better than Blueprints" = acceptance bar.
 
 ## 1 · Truth model
 - A graph is DATA: entities/components like everything else — stored in
@@ -16,8 +21,22 @@ reference spec (research/visionflow-recon.md — the Book of the Eye).
 - Users never write code. Agents MAY write graph-data directly; humans see
   what agents wrote as nodes, immediately, live.
 
-## 2 · Execution model — two domains, one grammar
-- **Logic domain** (runtime behavior; Dreams microchips, corrected):
+## 2 · Domains — one grammar, one surface (Pascal 07-16: "all of this is
+one system")
+Every domain = the same graph data model + the same 3D view + the same
+awareness layer; only the COMPILE TARGET differs:
+- **Logic** → ECS systems/queries/ops (runtime behavior)
+- **Shader** → material recipes/WGSL (material library becomes graph-
+  authorable; live on the path integrator, no visible compile wall)
+- **Animation** → blend trees/state machines over animation data (composes
+  with puppeteer layers — CREATE.md §3; a state machine is a graph you
+  stand inside — execution-as-weather shows the active state)
+- **Behavior** → agent/NPC behavior trees (ticks visible as weather;
+  agents author the trees that drive agents — the loop closes)
+- **Procedural** → lazy field DAG (CREATE.md §5; models/sound/worlds)
+Domain kits = packages (pillar 13); the grammar is one.
+
+- **Logic domain detail** (Dreams microchips, corrected):
   analog DATAFLOW — wires carry continuous 0..1 signals (not just events);
   sensors → processors → actuators. Encapsulation = chip w/ exposed ports
   (publishable as an Element). FIXES to Dreams' documented frictions:
@@ -90,9 +109,7 @@ N4 presence: two clients + one agent co-edit a graph; pointing/hold
 N5 procedural domain merge: CREATE.md C5 graph runs in the same view.
 
 ## Open questions for Pascal
-1. The old open call, now due: VisionFlow = (a) the engine's editor
-   surface (this doc's assumption), (b) separate product, (c) itself a
-   game — Game Beneath folded into (a)?
+1. ~~VisionFlow (a)/(b)/(c)~~ RULED 07-16: (a) the engine's node surface.
 2. Logic-domain signal rate: fixed tick (deterministic, replayable) vs
    per-frame — propose fixed tick, aligns with physics §8 determinism.
 3. Text DSL escape hatch for agents (graphs as terse text, compiles to

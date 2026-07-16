@@ -168,6 +168,36 @@ observable behavior + declare what's better. No row, no replacement.
 | EDITOR.md | forge surface: tools, gizmos, overlay, undo | after RENDER |
 | research/ | parked recon evidence (informs, Pascal rules) | physics + neural in |
 
+## Compute placement law (Pascal 07-16, Terry's lesson: "he runs
+everything on a CPU")
+Three engines in one chip; each does what it's shaped for; unified memory
+= zero-copy handoff between them:
+- **CPU (P-cores + NEON SIMD)** — whatever is CPU-feasible runs here:
+  game sim/ECS systems · PHYSICS SOLVER CORE (evidence-backed: Teardown,
+  BeamNG, RoR, Gustafsson's 5ms prototype are ALL CPU solvers — constraint
+  solving is branchy island work, CPU-shaped) · audio DSP (granular engine,
+  realtime thread) · procedural DAG evaluation · residency/streaming
+  decisions · transcode (UASTC bit-repack = 7-10 GB/s CPU) · connectivity
+  flood-fill · mass integration
+- **GPU** — reserved for the one lighting system + presentation: cull/
+  raster/path trace/ReSTIR/cache MLP/denoise/upscale, particle megascale
+  only when counts demand it
+- **ANE** — refined ruling: dead for the frame loop (no per-frame API),
+  ALIVE for out-of-band async inference: auto-rig, procedural/content
+  generation, surrogate training — fire-and-collect via CoreML, never
+  frame-critical
+Budgets follow: physics P-milestones gate on CPU time (cores × ms), render
+R-milestones on GPU limiters — the two never bid for the same silicon.
+NO MAIN THREAD (Pascal 07-16: "no game ever properly does multi-core") —
+the industry's confession is on record (BeamNG staff: "main bottleneck is
+single-threaded game engine"; Unity main thread; UE game+render threads).
+DreamForge has no main loop to protect: job graph + work-stealing is THE
+architecture, all cores always eligible. M1 asymmetry exploited: P-cores =
+sim/solver, E-cores = background tracks (residency, procedural
+materialization, transcode) via macOS QoS classes; unified memory kills
+the copy tax that makes desktop engines GPU-hoard. Milestone gates include
+core-utilization captures — idle P-cores at 60fps = a bug, not headroom.
+
 ## Forbidden vocabulary (Pascal, 07-16 — hard law)
 These concepts DO NOT EXIST in engine schema, API, editor, or docs — not
 disabled, ABSENT:

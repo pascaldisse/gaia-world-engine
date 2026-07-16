@@ -79,6 +79,12 @@ Every subsystem must hold this invariant:
      Animation equally easy
    - MUSIC + SOUND DESIGN à la Dreams — Pascal: "this one you can fucking
      copy" — THE sole copy license in the project
+   - ONE PROCEDURAL SYSTEM (Pascal 07-16): model gen, sound gen, and WORLD
+     gen are NOT separate systems — all outputs of the same node-procedural
+     DAG (pillar 10 machinery), evaluated at any scale: a prop, a track, a
+     planet. Agent-controllable by construction (graphs are data).
+     Reference to mine, not copy: Procedural Worlds' "Gaia" Unity plugin
+     (Pascal owns it — the name collision is destiny)
    - ANIMATION = PUPPETEERING (Pascal 07-16): hand-keyframing is never the
      required flow. Record limb-by-limb in LAYERS (Dreams model), merge to
      one clip; keyframes remain visible, real, editable animation data. In

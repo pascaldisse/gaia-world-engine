@@ -108,9 +108,10 @@ C5 procedural: node graph generates a terrain biome w/ spawned content at
    RUNTIME; same graph type emits a mesh and a beat. Gate: one DAG, three
    output domains, agent generates a variant via ops.
 
-## Open questions for Pascal
-1. Sculpt door A+B unified on SDF: poly-sculpt (sculpting door-C meshes
-   directly) needed too, or convert-to-SDF suffices?
-2. Audio engine placement: CPU realtime thread (placement law) — approve
-   granular DSP as CPU-track w/ lock-free ring to output?
-3. C-milestone order vs R/P milestones — interleave preference?
+## Rulings (Pascal 07-16)
+1. ✅ NO CONVERT PROCESS, EVER ("you just sculpt and it sculpts, just like
+   in Dreams"): the sculpt verb works on whatever is touched — SDF, poly,
+   procedural output — representation handling is invisible engine
+   machinery. "convert" joins the forbidden vocabulary.
+2. ✅ audio = CPU realtime track (default accepted).
+3. ✅ milestone interleave = default (C-milestones follow R/P as scheduled).

@@ -118,7 +118,7 @@ N5 procedural domain merge: CREATE.md C5 graph runs in the same view.
 
 ## Open questions for Pascal
 1. ~~VisionFlow (a)/(b)/(c)~~ RULED 07-16: (a) the engine's node surface.
-2. Logic-domain signal rate: fixed tick (deterministic, replayable) vs
-   per-frame — propose fixed tick, aligns with physics §8 determinism.
-3. Text DSL escape hatch for agents (graphs as terse text, compiles to
-   same data) — worth speccing, or ops-only suffices?
+2. ✅ RULED: fixed tick (deterministic, replayable; aligns w/ physics §8).
+3. ✅ RULED DEAD (Pascal 07-16): no DSL — "nodes are data, the engine is
+   AI first." Agents speak ops natively; data IS the agent interface. A
+   DSL would be a second door into a house with no walls.

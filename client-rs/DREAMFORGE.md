@@ -179,9 +179,13 @@ Three engines in one chip; each does what it's shaped for; unified memory
   realtime thread) · procedural DAG evaluation · residency/streaming
   decisions · transcode (UASTC bit-repack = 7-10 GB/s CPU) · connectivity
   flood-fill · mass integration
-- **GPU** — reserved for the one lighting system + presentation: cull/
-  raster/path trace/ReSTIR/cache MLP/denoise/upscale, particle megascale
-  only when counts demand it
+- **GPU** — the lighting system + presentation (cull/raster/path trace/
+  ReSTIR/cache MLP/denoise/upscale) AND all frame-loop NEURAL work —
+  including physics SURROGATES: a neural net is matrix math, matrix math
+  is GPU work ("neural" ≠ neural engine). Good trade by construction: a
+  far-field surrogate MLP costs the GPU μs while replacing CPU work 300-
+  5000× bigger. Exact solver stays CPU; surrogates ride the GPU beside
+  the renderer; particle megascale only when counts demand it
 - **ANE** — refined ruling: dead for the frame loop (no per-frame API),
   ALIVE for out-of-band async inference: auto-rig, procedural/content
   generation, surrogate training — fire-and-collect via CoreML, never

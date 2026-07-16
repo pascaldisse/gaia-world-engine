@@ -21,22 +21,30 @@ visionflow-recon.md). "Better than Blueprints" = acceptance bar.
 - Users never write code. Agents MAY write graph-data directly; humans see
   what agents wrote as nodes, immediately, live.
 
-## 2 · Domains — one grammar, one surface (Pascal 07-16: "all of this is
-one system")
-Every domain = the same graph data model + the same 3D view + the same
-awareness layer; only the COMPILE TARGET differs:
-- **Logic** → ECS systems/queries/ops (runtime behavior)
-- **Shader** → material recipes/WGSL (material library becomes graph-
-  authorable; live on the path integrator, no visible compile wall)
-- **Animation** → blend trees/state machines over animation data (composes
-  with puppeteer layers — CREATE.md §3; a state machine is a graph you
-  stand inside — execution-as-weather shows the active state)
-- **Behavior** → agent/NPC behavior trees (ticks visible as weather;
-  agents author the trees that drive agents — the loop closes)
-- **Procedural** → lazy field DAG (CREATE.md §5; models/sound/worlds)
-Domain kits = packages (pillar 13); the grammar is one.
+## 2 · ONE THING — there are no domains (Pascal 07-16, final form:
+"there's literally no shader graph, no animation trees... it's all just a
+fucking node with data attached to it")
+- A NODE IS DATA. Whatever the data says, happens. A node may carry shader
+  data, a calculation, an animation, a behavior tick, a field, a sound —
+  the system neither knows nor cares. There are no graph TYPES, no domain
+  walls, no "50 million systems that don't interact" (anti-Unity law).
+- ANYTHING WIRES TO ANYTHING where the data shapes fit: animation output →
+  shader parameter → constraint stiffness → music tempo → spawn density.
+  The Dreams north star (run-speed driving tempo) is the trivial case,
+  not a feature.
+- Nodes ARE entities with components — the engine's own schema is the node
+  vocabulary; adding a component type adds a node kind with zero VisionFlow
+  code (pillar: new components never require engine changes).
+- Evaluation is per-NODE by data kind, invisible: shader data reaches the
+  integrator as material recipes; field data evaluates lazily at any scale;
+  signal data ticks; animation data feeds poses (composing with puppeteer
+  layers, CREATE.md §3); the wall between "edit-time" and "runtime" does
+  not exist — it is a live world either way.
+- What LOOKS like a "shader graph" or "behavior tree" is just a corner of
+  the one graph where someone wired those data kinds together. The words
+  describe content, never systems.
 
-- **Logic domain detail** (Dreams microchips, corrected):
+- **Signal semantics** (Dreams microchips, corrected):
   analog DATAFLOW — wires carry continuous 0..1 signals (not just events);
   sensors → processors → actuators. Encapsulation = chip w/ exposed ports
   (publishable as an Element). FIXES to Dreams' documented frictions:

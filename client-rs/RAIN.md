@@ -23,7 +23,23 @@ Failures (old rain, live): couldn't see models · didn't notice an object
 half-sunk into the ground · didn't notice people walking backwards.
 ROOT: rain reports WHAT EXISTS, never WHETHER IT'S RIGHT. Fix = a third
 organ beside fov+proprio: **CONVICTIONS** — lints over ground truth,
-computed exactly (never guessed), streamed as flags in the same diff.
+computed exactly (never guessed), emitted as EVENTS when flags change.
+
+## LOOKING IS A VERB, NOT A STATE (Pascal 07-16: "you obviously don't
+## look every fucking frame... never turned on constantly")
+- Vision is ON-DEMAND ONLY: `look()` fires when the human asks or the
+  agent chooses. NO streaming by default — likely never streamed at all.
+  NEVER tied to frame rate.
+- Default glance = the cheap entity view (captions + glance grid); deeper
+  layers/levels = explicitly triggered (the pyramid below).
+- NAVIGATION NEEDS NO VISION (robot precedent, other app): moving runs on
+  world data — paths, colliders, positions. Seeing = mostly a DEBUGGING
+  organ.
+- CONVICTIONS are not vision: cheap engine-side lints running as the
+  world's own self-check (world-lint), emitting only on flag CHANGE — an
+  agent hears "X is embedded" without ever looking.
+- `--watch` demoted: a debug-session mode you switch on, never a default
+  loop.
 
 ### Conviction set v1 (each = cheap exact math on ECS/solver state)
 | flag | computation |
@@ -77,8 +93,8 @@ agent-facing sense.
 
 ## Architecture (native)
 - rain-sense package: ECS queries + solver contact taps + vis-buffer taps
-  → 10Hz push/diff streams (fov · proprio · convictions), noise-floor
-  diffing kept verbatim from rain.js design.
+  → PULL-shaped senses (look()/proprio() on demand) + conviction EVENTS on
+  flag change; noise-floor diffing kept for the debug --watch mode only.
 - Endpoints: /sense/fov /sense/proprio /sense/convictions (+ --watch
   continuous wiring INTO agent context — the unfinished piece, now a
   contract item) + /screenshot (framebuffer PNG — R0 gate organ, sol

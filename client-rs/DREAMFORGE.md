@@ -58,12 +58,34 @@ Every subsystem must hold this invariant:
    M1, HW rays on RT silicon) — the transport is not.
    FORBIDDEN FOREVER: reflection maps/probes · env-map lighting authority ·
    light-count ceilings · "too many lights" as an error class
-7. Hardware-agnostic core — wgpu; platform fast paths (MetalFX, sparse
-   textures, HW RT) behind capability traits with software fallbacks.
-   Current optimization target: Pascal's MacBook (M1) — target moves,
-   architecture doesn't
+7. METAL/macOS = PRIMARY TARGET (Pascal 07-16, "old-school Unity way"):
+   optimize for Metal first, always — that's where it runs. Portability =
+   preserved OPTION (wgpu core, capability traits, no Metal-only
+   load-bearing pieces); other-platform systems added later when needed.
+   Nobody else ships an engine like this in 16GB RAM on an ARM chip — we do
 8. Editor = the forge — live everything, spec'd against the old engine's
    full tool surface (mesh tools, gizmos, outliner, undo, scene write-back)
+9. CREATION SUITE IN-ENGINE (Pascal 07-16: "we never leave the engine") —
+   no Blender, no ZBrush, no Substance, no Houdini, no DAW. → CREATE.md:
+   - mesh modes, pick by taste/need: SDF field booleans (Dreams) · ZBrush-
+     class organic sculpt (auto-resolution under the hood, no bake-mesh
+     concept — "it just works and you don't even notice") · traditional
+     vertex/poly editing for technical models · node-based procedural
+     (mini-Houdini)
+   - texturing: DEFAULT = paint directly on the mesh (Substance-class,
+     simpler + better). Manual UV mapping DOES NOT EXIST (auto-UV is
+     invisible machinery)
+   - rigging: automatic always, editable after. Never rig by hand.
+     Animation equally easy
+   - MUSIC + SOUND DESIGN à la Dreams — Pascal: "this one you can fucking
+     copy" — THE sole copy license in the project
+10. NODES = SURFACE, DATA = TRUTH (Pascal 07-16): AI agents are the
+    engine's PRIMARY users — they interact with pure data (components/ops/
+    schema, as today). Node graphs are the HUMAN view of that same data —
+    the primary scripting surface, better than Blueprints, and 3D (spatial
+    node graphs — Pascal's VisionFlow concept = the reference spec; mine
+    ALL his docs). Users never write code; they see what the logic does
+    and manipulate it. One representation underneath, two faces on top
 
 ## Replace map (old feature → better system; contract-preserving)
 | Old engine | DreamForge | Status |
@@ -92,8 +114,9 @@ observable behavior + declare what's better. No row, no replacement.
 ## Forbidden vocabulary (Pascal, 07-16 — hard law)
 These concepts DO NOT EXIST in engine schema, API, editor, or docs — not
 disabled, ABSENT:
-- **bake** (light or anything else) · **lightmap** · **authored LOD** ·
-  **optimize/import-quality knobs** · **"generate LODs" button**
+- **bake** (light, mesh, or anything else) · **lightmap** · **authored LOD**
+  · **optimize/import-quality knobs** · **"generate LODs" button** ·
+  **manual UV mapping** · **manual rigging as a required step**
 Everything is dynamic, on the fly, self-adapting to the machine it runs on.
 If a design draft needs one of these words, the design is wrong — redesign.
 

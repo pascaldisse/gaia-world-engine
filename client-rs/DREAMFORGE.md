@@ -23,7 +23,10 @@ Every subsystem must hold this invariant:
   fully allowed — the contract is the experience, not the math.
   **Supported light sources: INFINITE** (Pascal, verbatim law) — no pool, no
   cap, no per-scene budget; light cost ≠ light count, cost ∝ lit pixels
-  (clustered deferred culling + GI where every emissive surface IS a light)
+  (clustered deferred culling + GI where every emissive surface IS a light).
+  **ONE lighting engine, all of it traced** — no raster-only mode, no RT
+  toggle, no alternative system; "whatever is the cheapest way to achieve
+  ray tracing" is the implementation license, the traced result is the law
 - physics: perfect physics; solver islands budget-scheduled (active = exact,
   far = coarse/sleeping) so content scale never forces authoring compromises
 - authoring: no import knobs, no LOD authoring, no lightmap UVs, no
@@ -41,9 +44,13 @@ Every subsystem must hold this invariant:
 5. Virtualized geometry + textures — the never-optimize machinery; geometry
    virtualization is the SOLE pipeline, not a feature (RENDER spec, recon in
    flight)
-6. Realtime GI only + optional raytracing toggle — RT = quality option,
-   never requirement (M1: compute tracing of occupancy mips; HW RT slots in
-   on M3+/desktop)
+6. ONE LIGHTING SYSTEM — always-on, fully traced (Pascal escalation 07-16:
+   "ray tracing is not an option... there is no alternative"). Everything
+   rides one unified tracing engine: SDF/occupancy-mip traces + screen rays
+   + radiance caches on M1; hardware rays = same system, faster intersector,
+   on RT silicon. Unlimited dynamic lights, unlimited reflections. Quality =
+   INTERNAL detail levels (ray counts, cascade res, bounce depth) that adapt
+   to the machine — never a second lighting path, never a toggle
 7. Hardware-agnostic core — wgpu; platform fast paths (MetalFX, sparse
    textures, HW RT) behind capability traits with software fallbacks.
    Current optimization target: Pascal's MacBook (M1) — target moves,
@@ -70,7 +77,7 @@ observable behavior + declare what's better. No row, no replacement.
 | FEATURES.md + features/ | 100% contract inventory | ✅ committed |
 | GEOMETRY.md | polygon/voxel/SDF hybrid, contouring kernel | ✅ committed; SDF-replaces-carve ratified |
 | PHYSICS.md | unified solver, destruction, gas | ⚠ ON HOLD — Pascal's magic first; evidence: research/physics-recon.md |
-| RENDER.md | deferred, virtualized geometry, virtual texturing, realtime GI, RT toggle, MetalFX/upscale | recon wave out (Nanite · GI field · VT) |
+| RENDER.md | deferred, virtualized geometry, virtual texturing, ONE traced lighting system, MetalFX/upscale | recon wave out (Nanite · GI field · VT) |
 | STREAMING.md | scenes, asset pages, residency | after RENDER |
 | EDITOR.md | forge surface: tools, gizmos, overlay, undo | after RENDER |
 | research/ | parked recon evidence (informs, Pascal rules) | physics + neural in |

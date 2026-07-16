@@ -1,0 +1,3071 @@
+{
+  "orders": {
+    "AgentLocomotionSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentBodySyncSpeedSystem.cs::AgentBodySyncSpeedSystem::0",
+        "name": "AgentBodySyncSpeedSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentBodySyncSpeedSystem.cs"
+      }
+    ],
+    "AgentPathingSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentDisableSystem.cs::AgentDisableSystem::0",
+        "name": "AgentDisableSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentDisableSystem.cs"
+      }
+    ],
+    "BakingSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianSubNodeConversionSystem.cs::PedestrianSubNodeConversionSystem::0",
+        "name": "PedestrianSubNodeConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianSubNodeConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Authoring/Conversion/TrafficSectionConversionSystem.cs::TrafficSectionConversionSystem::0",
+        "name": "TrafficSectionConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Authoring/Conversion/TrafficSectionConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/Authoring/VehicleCustomBakingSystem.cs::VehicleCustomBakingSystem::0",
+        "name": "VehicleCustomBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/Authoring/VehicleCustomBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/CarModelBakingSystem.cs::CarModelBakingSystem::0",
+        "name": "CarModelBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/CarModelBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCustomSettingsBakingSystem.cs::TrafficCustomSettingsBakingSystem::0",
+        "name": "TrafficCustomSettingsBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCustomSettingsBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/Authoring/Entity/TrafficParentWagonBakingSystem.cs::TrafficParentWagonBakingSystem::0",
+        "name": "TrafficParentWagonBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/Authoring/Entity/TrafficParentWagonBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Common/Baking/StaticPhysicsBakingSystem.cs::StaticPhysicsBakingSystem::0",
+        "name": "StaticPhysicsBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Common/Baking/StaticPhysicsBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/Authoring/CullStateBakingSystem.cs::CullStateBakingSystem::0",
+        "name": "CullStateBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/Authoring/CullStateBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Debug.Editor/Pedestrian/Npc/PedestrianLocalSpawnerBakingSystem.cs::PedestrianLocalSpawnerBakingSystem::0",
+        "name": "PedestrianLocalSpawnerBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Debug.Editor/Pedestrian/Npc/PedestrianLocalSpawnerBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Debug.Runtime/RoadDebugger/Authoring/TrafficRoadDebuggerBakingSystem.cs::TrafficRoadDebuggerBakingSystem::0",
+        "name": "TrafficRoadDebuggerBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Debug.Runtime/RoadDebugger/Authoring/TrafficRoadDebuggerBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Common/Entity Binding/Authoring/EntityBindingBakingSystem.cs::EntityBindingBakingSystem::0",
+        "name": "EntityBindingBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Entity Binding/Authoring/EntityBindingBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/CrowdAvoidanceBakingSystem.cs::CrowdAvoidanceBakingSystem::0",
+        "name": "CrowdAvoidanceBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/CrowdAvoidanceBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityBakingSystem.cs::PedestrianEntityBakingSystem::0",
+        "name": "PedestrianEntityBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityCustomBakingSystemBase.cs::PedestrianEntityCustomBakingSystemBase::0",
+        "name": "PedestrianEntityCustomBakingSystemBase",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityCustomBakingSystemBase.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityEditorBakingSystem.cs::PedestrianEntityEditorBakingSystem::0",
+        "name": "PedestrianEntityEditorBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityEditorBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/Authoring/Conversion/PropsBakingSystem.cs::PropsBakingSystem::0",
+        "name": "PropsBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/Authoring/Conversion/PropsBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Authoring/Conversion/TrafficPublicRouteConversionSystem.cs::TrafficPublicRouteConversionSystem::0",
+        "name": "TrafficPublicRouteConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Authoring/Conversion/TrafficPublicRouteConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/Conversion/TrafficLightObjectBakingSystem.cs::TrafficLightObjectBakingSystem::0",
+        "name": "TrafficLightObjectBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/Conversion/TrafficLightObjectBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/Authoring/System/CarSoundBakingSystem.cs::CarSoundBakingSystem::0",
+        "name": "CarSoundBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/Authoring/System/CarSoundBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/Authoring/System/VehicleLinkBakingSystem.cs::VehicleLinkBakingSystem::0",
+        "name": "VehicleLinkBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/Authoring/System/VehicleLinkBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Authoring/Entity/CarWheelAuthoring.cs::CarWheelBakingSystem::0",
+        "name": "CarWheelBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Authoring/Entity/CarWheelAuthoring.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCarEntityBakingSystem.cs::TrafficEntityBakingSystem::0",
+        "name": "TrafficEntityBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCarEntityBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCarEntityEditorBakingSystem.cs::TrafficCarEntityEditorBakingSystem::0",
+        "name": "TrafficCarEntityEditorBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCarEntityEditorBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficPublicEntityBakingSystem.cs::TrafficPublicEntityBakingSystem::0",
+        "name": "TrafficPublicEntityBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficPublicEntityBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/Authoring/TrafficAreaConversionSystem.cs::TrafficAreaConversionSystem::0",
+        "name": "TrafficAreaConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/Authoring/TrafficAreaConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Common/Baking/PreventBakingOnlySystem.cs::PreventBakingOnlySystem::0",
+        "name": "PreventBakingOnlySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Common/Baking/PreventBakingOnlySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Authoring/Conversion/TrafficNodeLightTriggerConversionSystem.cs::TrafficNodeLightTriggerConversionSystem::0",
+        "name": "TrafficNodeLightTriggerConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Authoring/Conversion/TrafficNodeLightTriggerConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/Authoring/Entity/TrafficWagonBakingSystem.cs::TrafficWagonBakingSystem::0",
+        "name": "TrafficWagonBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/Authoring/Entity/TrafficWagonBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentBakingSystem.cs::AgentBakingSystem::0",
+        "name": "AgentBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentBakingSystem.cs"
+      }
+    ],
+    "BeforeDestroyGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianCustomPathEventInvokerSystem.cs::PedestrianCustomPathEventInvokerSystem::0",
+        "name": "PedestrianCustomPathEventInvokerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianCustomPathEventInvokerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficCustomPathEventInvokerSystem.cs::TrafficCustomPathEventInvokerSystem::0",
+        "name": "TrafficCustomPathEventInvokerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficCustomPathEventInvokerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/TemporaryRagdollCleanSystem.cs::TemporaryRagdollCleanSystem::0",
+        "name": "TemporaryRagdollCleanSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/TemporaryRagdollCleanSystem.cs"
+      }
+    ],
+    "BeforePhysXFixedStepGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrainMonoMovementSystem.cs::TrainMonoMovementSystem::0",
+        "name": "TrainMonoMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrainMonoMovementSystem.cs"
+      }
+    ],
+    "BeforeTransformGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelTransformSystem.cs::WheelTransformSystem::0",
+        "name": "WheelTransformSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelTransformSystem.cs"
+      }
+    ],
+    "BeginPostSimulationGroup": [],
+    "BeginPresentationGroup": [],
+    "BeginSimulationGroup": [
+      {
+        "key": "group:MonoSyncGroup",
+        "name": "MonoSyncGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Common/System/Common/System/NetcodeDepSystem.cs::NetcodeDepSystem::0",
+        "name": "NetcodeDepSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/System/Common/System/NetcodeDepSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Spawner/Core/TrafficSpawnerCallbackSystem.cs::TrafficSpawnerCallbackSystem::0",
+        "name": "TrafficSpawnerCallbackSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Spawner/Core/TrafficSpawnerCallbackSystem.cs"
+      },
+      {
+        "key": "group:StructuralSystemGroup",
+        "name": "StructuralSystemGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/CustomAreaTriggerCreatorSystem.cs::CustomAreaTriggerCreatorSystem::0",
+        "name": "CustomAreaTriggerCreatorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/CustomAreaTriggerCreatorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/TrafficLightHybridDataSystem.cs::TrafficLightHybridDataSystem::0",
+        "name": "TrafficLightHybridDataSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/TrafficLightHybridDataSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficTaxiSystem.cs::TrafficTaxiSystem::0",
+        "name": "TrafficTaxiSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficTaxiSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficMonoRaycastTargetSetterSystem.cs::TrafficMonoRaycastTargetSetterSystem::0",
+        "name": "TrafficMonoRaycastTargetSetterSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficMonoRaycastTargetSetterSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Sound/CrowdSoundSystem.cs::CrowdSoundSystem::0",
+        "name": "CrowdSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Sound/CrowdSoundSystem.cs"
+      }
+    ],
+    "CarSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Common/SoundLoopSystem.cs::SoundLoopSystem::0",
+        "name": "SoundLoopSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Common/SoundLoopSystem.cs"
+      }
+    ],
+    "CleanupGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchCleanSystem.cs::BenchCleanSystem::0",
+        "name": "BenchCleanSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchCleanSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/CleanQueueWaitSystem.cs::CleanQueueWaitSystem::0",
+        "name": "CleanQueueWaitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/CleanQueueWaitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Cleanup/FMODCleanupSoundSystem.cs::FMODCleanupSoundSystem::0",
+        "name": "FMODCleanupSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Cleanup/FMODCleanupSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficCleanLinkedNodeSystem.cs::TrafficCleanLinkedNodeSystem::0",
+        "name": "TrafficCleanLinkedNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficCleanLinkedNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaCleanSystem.cs::TrafficAreaCleanSystem::0",
+        "name": "TrafficAreaCleanSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaCleanSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Route/TrafficPublicRouteCleanerSystem.cs::TrafficPublicRouteCleanerSystem::0",
+        "name": "TrafficPublicRouteCleanerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Route/TrafficPublicRouteCleanerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Stop/TrafficPublicStationCleanupSystem.cs::TrafficPublicStationCleanupSystem::0",
+        "name": "TrafficPublicStationCleanupSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Stop/TrafficPublicStationCleanupSystem.cs"
+      }
+    ],
+    "CullSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Init/Initializer/CullInitializerSystem.cs::CullInitializerSystem::0",
+        "name": "CullInitializerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Init/Initializer/CullInitializerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingMultiplayerSystem.cs::CalcCameraCullingMultiplayerSystem::0",
+        "name": "CalcCameraCullingMultiplayerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingMultiplayerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingPreinitMultiplayerSystem.cs::CalcCameraCullingPreinitMultiplayerSystem::0",
+        "name": "CalcCameraCullingPreinitMultiplayerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingPreinitMultiplayerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingPreinitSystem.cs::CalcCameraCullingPreinitSystem::0",
+        "name": "CalcCameraCullingPreinitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingPreinitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingSystem.cs::CalcCameraCullingSystem::0",
+        "name": "CalcCameraCullingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCullingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCustomCullingPreinitSystem.cs::CalcCameraCustomCullingPreinitSystem::0",
+        "name": "CalcCameraCustomCullingPreinitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCustomCullingPreinitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCustomCullingSystem.cs::CalcCameraCustomCullingSystem::0",
+        "name": "CalcCameraCustomCullingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCameraCustomCullingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingMultiplayerSystem.cs::CalcCullingMultiplayerSystem::0",
+        "name": "CalcCullingMultiplayerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingMultiplayerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingPreinitMultiplayerSystem.cs::CalcCullingPreinitMultiplayerSystem::0",
+        "name": "CalcCullingPreinitMultiplayerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingPreinitMultiplayerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingPreinitSystem.cs::CalcCullingPreinitSystem::0",
+        "name": "CalcCullingPreinitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingPreinitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingSystem.cs::CalcCullingSystem::0",
+        "name": "CalcCullingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCullingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCustomCullingPreinitSystem.cs::CalcCustomCullingPreinitSystem::0",
+        "name": "CalcCustomCullingPreinitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCustomCullingPreinitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCustomCullingSystem.cs::CalcCustomCullingSystem::0",
+        "name": "CalcCustomCullingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/CalcCustomCullingSystem.cs"
+      }
+    ],
+    "DebugGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Debug.Editor/Traffic/Path/PathIndexDebugger.cs::PathIndexDebuggerSystem::0",
+        "name": "PathIndexDebuggerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Debug.Editor/Traffic/Path/PathIndexDebugger.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Debug.Editor/Traffic/TrafficCar/TrafficDebuggerSystem.cs::TrafficDebuggerSystem::0",
+        "name": "TrafficDebuggerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Debug.Editor/Traffic/TrafficCar/TrafficDebuggerSystem.cs"
+      }
+    ],
+    "DestroyGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolClientEntitySystem.cs::PoolClientEntitySystem::0",
+        "name": "PoolClientEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolClientEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolEntitySystem.cs::PoolEntitySystem::0",
+        "name": "PoolEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolHybridEntitySystem.cs::PoolHybridEntitySystem::0",
+        "name": "PoolHybridEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolHybridEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolLinkedHybridEntitySystem.cs::PoolLinkedHybridEntitySystem::0",
+        "name": "PoolLinkedHybridEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Pool/System/PoolLinkedHybridEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Runtime/System/PoolCustomHybridEntitySystem.cs::PoolCustomHybridEntitySystem::0",
+        "name": "PoolCustomHybridEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Runtime/System/PoolCustomHybridEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Entities/System/LifeTimeEntitySystem.cs::LifeTimeEntitySystem::0",
+        "name": "LifeTimeEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Entities/System/LifeTimeEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Cleanup/FMODCleanupOnDestroySoundSystem.cs::FMODCleanupOnDestroySoundSystem::0",
+        "name": "FMODCleanupOnDestroySoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Cleanup/FMODCleanupOnDestroySoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Cleanup/FMODPoolSoundSystem.cs::FMODPoolSoundSystem::0",
+        "name": "FMODPoolSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Cleanup/FMODPoolSoundSystem.cs"
+      }
+    ],
+    "DummyGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Common/AnimatorDataProviderSystem.cs::AnimatorDataProviderSystem::0",
+        "name": "AnimatorDataProviderSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Common/AnimatorDataProviderSystem.cs"
+      }
+    ],
+    "EarlyEventGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/LoadGPUSkinSystem.cs::LoadGPUSkinSystem::0",
+        "name": "LoadGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/LoadGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/LoadPermamentGPUSkinSystem.cs::LoadPermamentGPUSkinSystem::0",
+        "name": "LoadPermamentGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/LoadPermamentGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridCrowd/LoadInitialHybridGPUSkinSystem.cs::LoadInitialHybridGPUSkinSystem::0",
+        "name": "LoadInitialHybridGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridCrowd/LoadInitialHybridGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridCrowd/LoadInitialHybridGPUSkinSystem2.cs::LoadInitialHybridGPUSkinSystem2::0",
+        "name": "LoadInitialHybridGPUSkinSystem2",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridCrowd/LoadInitialHybridGPUSkinSystem2.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridCrowd/LoadInitialHybridGPUSkinSystem3.cs::LoadInitialHybridGPUSkinSystem3::0",
+        "name": "LoadInitialHybridGPUSkinSystem3",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridCrowd/LoadInitialHybridGPUSkinSystem3.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/TalkArea/EnableSpawnAreaSystem.cs::EnableSpawnAreaSystem::0",
+        "name": "EnableSpawnAreaSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/TalkArea/EnableSpawnAreaSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficEnableRaycastSystem.cs::TrafficEnableRaycastSystem::0",
+        "name": "TrafficEnableRaycastSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficEnableRaycastSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentInitSystem.cs::AgentInitSystem::0",
+        "name": "AgentInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentInitSystem.cs"
+      }
+    ],
+    "EarlyJobGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Rukhanka/System/RukhankaRagdollInitialSyncAnimSystem.cs::RukhankaRagdollInitialSyncAnimSystem::0",
+        "name": "RukhankaRagdollInitialSyncAnimSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Rukhanka/System/RukhankaRagdollInitialSyncAnimSystem.cs"
+      },
+      {
+        "key": "group:NavSimulationGroup",
+        "name": "NavSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CleanStaticPhysicsSystem.cs::CleanStaticPhysicsSystem::0",
+        "name": "CleanStaticPhysicsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CleanStaticPhysicsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/System/PropsDamageSystem.cs::PropsDamageSystem::0",
+        "name": "PropsDamageSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/System/PropsDamageSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Collision/System/CarContactCollectorSystem.cs::CarContactCollectorSystem::0",
+        "name": "CarContactCollectorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Collision/System/CarContactCollectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficSpeedLimitSystem.cs::TrafficSpeedLimitSystem::0",
+        "name": "TrafficSpeedLimitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficSpeedLimitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Movement/ChangeLane/TrafficFixedRouteChangeLaneReachedSystem.cs::TrafficFixedRouteChangeLaneReachedSystem::0",
+        "name": "TrafficFixedRouteChangeLaneReachedSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Movement/ChangeLane/TrafficFixedRouteChangeLaneReachedSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentStateTargetSystem.cs::AgentStateTargetSystem::0",
+        "name": "AgentStateTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentStateTargetSystem.cs"
+      }
+    ],
+    "EarlySimulationGroup": [
+      {
+        "key": "group:PreEarlyJobGroup",
+        "name": "PreEarlyJobGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:EarlyJobGroup",
+        "name": "EarlyJobGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      }
+    ],
+    "FixedStepGroup": [
+      {
+        "key": "group:PedestrianFixedSimulationGroup",
+        "name": "PedestrianFixedSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:TrafficFixedUpdateGroup",
+        "name": "TrafficFixedUpdateGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Common/System/Common/System/SimpleRouteFollowerSystem.cs::SimpleRouteFollowerSystem::0",
+        "name": "SimpleRouteFollowerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/System/Common/System/SimpleRouteFollowerSystem.cs"
+      }
+    ],
+    "FixedStepSimulationSystemGroup": [
+      {
+        "key": "group:FixedStepGroup",
+        "name": "FixedStepGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:PhysicsSimGroup",
+        "name": "PhysicsSimGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin-group:PhysicsSystemGroup",
+        "name": "PhysicsSystemGroup",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "group:PhysicsTriggerGroup",
+        "name": "PhysicsTriggerGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      }
+    ],
+    "GhostInputSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ClientCullPointCameraUpdateSystem.cs::ClientCullPointCameraUpdateSystem::0",
+        "name": "ClientCullPointCameraUpdateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ClientCullPointCameraUpdateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ClientCullPointUpdateSystem.cs::ClientCullPointUpdateSystem::0",
+        "name": "ClientCullPointUpdateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ClientCullPointUpdateSystem.cs"
+      }
+    ],
+    "HashMapGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/PedestrianPathHashMapSystem.cs::PedestrianPathHashMapSystem::0",
+        "name": "PedestrianPathHashMapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/PedestrianPathHashMapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Common/CarHashMapSystem.cs::CarHashMapSystem::0",
+        "name": "CarHashMapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Common/CarHashMapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficNextPathHashMapSystem.cs::TrafficNextPathHashMapSystem::0",
+        "name": "TrafficNextPathHashMapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficNextPathHashMapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/System/NodeHashMapSystem.cs::NodeHashMapSystem::0",
+        "name": "NodeHashMapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/System/NodeHashMapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/System/NpcHashMapSystem.cs::NpcHashMapSystem::0",
+        "name": "NpcHashMapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/System/NpcHashMapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/CrowdAvoidanceSystem.cs::CrowdAvoidanceSystem::0",
+        "name": "CrowdAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/CrowdAvoidanceSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/PedestrianNodeCapacitySystem.cs::PedestrianNodeCapacitySystem::0",
+        "name": "PedestrianNodeCapacitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/PedestrianNodeCapacitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/PathHashMapSystem.cs::PathHashMapSystem::0",
+        "name": "PathHashMapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/PathHashMapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/TrafficNodeCalculateOverlapSystem.cs::TrafficNodeCalculateOverlapSystem::0",
+        "name": "TrafficNodeCalculateOverlapSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/TrafficNodeCalculateOverlapSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/NpcInteract/TrafficNpcCalculateObstacleSystem.cs::TrafficNpcCalculateObstacleSystem::0",
+        "name": "TrafficNpcCalculateObstacleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/NpcInteract/TrafficNpcCalculateObstacleSystem.cs"
+      },
+      {
+        "key": "group:DebugGroup",
+        "name": "DebugGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Debug.Editor/Group/DebugGroup.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarSoundSystem.cs::CarSoundSystem::0",
+        "name": "CarSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarSoundSystem.cs"
+      }
+    ],
+    "InitGroup": [
+      {
+        "key": "group:BeforeDestroyGroup",
+        "name": "BeforeDestroyGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:DestroyGroup",
+        "name": "DestroyGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Common/System/DefaultWorldTimeSystem.cs::DefaultWorldTimeSystem::0",
+        "name": "DefaultWorldTimeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Common/System/DefaultWorldTimeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/CopyTransformToGameObjectSystem.cs::CopyTransformToGameObjectSystem::0",
+        "name": "CopyTransformToGameObjectSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/CopyTransformToGameObjectSystem.cs"
+      },
+      {
+        "key": "group:DummyGroup",
+        "name": "DummyGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CullStaticPhysicsSystem.cs::CullStaticPhysicsSystem::0",
+        "name": "CullStaticPhysicsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CullStaticPhysicsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Road/System/TrafficRoadUnloadSystem.cs::TrafficRoadUnloadSystem::0",
+        "name": "TrafficRoadUnloadSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Road/System/TrafficRoadUnloadSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Scene/System/StreamingSceneSystem.cs::StreamingSceneSystem::0",
+        "name": "StreamingSceneSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Scene/System/StreamingSceneSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarManagedStateInitSystem.cs::AstarManagedStateInitSystem::0",
+        "name": "AstarManagedStateInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarManagedStateInitSystem.cs"
+      }
+    ],
+    "InitializationSystemGroup": [
+      {
+        "key": "group:InitGroup",
+        "name": "InitGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin:BeginInitializationEntityCommandBufferSystem",
+        "name": "BeginInitializationEntityCommandBufferSystem",
+        "kind": "playback",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/GlobalTimeUpdateSystem.cs::GlobalTimeUpdateSystem::0",
+        "name": "GlobalTimeUpdateSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/GlobalTimeUpdateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityRuntimeConversionSystem.cs::PedestrianEntityRuntimeConversionSystem::0",
+        "name": "PedestrianEntityRuntimeConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianEntityRuntimeConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCarEntityRuntimeConversionSystem.cs::TrafficEntityRuntimeConversionSystem::0",
+        "name": "TrafficEntityRuntimeConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/Baker/TrafficCarEntityRuntimeConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Factory/FMODSoundDataProviderSystem.cs::FMODSoundDataProviderSystem::0",
+        "name": "FMODSoundDataProviderSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Factory/FMODSoundDataProviderSystem.cs"
+      },
+      {
+        "key": "group:LateInitGroup",
+        "name": "LateInitGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/GPUGameObjectAttachmentSystem.cs::GPUGameObjectAttachmentSystem::0",
+        "name": "GPUGameObjectAttachmentSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/GPUGameObjectAttachmentSystem.cs"
+      },
+      {
+        "key": "builtin:EndInitializationEntityCommandBufferSystem",
+        "name": "EndInitializationEntityCommandBufferSystem",
+        "kind": "playback",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "group:BeforePhysXFixedStepGroup",
+        "name": "BeforePhysXFixedStepGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      }
+    ],
+    "LateEventGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Crowd/GPUAnimatorCustomStateSystem.cs::GPUAnimatorCustomStateSystem::0",
+        "name": "GPUAnimatorCustomStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Crowd/GPUAnimatorCustomStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Crowd/GPUAnimatorSystem.cs::GPUAnimatorSystem::0",
+        "name": "GPUAnimatorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Crowd/GPUAnimatorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UnloadGPUSkinSystem.cs::UnloadGPUSkinSystem::0",
+        "name": "UnloadGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UnloadGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/TalkArea/DisableSpawnAreaSystem.cs::DisableSpawnAreaSystem::0",
+        "name": "DisableSpawnAreaSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/TalkArea/DisableSpawnAreaSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchWaitForExitGPUSkinSystem.cs::BenchWaitForExitGPUSkinSystem::0",
+        "name": "BenchWaitForExitGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchWaitForExitGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/PoolNoRagdollSystem.cs::PoolNoRagdollSystem::0",
+        "name": "PoolNoRagdollSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/PoolNoRagdollSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/AntistuckTargetSystem.cs::AntistuckTargetSystem::0",
+        "name": "AntistuckTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/AntistuckTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODEventPlaybackSystem.cs::FMODEventPlaybackSystem::0",
+        "name": "FMODEventPlaybackSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODEventPlaybackSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarCullSoundSystem1.cs::CarCullSoundSystem1::0",
+        "name": "CarCullSoundSystem1",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarCullSoundSystem1.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarCullSoundSystem2.cs::CarCullSoundSystem2::0",
+        "name": "CarCullSoundSystem2",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarCullSoundSystem2.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarCullSoundSystem3.cs::CarCullSoundSystem3::0",
+        "name": "CarCullSoundSystem3",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarCullSoundSystem3.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficCullStuckedSystem.cs::TrafficCullStuckedSystem::0",
+        "name": "TrafficCullStuckedSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficCullStuckedSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficCullWheelSystem.cs::TrafficCullWheelSystem::0",
+        "name": "TrafficCullWheelSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficCullWheelSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficChangeLaneReachSystem.cs::TrafficChangeLaneReachSystem::0",
+        "name": "TrafficChangeLaneReachSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficChangeLaneReachSystem.cs"
+      }
+    ],
+    "LateInitGroup": [
+      {
+        "key": "group:MainThreadInitGroup",
+        "name": "MainThreadInitGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:SpawnerGroup",
+        "name": "SpawnerGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Road/System/TrafficRoadStreamingSystem.cs::TrafficRoadStreamingSystem::0",
+        "name": "TrafficRoadStreamingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Road/System/TrafficRoadStreamingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficTrainTargetSystem.cs::TrafficTrainTargetSystem::0",
+        "name": "TrafficTrainTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficTrainTargetSystem.cs"
+      }
+    ],
+    "LateSimulationGroup": [
+      {
+        "key": "group:TrafficLateSimulationGroup",
+        "name": "TrafficLateSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Tracking/System/EntityTrackerSystem.cs::EntityTrackerSystem::0",
+        "name": "EntityTrackerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Tracking/System/EntityTrackerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/PedestrianCrosswalkSystem.cs::PedestrianCrosswalkSystem::0",
+        "name": "PedestrianCrosswalkSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/PedestrianCrosswalkSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/AreaTriggerSystem.cs::AreaTriggerSystem::0",
+        "name": "AreaTriggerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/AreaTriggerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/System/LightDamageSystem.cs::LightPropDamageSystem::0",
+        "name": "LightPropDamageSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/System/LightDamageSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODTrackTargetEntityPositionSystem.cs::FMODTrackTargetEntityPositionSystem::0",
+        "name": "FMODTrackTargetEntityPositionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODTrackTargetEntityPositionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficEnableWheelSystem.cs::TrafficEnableWheelSystem::0",
+        "name": "TrafficEnableWheelSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficEnableWheelSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficUnityVehicleInputSystem.cs::TrafficUnityVehicleInputSystem::0",
+        "name": "TrafficUnityVehicleInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficUnityVehicleInputSystem.cs"
+      },
+      {
+        "key": "group:LateEventGroup",
+        "name": "LateEventGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Rukhanka/System/RukhankaRagdollActivateSystem.cs::RukhankaRagdollActivateSystem::0",
+        "name": "RukhankaRagdollActivateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Rukhanka/System/RukhankaRagdollActivateSystem.cs"
+      }
+    ],
+    "MainThreadEventGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianPathfindingAchieveSystem.cs::PedestrianPathfindingAchieveSystem::0",
+        "name": "PedestrianPathfindingAchieveSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianPathfindingAchieveSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentEnterHouseSystem.cs::AgentEnterHouseSystem::0",
+        "name": "AgentEnterHouseSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentEnterHouseSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentLeaveHouseSystem.cs::AgentLeaveHouseSystem::0",
+        "name": "AgentLeaveHouseSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentLeaveHouseSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentSpawnEventSystem.cs::AgentSpawnEventSystem::0",
+        "name": "AgentSpawnEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentSpawnEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CullPhysicsClientSystem.cs::CullPhysicsClientSystem::0",
+        "name": "CullPhysicsClientSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CullPhysicsClientSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CullPhysicsSystem.cs::CullPhysicsSystem::0",
+        "name": "CullPhysicsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/CullPhysicsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/RevertCulledPhysicsClientSystem.cs::RevertCulledPhysicsClientSystem::0",
+        "name": "RevertCulledPhysicsClientSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/RevertCulledPhysicsClientSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/RevertCulledPhysicsSystem.cs::RevertCulledPhysicsSystem::0",
+        "name": "RevertCulledPhysicsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Physics/RevertCulledPhysicsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentCleanStateSystem1.cs::NavAgentCleanStateSystem1::0",
+        "name": "NavAgentCleanStateSystem1",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentCleanStateSystem1.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentCleanStateSystem2.cs::NavAgentCleanStateSystem2::0",
+        "name": "NavAgentCleanStateSystem2",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentCleanStateSystem2.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Common/AnimatorCustomUnloadSkinListenerSystem.cs::AnimatorCustomUnloadSkinListenerSystem::0",
+        "name": "AnimatorCustomUnloadSkinListenerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Common/AnimatorCustomUnloadSkinListenerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Common/AnimatorCustomWaitForSkinSystem.cs::AnimatorCustomWaitForSkinSystem::0",
+        "name": "AnimatorCustomWaitForSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Common/AnimatorCustomWaitForSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/DisableAvoidanceSystem.cs::DisableAvoidanceSystem::0",
+        "name": "DisableAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/DisableAvoidanceSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/ForceDisableAvoidanceSystem.cs::ForceDisableAvoidanceSystem::0",
+        "name": "ForceDisableAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/ForceDisableAvoidanceSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/RevertNavAgentTargetSystem.cs::RevertNavAgentTargetSystem::0",
+        "name": "RevertNavAgentTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/RevertNavAgentTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/InitGPUSkinSystem.cs::InitGPUSkinSystem::0",
+        "name": "InitGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/InitGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridShape/UnloadHybridShapeSystem.cs::UnloadHybridShapeSystem::0",
+        "name": "UnloadHybridShapeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridShape/UnloadHybridShapeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Legacy/UnloadHybridSkinSystem.cs::UnloadHybridSkinSystem::0",
+        "name": "UnloadHybridSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Legacy/UnloadHybridSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchWaitForExitNoSkinSystem.cs::BenchWaitForExitNoSkinSystem::0",
+        "name": "BenchWaitForExitNoSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchWaitForExitNoSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/HealthWithRagdollClientSystem.cs::HealthWithRagdollClientSystem::0",
+        "name": "HealthWithRagdollClientSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/HealthWithRagdollClientSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/HealthWithRagdollSystem.cs::HealthWithRagdollSystem::0",
+        "name": "HealthWithRagdollSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/HealthWithRagdollSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/PedestrianDespawnSystem.cs::PedestrianDespawnSystem::0",
+        "name": "PedestrianDespawnSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/PedestrianDespawnSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/TemporaryRagdollActivationSystem.cs::TemporaryRagdollActivationSystem::0",
+        "name": "TemporaryRagdollActivationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/TemporaryRagdollActivationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/IdleTimeSystem.cs::IdleTimeSystem::0",
+        "name": "IdleTimeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/IdleTimeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Navigation/AntistuckActivateSystem.cs::AntistuckActivateSystem::0",
+        "name": "AntistuckActivateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Navigation/AntistuckActivateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Navigation/AntistuckDeactivateSystem.cs::AntistuckDeactivateSystem::0",
+        "name": "AntistuckDeactivateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Navigation/AntistuckDeactivateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Talk/StopTalkStateSystem.cs::StopTalkStateSystem::0",
+        "name": "StopTalkStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Talk/StopTalkStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Talk/SwitchTalkingKeySystem.cs::SwitchTalkingKeySystem::0",
+        "name": "SwitchTalkingKeySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Talk/SwitchTalkingKeySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/ActivateRunningScaryStateSystem.cs::ActivateRunningScaryStateSystem::0",
+        "name": "ActivateRunningScaryStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/ActivateRunningScaryStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/DisableScaryStateSystem.cs::DisableScaryStateSystem::0",
+        "name": "DisableScaryStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/DisableScaryStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/TriggerImpactSystem.cs::TriggerImpactSystem::0",
+        "name": "TriggerImpactSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/TriggerImpactSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessTrafficEntryNodeSystem.cs::ProcessTrafficEntryNodeSystem::0",
+        "name": "ProcessTrafficEntryNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessTrafficEntryNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessTrafficStationNodeSystem.cs::ProcessTrafficStationNodeSystem::0",
+        "name": "ProcessTrafficStationNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessTrafficStationNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/QueueWaitSystem.cs::QueueWaitSystem::0",
+        "name": "QueueWaitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/QueueWaitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/PostReachTargetEventSystem.cs::PostReachTargetEventSystem::0",
+        "name": "PostReachTargetEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/PostReachTargetEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/DefaultReachProccesingSystem.cs::DefaultReachProccesingSystem::0",
+        "name": "DefaultReachProccesingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/DefaultReachProccesingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/SequenceNodeReachProccesingSystem.cs::SequenceNodeReachProccesingSystem::0",
+        "name": "SequenceNodeReachProccesingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/SequenceNodeReachProccesingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/System/LightPropResetSystem.cs::LightPropResetSystem::0",
+        "name": "LightPropResetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/System/LightPropResetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/System/PropsCullSystem.cs::PropsCullSystem::0",
+        "name": "PropsCullSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/System/PropsCullSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/System/PropsResetSystem.cs::PropsResetSystem::0",
+        "name": "PropsResetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/System/PropsResetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Props/System/RevertCulledPropsPhysicsSystem.cs::RevertCulledPropsPhysicsSystem::0",
+        "name": "RevertCulledPropsPhysicsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Props/System/RevertCulledPropsPhysicsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODSoundDelaySystem.cs::FMODSoundDelaySystem::0",
+        "name": "FMODSoundDelaySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODSoundDelaySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Ignition/System/CarIgnitionStateSystem.cs::CarIgnitionStateSystem::0",
+        "name": "CarIgnitionStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Ignition/System/CarIgnitionStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Ignition/System/ClientCarIgnitionSoundSystem.cs::ClientCarIgnitionSoundSystem::0",
+        "name": "ClientCarIgnitionSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Ignition/System/ClientCarIgnitionSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarEnableSoundSystem.cs::CarEnableSoundSystem::0",
+        "name": "CarEnableSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarEnableSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarInitSoundSystem.cs::CarInitSoundSystem::0",
+        "name": "CarInitSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarInitSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarUpdateParamSoundSystem.cs::CarUpdateParamSoundSystem::0",
+        "name": "CarUpdateParamSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarUpdateParamSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarUpdateSoundSystem.cs::CarUpdateSoundSystem::0",
+        "name": "CarUpdateSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarUpdateSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs::TrafficRaycastDisableCustomTargetSelectorSystem1::0",
+        "name": "TrafficRaycastDisableCustomTargetSelectorSystem1",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs::TrafficRaycastDisableCustomTargetSelectorSystem1::1",
+        "name": "TrafficRaycastDisableCustomTargetSelectorSystem1",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs::TrafficRaycastDisableCustomTargetSelectorSystem2::0",
+        "name": "TrafficRaycastDisableCustomTargetSelectorSystem2",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs::TrafficRaycastDisableCustomTargetSelectorSystem2::1",
+        "name": "TrafficRaycastDisableCustomTargetSelectorSystem2",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs::TrafficRaycastDisableCustomTargetSelectorSystem2::2",
+        "name": "TrafficRaycastDisableCustomTargetSelectorSystem2",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs::TrafficRaycastEnableCustomTargetSelectorSystem::0",
+        "name": "TrafficRaycastEnableCustomTargetSelectorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastCustomTargetSelectorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficWaitForChangeLaneEventSystem.cs::TrafficWaitForChangeLaneEventSystem::0",
+        "name": "TrafficWaitForChangeLaneEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficWaitForChangeLaneEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficEnableCustomMovementStateSystem.cs::TrafficEnableCustomMovementStateSystem::0",
+        "name": "TrafficEnableCustomMovementStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficEnableCustomMovementStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficDisableCustomMovementStateSystem.cs::TrafficDisableCustomMovementStateSystem::0",
+        "name": "TrafficDisableCustomMovementStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficDisableCustomMovementStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/NpcInteract/EnterParkingCarSystem.cs::EnterParkingCarSystem::0",
+        "name": "EnterParkingCarSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/NpcInteract/EnterParkingCarSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Sound/TrafficHornSoundSystem.cs::TrafficHornSoundSystem::0",
+        "name": "TrafficHornSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Sound/TrafficHornSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficCollisionStateSystem.cs::TrafficCollisionStateSystem::0",
+        "name": "TrafficCollisionStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficCollisionStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficIdleAtParkingNodeSystem.cs::TrafficIdleAtParkingNodeSystem::0",
+        "name": "TrafficIdleAtParkingNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficIdleAtParkingNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Streaming/RevertTrafficCulledPhysicsClientSystem.cs::RevertTrafficCulledPhysicsClientSystem::0",
+        "name": "RevertTrafficCulledPhysicsClientSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Streaming/RevertTrafficCulledPhysicsClientSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Streaming/RevertTrafficCulledPhysicsSystem.cs::RevertTrafficCulledPhysicsSystem::0",
+        "name": "RevertTrafficCulledPhysicsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Streaming/RevertTrafficCulledPhysicsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Stop/TrafficPublicExitPedestrianSystem.cs::TrafficPublicExitPedestrianSystem::0",
+        "name": "TrafficPublicExitPedestrianSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Stop/TrafficPublicExitPedestrianSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Stop/TrafficPublicIdleSystem.cs::TrafficPublicIdleSystem::0",
+        "name": "TrafficPublicIdleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Stop/TrafficPublicIdleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentUpdateTargetSystem.cs::AgentUpdateTargetSystem::0",
+        "name": "AgentUpdateTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/ProjectDawn.AgentsNavigation/AgentUpdateTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/TrafficNodeAvailableSystem.cs::TrafficNodeAvailableSystem::0",
+        "name": "TrafficNodeAvailableSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/TrafficNodeAvailableSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficEmptyInputSystem.cs::TrafficEmptyInputSystem::0",
+        "name": "TrafficEmptyInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficEmptyInputSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficIdleInputSystem.cs::TrafficIdleInputSystem::0",
+        "name": "TrafficIdleInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficIdleInputSystem.cs"
+      }
+    ],
+    "MainThreadEventPlaybackGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianCustomPathStructuralSystem.cs::PedestrianCustomPathStructuralSystem::0",
+        "name": "PedestrianCustomPathStructuralSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianCustomPathStructuralSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficCustomPathStructuralSystem.cs::TrafficCustomPathStructuralSystem::0",
+        "name": "TrafficCustomPathStructuralSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficCustomPathStructuralSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarPedestrianStructuralSystem.cs::AstarPedestrianStructuralSystem::0",
+        "name": "AstarPedestrianStructuralSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarPedestrianStructuralSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarTrafficStructuralSystem.cs::AstarTrafficStructuralSystem::0",
+        "name": "AstarTrafficStructuralSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarTrafficStructuralSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianCustomPathEventSystem.cs::PedestrianCustomPathEventSystem::0",
+        "name": "PedestrianCustomPathEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianCustomPathEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UnloadGPUSkinOnDeathSystem.cs::UnloadGPUSkinOnDeathSystem::0",
+        "name": "UnloadGPUSkinOnDeathSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UnloadGPUSkinOnDeathSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridShape/UnloadHybridShapeOnDeathSystem.cs::UnloadHybridShapeOnDeathSystem::0",
+        "name": "UnloadHybridShapeOnDeathSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/HybridShape/UnloadHybridShapeOnDeathSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/HealthNoRagdollSystem.cs::HealthNoRagdollSystem::0",
+        "name": "HealthNoRagdollSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Health/HealthNoRagdollSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/AreaTriggerPlaybackSystem.cs::AreaTriggerPlaybackSystem::0",
+        "name": "AreaTriggerPlaybackSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Trigger/AreaTriggerPlaybackSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundEventPlaybackSystem.cs::UnitySoundEventPlaybackSystem::0",
+        "name": "UnitySoundEventPlaybackSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundEventPlaybackSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficCustomPathEventSystem.cs::TrafficCustomPathEventSystem::0",
+        "name": "TrafficCustomPathEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficCustomPathEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAvoidanceEventPlaybackSystem.cs::TrafficAvoidanceEventPlaybackSystem::0",
+        "name": "TrafficAvoidanceEventPlaybackSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAvoidanceEventPlaybackSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarUpdateStateEventSystem.cs::AstarUpdateStateEventSystem::0",
+        "name": "AstarUpdateStateEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarUpdateStateEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Legacy/UnloadHybridSkinOnDeathSystem.cs::UnloadHybridSkinOnDeathSystem::0",
+        "name": "UnloadHybridSkinOnDeathSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Legacy/UnloadHybridSkinOnDeathSystem.cs"
+      }
+    ],
+    "MainThreadInitGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/InitCameraCullingMultiplayerSystem.cs::InitCameraCullingMultiplayerSystem::0",
+        "name": "InitCameraCullingMultiplayerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/InitCameraCullingMultiplayerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/InitCameraCullingSystem.cs::InitCameraCullingSystem::0",
+        "name": "InitCameraCullingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Streaming/Cull/System/Entity/InitCameraCullingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Player/System/PlayerTrackerSystem.cs::PlayerTrackerSystem::0",
+        "name": "PlayerTrackerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Player/System/PlayerTrackerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Adapter/System/HybridEntityAdapterSyncSystem.cs::HybridEntityAdapterSyncSystem::0",
+        "name": "HybridEntityAdapterSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Adapter/System/HybridEntityAdapterSyncSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/System/NpcRagdollSystem.cs::NpcRagdollSystem::0",
+        "name": "NpcRagdollSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/System/NpcRagdollSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Legacy/LegacyAnimatorCustomExitStateSystem.cs::LegacyAnimatorCustomExitStateSystem::0",
+        "name": "LegacyAnimatorCustomExitStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Legacy/LegacyAnimatorCustomExitStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Legacy/LegacyAnimatorCustomStateSystem.cs::LegacyAnimatorCustomStateSystem::0",
+        "name": "LegacyAnimatorCustomStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Legacy/LegacyAnimatorCustomStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Legacy/LegacyAnimatorSystem.cs::LegacyAnimatorSystem::0",
+        "name": "LegacyAnimatorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Animation/Legacy/LegacyAnimatorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchWaitForExitLegacySkinSystem.cs::BenchWaitForExitLegacySkinSystem::0",
+        "name": "BenchWaitForExitLegacySkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchWaitForExitLegacySkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundEntityVolumeSystem.cs::UnitySoundEntityVolumeSystem::0",
+        "name": "UnitySoundEntityVolumeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundEntityVolumeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundSyncPositionSystem.cs::UnitySoundSyncPositionSystem::0",
+        "name": "UnitySoundSyncPositionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundSyncPositionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODUpdateFloatParameterSystem.cs::FMODUpdateFloatParameterSystem::0",
+        "name": "FMODUpdateFloatParameterSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODUpdateFloatParameterSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODVolumeSystem.cs::FMODVolumeSystem::0",
+        "name": "FMODVolumeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODVolumeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Animatron/System/AnimatronAnimatorCustomStateSystem.cs::AnimatronAnimatorCustomStateSystem::0",
+        "name": "AnimatronAnimatorCustomStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Animatron/System/AnimatronAnimatorCustomStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Animatron/System/AnimatronAnimatorSystem.cs::AnimatronAnimatorSystem::0",
+        "name": "AnimatronAnimatorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Animatron/System/AnimatronAnimatorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Animatron/System/AnimatronBenchWaitForExitSystem.cs::AnimatronBenchWaitForExitSystem::0",
+        "name": "AnimatronBenchWaitForExitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Animatron/System/AnimatronBenchWaitForExitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/Hybrid/System/RukhankaAnimationEventListenSystem.cs::RukhankaAnimationEventListenSystem::0",
+        "name": "RukhankaAnimationEventListenSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/Hybrid/System/RukhankaAnimationEventListenSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/Hybrid/System/RukhankaAnimatorControllerEventListenSystem.cs::RukhankaAnimatorControllerEventListenSystem::0",
+        "name": "RukhankaAnimatorControllerEventListenSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/Hybrid/System/RukhankaAnimatorControllerEventListenSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaAnimatorCustomExitStateSystem.cs::RukhankaAnimatorCustomExitStateSystem::0",
+        "name": "RukhankaAnimatorCustomExitStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaAnimatorCustomExitStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaAnimatorCustomStateSystem.cs::RukhankaAnimatorCustomStateSystem::0",
+        "name": "RukhankaAnimatorCustomStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaAnimatorCustomStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaAnimatorSystem.cs::RukhankaAnimatorSystem::0",
+        "name": "RukhankaAnimatorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaAnimatorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaBenchWaitForExitSystem.cs::RukhankaBenchWaitForExitSystem::0",
+        "name": "RukhankaBenchWaitForExitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/RukhankaBenchWaitForExitSystem.cs"
+      }
+    ],
+    "MonoSyncGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundTrackTargetEntitySystem.cs::UnitySoundTrackTargetEntitySystem::0",
+        "name": "UnitySoundTrackTargetEntitySystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Built-in/Entity/UnitySoundTrackTargetEntitySystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficHybridMonoSyncSystem.cs::TrafficHybridMonoSyncSystem::0",
+        "name": "TrafficHybridMonoSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficHybridMonoSyncSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrainHybridMonoSyncSystem.cs::TrainHybridMonoSyncSystem::0",
+        "name": "TrainHybridMonoSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrainHybridMonoSyncSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrainWagonHybridMonoSyncSystem.cs::TrainWagonHybridMonoSyncSystem::0",
+        "name": "TrainWagonHybridMonoSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrainWagonHybridMonoSyncSystem.cs"
+      }
+    ],
+    "NavSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentNavigationSystem.cs::NavAgentNavigationSystem::0",
+        "name": "NavAgentNavigationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentNavigationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentPersistTargetListenerSystem.cs::NavAgentPersistTargetListenerSystem::0",
+        "name": "NavAgentPersistTargetListenerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavAgentPersistTargetListenerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/NpcRecalculateNavTargetSystem.cs::NpcRecalculateNavTargetSystem::0",
+        "name": "NpcRecalculateNavTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/NpcRecalculateNavTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/UpdateNavAgentTargetSystem.cs::UpdateNavAgentTargetSystem::0",
+        "name": "UpdateNavAgentTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/UpdateNavAgentTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/LocalAvoidanceObstacleSystem.cs::LocalAvoidanceObstacleSystem::0",
+        "name": "LocalAvoidanceObstacleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/NavAgent/LocalAvoidanceObstacleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/FollowAvoidanceSystem.cs::FollowAvoidanceSystem::0",
+        "name": "FollowAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/FollowAvoidanceSystem.cs"
+      }
+    ],
+    "PedestrianFixedSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/AntistuckMovementSystem.cs::AntistuckMovementSystem::0",
+        "name": "AntistuckMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/AntistuckMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/PedestrianAvoidanceMovementSystem.cs::PedestrianAvoidanceMovementSystem::0",
+        "name": "PedestrianAvoidanceMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/PedestrianAvoidanceMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/PedestrianMovementSittingSystem.cs::PedestrianMovementSittingSystem::0",
+        "name": "PedestrianMovementSittingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/PedestrianMovementSittingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/PedestrianMovementSystem.cs::PedestrianMovementSystem::0",
+        "name": "PedestrianMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Movement/PedestrianMovementSystem.cs"
+      }
+    ],
+    "PhysicsSimGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleToWheelsSystem.cs::VehicleToWheelsSystem::0",
+        "name": "VehicleToWheelsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleToWheelsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelSimulationSystem.cs::WheelSimulationSystem::0",
+        "name": "WheelSimulationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelSimulationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleApplyImpulseSystem.cs::VehicleApplyImpulseSystem::0",
+        "name": "VehicleApplyImpulseSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleApplyImpulseSystem.cs"
+      }
+    ],
+    "PhysicsSystemGroup": [
+      {
+        "key": "builtin-group:PhysicsInitializeGroup",
+        "name": "PhysicsInitializeGroup",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "group:RaycastGroup",
+        "name": "RaycastGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin-group:PhysicsSimulationGroup",
+        "name": "PhysicsSimulationGroup",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/InterpolateStateRecorderSystem.cs::InterpolateStateRecorderSystem::0",
+        "name": "InterpolateStateRecorderSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/InterpolateStateRecorderSystem.cs"
+      },
+      {
+        "key": "builtin-group:ExportPhysicsWorld",
+        "name": "ExportPhysicsWorld",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      }
+    ],
+    "PhysicsTriggerGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Collision/PhysicsCollisionEventSystem.cs::PhysicsCollisionEventSystem::0",
+        "name": "PhysicsCollisionEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Collision/PhysicsCollisionEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Collision/System/TrafficCollisionEventSystem.cs::TrafficCollisionEventSystem::0",
+        "name": "TrafficCollisionEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Collision/System/TrafficCollisionEventSystem.cs"
+      }
+    ],
+    "PostBakingSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Common/Baking/RemovePhysicsBakingSystem.cs::RemovePhysicsBakingSystem::0",
+        "name": "RemovePhysicsBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Common/Baking/RemovePhysicsBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Common/System/Common/Authoring/System/CullPhysicsBakingSystem.cs::CullPhysicsBakingSystem::0",
+        "name": "CullPhysicsBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/System/Common/Authoring/System/CullPhysicsBakingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianNodeConversionSystem.cs::PedestrianNodeConversionSystem::0",
+        "name": "PedestrianNodeConversionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/Authoring/System/PedestrianNodeConversionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/Authoring/RukhankaRagdollBakingSystem.cs::RukhankaRagdollBakingSystem::0",
+        "name": "RukhankaRagdollBakingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/Authoring/RukhankaRagdollBakingSystem.cs"
+      }
+    ],
+    "PreEarlyJobGroup": [
+      {
+        "key": "group:CullSimulationGroup",
+        "name": "CullSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:EarlyEventGroup",
+        "name": "EarlyEventGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/CopyTransformFromGameObjectSystem.cs::CopyTransformFromGameObjectSystem::0",
+        "name": "CopyTransformFromGameObjectSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/CopyTransformFromGameObjectSystem.cs"
+      },
+      {
+        "key": "group:HashMapGroup",
+        "name": "HashMapGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Navigation/System/NavMeshObstacleResetLoadSystem.cs::NavMeshObstacleResetLoadSystem::0",
+        "name": "NavMeshObstacleResetLoadSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Navigation/System/NavMeshObstacleResetLoadSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/IdleSystem.cs::IdleSystem::0",
+        "name": "IdleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/IdleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/PedestrianStateSystem.cs::PedestrianStateSystem::0",
+        "name": "PedestrianStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Misc/PedestrianStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessDefaultNodeSystem.cs::ProcessDefaultNodeSystem::0",
+        "name": "ProcessDefaultNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessDefaultNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/LightStartSyncTimeSystem.cs::LightStartSyncTimeSystem::0",
+        "name": "LightStartSyncTimeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/LightStartSyncTimeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODSoundSyncPositionSystem.cs::FMODSoundSyncPositionSystem::0",
+        "name": "FMODSoundSyncPositionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODSoundSyncPositionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarEnableByDistanceSoundSystem.cs::CarEnableByDistanceSoundSystem::0",
+        "name": "CarEnableByDistanceSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Common/System/Sound/System/CarEnableByDistanceSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleInputSystem.cs::VehicleInputSystem::0",
+        "name": "VehicleInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleInputSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficMonoRaycastObstacleSystem.cs::TrafficMonoRaycastObstacleSystem::0",
+        "name": "TrafficMonoRaycastObstacleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficMonoRaycastObstacleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficBehaviorInitSystem.cs::TrafficBehaviorInitSystem::0",
+        "name": "TrafficBehaviorInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficBehaviorInitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficStartInitSystem.cs::TrafficStartInitSystem::0",
+        "name": "TrafficStartInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficStartInitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficSpeedRotationSystem.cs::TrafficSpeedRotationSystem::0",
+        "name": "TrafficSpeedRotationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficSpeedRotationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficLightIndicatorStateSystem.cs::TrafficLightIndicatorStateSystem::0",
+        "name": "TrafficLightIndicatorStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficLightIndicatorStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficLightStateSystem.cs::TrafficLightStateSystem::0",
+        "name": "TrafficLightStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficLightStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficMonoCollisionSystem.cs::TrafficMonoCollisionSystem::0",
+        "name": "TrafficMonoCollisionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficMonoCollisionSystem.cs"
+      }
+    ],
+    "PredictedFixedStepSimulationSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleToWheelsSystem.cs::VehicleToWheelsSystem::1",
+        "name": "VehicleToWheelsSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleToWheelsSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelContactSystem.cs::WheelContactSystem::1",
+        "name": "WheelContactSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelContactSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelSimulationSystem.cs::WheelSimulationSystem::1",
+        "name": "WheelSimulationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelSimulationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleApplyImpulseSystem.cs::VehicleApplyImpulseSystem::1",
+        "name": "VehicleApplyImpulseSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleApplyImpulseSystem.cs"
+      }
+    ],
+    "PredictedSimulationSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleInputSystem.cs::VehicleInputSystem::1",
+        "name": "VehicleInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/VehicleInputSystem.cs"
+      }
+    ],
+    "PresentationSystemGroup": [
+      {
+        "key": "group:BeginPresentationGroup",
+        "name": "BeginPresentationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin:BeginPresentationEntityCommandBufferSystem",
+        "name": "BeginPresentationEntityCommandBufferSystem",
+        "kind": "playback",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Debug.Editor/Traffic/Path/TrafficPathDrawerSystem.cs::TrafficPathDrawerSystem::0",
+        "name": "TrafficPathDrawerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Debug.Editor/Traffic/Path/TrafficPathDrawerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastGizmosSystem.cs::TrafficRaycastGizmosSystem::0",
+        "name": "TrafficRaycastGizmosSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastGizmosSystem.cs"
+      }
+    ],
+    "RaycastGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelContactSystem.cs::WheelContactSystem::0",
+        "name": "WheelContactSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Custom/System/WheelContactSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastObstacleSystem.cs::TrafficRaycastObstacleSystem::0",
+        "name": "TrafficRaycastObstacleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Raycast/TrafficRaycastObstacleSystem.cs"
+      }
+    ],
+    "RukhankaAnimationSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/PedestrianSteppedAnimationSystem.cs::PedestrianSteppedAnimationSystem::0",
+        "name": "PedestrianSteppedAnimationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Rukhanka/System/PedestrianSteppedAnimationSystem.cs"
+      }
+    ],
+    "SimulationGroup": [
+      {
+        "key": "group:TrafficSimulationGroup",
+        "name": "TrafficSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:TrafficInputGroup",
+        "name": "TrafficInputGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:CarSimulationGroup",
+        "name": "CarSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Collision/CalculateCollisionSystem.cs::CalculateCollisionSystem::0",
+        "name": "CalculateCollisionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Collision/CalculateCollisionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Collision/PhysicsCollisionStateSystem.cs::PhysicsCollisionStateSystem::0",
+        "name": "PhysicsCollisionStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Collision/PhysicsCollisionStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianPathfindingSystem.cs::PedestrianPathfindingSystem::0",
+        "name": "PedestrianPathfindingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/PedestrianPathfindingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/SequenceReachDestinationSystem.cs::SequenceReachDestinationSystem::0",
+        "name": "SequenceReachDestinationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Navigation/SequenceReachDestinationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UpdateGPUSkinSystem.cs::UpdateGPUSkinSystem::0",
+        "name": "UpdateGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UpdateGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UpdatePermamentGPUSkinSystem.cs::UpdatePermamentGPUSkinSystem::0",
+        "name": "UpdatePermamentGPUSkinSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Crowd/UpdatePermamentGPUSkinSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Rukhanka/System/RukhankaRagdollPoolSystem.cs::RukhankaRagdollPoolSystem::0",
+        "name": "RukhankaRagdollPoolSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Skin/Rukhanka/System/RukhankaRagdollPoolSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/ReachDestinationSystem.cs::ReachDestinationSystem::0",
+        "name": "ReachDestinationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/ReachDestinationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/TaxiReachDestinationSystem.cs::TaxiReachDestinationSystem::0",
+        "name": "TaxiReachDestinationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/TaxiReachDestinationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/LightHandlerSwitchSystem.cs::LightHandlerSwitchSystem::0",
+        "name": "LightHandlerSwitchSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/LightHandlerSwitchSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/LightHandlerTriggerLightSystem.cs::LightHandlerTriggerLightSystem::0",
+        "name": "LightHandlerTriggerLightSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/LightHandlerTriggerLightSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/WorldLightListenerSystem.cs::WorldLightListenerSystem::0",
+        "name": "WorldLightListenerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/WorldLightListenerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/WorldLightSwitchSystem.cs::WorldLightSwitchSystem::0",
+        "name": "WorldLightSwitchSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/WorldLightSwitchSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficDisableWheelSystem.cs::TrafficDisableWheelSystem::0",
+        "name": "TrafficDisableWheelSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Cull/TrafficDisableWheelSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAvoidanceSystem.cs::TrafficAvoidanceSystem::0",
+        "name": "TrafficAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAvoidanceSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficCustomDestinationSystem.cs::TrafficCustomDestinationSystem::0",
+        "name": "TrafficCustomDestinationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficCustomDestinationSystem.cs"
+      }
+    ],
+    "SimulationSystemGroup": [
+      {
+        "key": "group:BeginSimulationGroup",
+        "name": "BeginSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:BeginPostSimulationGroup",
+        "name": "BeginPostSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin:BeginSimulationEntityCommandBufferSystem",
+        "name": "BeginSimulationEntityCommandBufferSystem",
+        "kind": "playback",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "group:EarlySimulationGroup",
+        "name": "EarlySimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin-group:FixedStepSimulationSystemGroup",
+        "name": "FixedStepSimulationSystemGroup",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "builtin-group:LateSimulationSystemGroup",
+        "name": "LateSimulationSystemGroup",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "group:BeforeTransformGroup",
+        "name": "BeforeTransformGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "builtin-group:TransformSystemGroup",
+        "name": "TransformSystemGroup",
+        "kind": "group",
+        "source": "Unity.Entities built-in"
+      },
+      {
+        "key": "group:SimulationGroup",
+        "name": "SimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/AnimationEventCleanupSystem.cs::AnimationEventCleanupSystem::0",
+        "name": "AnimationEventCleanupSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/AnimationEventCleanupSystem.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdAnimationEventSystem.cs::CrowdAnimationEventSystem::0",
+        "name": "CrowdAnimationEventSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdAnimationEventSystem.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdAnimatorBlendSystem.cs::CrowdAnimatorBlendSystem::0",
+        "name": "CrowdAnimatorBlendSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdAnimatorBlendSystem.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdAnimatorTransitionSystem.cs::CrowdAnimatorTransitionSystem::0",
+        "name": "CrowdAnimatorTransitionSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdAnimatorTransitionSystem.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdSkinEventPlaybackSystem.cs::CrowdSkinEventPlaybackSystem::0",
+        "name": "CrowdSkinEventPlaybackSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdSkinEventPlaybackSystem.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdSkinProviderSystem.Singleton.cs::CrowdSkinProviderSystem::0",
+        "name": "CrowdSkinProviderSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdSkinProviderSystem.Singleton.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdSkinProviderSystem.cs::CrowdSkinProviderSystem::0",
+        "name": "CrowdSkinProviderSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdSkinProviderSystem.cs"
+      },
+      {
+        "key": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdTransitionProviderSystem.cs::CrowdTransitionProviderSystem::0",
+        "name": "CrowdTransitionProviderSystem",
+        "kind": "system",
+        "source": "CustomPlugins/AnimationBaker/Scripts/DOTS/System/CrowdTransitionProviderSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Core/Core/SystemBase/SimpleSystemBase.cs::SimpleSystemBase::0",
+        "name": "SimpleSystemBase",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/SystemBase/SimpleSystemBase.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ClientCameraInitializationSystem.cs::ClientCameraInitializationSystem::0",
+        "name": "ClientCameraInitializationSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ClientCameraInitializationSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointCameraInitSystem.cs::ServerCullPointCameraInitSystem::0",
+        "name": "ServerCullPointCameraInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointCameraInitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointCameraSyncSystem.cs::ServerCullPointCameraSyncSystem::0",
+        "name": "ServerCullPointCameraSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointCameraSyncSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointInitSystem.cs::ServerCullPointInitSystem::0",
+        "name": "ServerCullPointInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointInitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointSyncSystem.cs::ServerCullPointSyncSystem::0",
+        "name": "ServerCullPointSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Netcode/Scripts/System/ServerCullPointSyncSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavObstacleSystem.cs::NavObstacleSystem::0",
+        "name": "NavObstacleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Npc/Navigation/NavObstacleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/TrafficLightHybridEventSystem.cs::TrafficLightHybridEventSystem::0",
+        "name": "TrafficLightHybridEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Light/System/TrafficLightHybridEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/PathGraphSystem.cs::PathGraphSystem::0",
+        "name": "PathGraphSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Road/Traffic/System/PathGraphSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Common/ClientSoundRpcHandlerSystem.cs::ClientSoundRpcHandlerSystem::0",
+        "name": "ClientSoundRpcHandlerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/Common/ClientSoundRpcHandlerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarPathEventSystemBase.cs::AstarPathEventSystemBase::0",
+        "name": "AstarPathEventSystemBase",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.ThirdParty/Astar Pathfinding/PointGraph/System/AstarPathEventSystemBase.cs"
+      },
+      {
+        "key": "builtin:EndSimulationEntityCommandBufferSystem",
+        "name": "EndSimulationEntityCommandBufferSystem",
+        "kind": "playback",
+        "source": "Unity.Entities built-in"
+      }
+    ],
+    "SpawnerGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Common/SpawnEventSystem.cs::SpawnEventSystem::0",
+        "name": "SpawnEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Common/SpawnEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Spawner/TrafficPublicSpawnerSystem.cs::TrafficPublicSpawnerSystem::0",
+        "name": "TrafficPublicSpawnerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Spawner/TrafficPublicSpawnerSystem.cs"
+      }
+    ],
+    "StructuralInitGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Road/System/TrafficNodeResolverSystem.cs::TrafficNodeResolverSystem::0",
+        "name": "TrafficNodeResolverSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Level/Streaming/Road/System/TrafficNodeResolverSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchStateSystem.cs::BenchStateSystem::0",
+        "name": "BenchStateSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Bench/BenchStateSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODInitSoundSystem.cs::FMODInitSoundSystem::0",
+        "name": "FMODInitSoundSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Sound/System/FMOD/Entity/FMODInitSoundSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Spawner/TrafficPublicInitSystem.cs::TrafficPublicInitSystem::0",
+        "name": "TrafficPublicInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Spawner/TrafficPublicInitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficWagonInitSystem.cs::TrafficWagonInitSystem::0",
+        "name": "TrafficWagonInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficWagonInitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficWagonRuntimeSpawnSystem.cs::TrafficWagonRuntimeSpawnSystem::0",
+        "name": "TrafficWagonRuntimeSpawnSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficWagonRuntimeSpawnSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrafficMonoWagonInitSystem.cs::TrafficMonoWagonInitSystem::0",
+        "name": "TrafficMonoWagonInitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Mono/TrafficMonoWagonInitSystem.cs"
+      }
+    ],
+    "StructuralSystemGroup": [
+      {
+        "key": "group:StructuralInitGroup",
+        "name": "StructuralInitGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:MainThreadEventGroup",
+        "name": "MainThreadEventGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:TrafficProcessNodeGroup",
+        "name": "TrafficProcessNodeGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Common/Entity Binding/System/EntityBindingSystem.cs::EntityBindingSystem::0",
+        "name": "EntityBindingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Entity Binding/System/EntityBindingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Common/PedestrianNodeInitializerSystem.cs::PedestrianNodeInitializerSystem::0",
+        "name": "PedestrianNodeInitializerSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Common/PedestrianNodeInitializerSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Common/PedestrianSpawnQueueSystem.cs::PedestrianSpawnQueueSystem::0",
+        "name": "PedestrianSpawnQueueSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Spawn/Common/PedestrianSpawnQueueSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Navigation/AntistuckActivateLocalAvoidanceSystem.cs::AntistuckActivateLocalAvoidanceSystem::0",
+        "name": "AntistuckActivateLocalAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/State/Navigation/AntistuckActivateLocalAvoidanceSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessEnteredEntrySeatPositionSystem.cs::ProcessEnteredEntrySeatPositionSystem::0",
+        "name": "ProcessEnteredEntrySeatPositionSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessEnteredEntrySeatPositionSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessEnteredSeatNodeSystem.cs::ProcessEnteredSeatNodeSystem::0",
+        "name": "ProcessEnteredSeatNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessEnteredSeatNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficNodeInitializer.cs::TrafficNodeInitializer::0",
+        "name": "TrafficNodeInitializer",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Init/TrafficNodeInitializer.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficIdleAtNodeSystem.cs::TrafficIdleAtNodeSystem::0",
+        "name": "TrafficIdleAtNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/State/TrafficIdleAtNodeSystem.cs"
+      },
+      {
+        "key": "group:MainThreadEventPlaybackGroup",
+        "name": "MainThreadEventPlaybackGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:TrafficAreaSimulationGroup",
+        "name": "TrafficAreaSimulationGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Common/Group/SystemSimulationGroups.cs"
+      },
+      {
+        "key": "group:CleanupGroup",
+        "name": "CleanupGroup",
+        "kind": "group",
+        "source": "Scripts/GameFlow/DotsCity.Core/Core/Group/SystemSimulationGroups.cs"
+      }
+    ],
+    "TrafficAreaSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaExitIdleSystem.cs::TrafficAreaExitIdleSystem::0",
+        "name": "TrafficAreaExitIdleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaExitIdleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaLockSystem.cs::TrafficAreaLockSystem::0",
+        "name": "TrafficAreaLockSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaLockSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaObserveDisableSystem.cs::TrafficAreaObserveDisableSystem::0",
+        "name": "TrafficAreaObserveDisableSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaObserveDisableSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaObserveEnableSystem.cs::TrafficAreaObserveEnableSystem::0",
+        "name": "TrafficAreaObserveEnableSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaObserveEnableSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaObserveSystem.cs::TrafficAreaObserveSystem::0",
+        "name": "TrafficAreaObserveSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaObserveSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaExitWaitSystem.cs::TrafficAreaExitWaitSystem::0",
+        "name": "TrafficAreaExitWaitSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaExitWaitSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaEnterQueueSystem.cs::TrafficAreaEnterQueueSystem::0",
+        "name": "TrafficAreaEnterQueueSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaEnterQueueSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaProcessNodeSystem.cs::TrafficAreaProcessNodeSystem::0",
+        "name": "TrafficAreaProcessNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficArea/System/TrafficAreaProcessNodeSystem.cs"
+      }
+    ],
+    "TrafficFixedUpdateGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficAlignmentAtNodeSystem.cs::TrafficAlignmentAtNodeSystem::0",
+        "name": "TrafficAlignmentAtNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficAlignmentAtNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficProcessMovementDataSystem.cs::TrafficProcessMovementDataSystem::0",
+        "name": "TrafficProcessMovementDataSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficProcessMovementDataSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/Rail/RailSimpleMovementSystem.cs::RailSimpleMovementSystem::0",
+        "name": "RailSimpleMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/Rail/RailSimpleMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/Rail/RailSimplePhysicsMovementSystem.cs::RailSimplePhysicsMovementSystem::0",
+        "name": "RailSimplePhysicsMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/Rail/RailSimplePhysicsMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficPhysicsMovementSystem.cs::TrafficPhysicsMovementSystem::0",
+        "name": "TrafficPhysicsMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficPhysicsMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficSimpleMovementSystem.cs::TrafficSimpleMovementSystem::0",
+        "name": "TrafficSimpleMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficSimpleMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Transform/CarSimpleWheelSystem.cs::CarSimpleWheelSystem::0",
+        "name": "CarSimpleWheelSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Transform/CarSimpleWheelSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrainMovementSystem.cs::TrainMovementSystem::0",
+        "name": "TrainMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrainMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrainPhysicsMovementSystem.cs::TrainPhysicsMovementSystem::0",
+        "name": "TrainPhysicsMovementSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrainPhysicsMovementSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrainSpeedSystem.cs::TrainSpeedSystem::0",
+        "name": "TrainSpeedSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrainSpeedSystem.cs"
+      }
+    ],
+    "TrafficInputGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficVehicleCustomInputSystem.cs::TrafficVehicleCustomInputSystem::0",
+        "name": "TrafficVehicleCustomInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficVehicleCustomInputSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficExplodedInputSystem.cs::TrafficExplodedInputSystem::0",
+        "name": "TrafficExplodedInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficExplodedInputSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficInputBehaviorSystem.cs::TrafficInputBehaviorSystem::0",
+        "name": "TrafficInputBehaviorSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficInputBehaviorSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficInputSystem.cs::TrafficInputSystem::0",
+        "name": "TrafficInputSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Input/TrafficInputSystem.cs"
+      }
+    ],
+    "TrafficLateSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficChangeLaneTargetSystem.cs::TrafficChangeLaneTargetSystem::0",
+        "name": "TrafficChangeLaneTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficChangeLaneTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAvoidJamSystem.cs::TrafficAvoidJamSystem::0",
+        "name": "TrafficAvoidJamSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAvoidJamSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficTargetCustomSystem.cs::TrafficTargetCustomSystem::0",
+        "name": "TrafficTargetCustomSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficTargetCustomSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficTargetSystem.cs::TrafficTargetSystem::0",
+        "name": "TrafficTargetSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficTargetSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Route/TrafficPublicNodeAvailableSystem.cs::TrafficPublicNodeAvailableSystem::0",
+        "name": "TrafficPublicNodeAvailableSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Route/TrafficPublicNodeAvailableSystem.cs"
+      }
+    ],
+    "TrafficProcessNodeGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficPathfindingAchieveSystem.cs::TrafficPathfindingAchieveSystem::0",
+        "name": "TrafficPathfindingAchieveSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficPathfindingAchieveSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficTargetAchievedSystem.cs::TrafficTargetAchievedSystem::0",
+        "name": "TrafficTargetAchievedSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficTargetAchievedSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficSwitchTargetNodeSystem.cs::TrafficSwitchTargetNodeSystem::0",
+        "name": "TrafficSwitchTargetNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficSwitchTargetNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficFindNextTrafficNodeSystem.cs::TrafficFindNextTrafficNodeSystem::0",
+        "name": "TrafficFindNextTrafficNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficFindNextTrafficNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficEnteringLinkedNodeEventSystem.cs::TrafficEnteringLinkedNodeEventSystem::0",
+        "name": "TrafficEnteringLinkedNodeEventSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficEnteringLinkedNodeEventSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficProcessEntereredTriggerTrafficNodeSystem.cs::TrafficProcessEntereredTriggerTrafficNodeSystem::0",
+        "name": "TrafficProcessEntereredTriggerTrafficNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficProcessEntereredTriggerTrafficNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessEnterParkingNodeSystem.cs::ProcessEnterParkingNodeSystem::0",
+        "name": "ProcessEnterParkingNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Pedestrian/System/Target/Node processing/ProcessEnterParkingNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficWaitForResolveNodeSystem.cs::TrafficWaitForResolveNodeSystem::0",
+        "name": "TrafficWaitForResolveNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficWaitForResolveNodeSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Target/TrafficFixedRouteSwitchTargetNodeSystem.cs::TrafficFixedRouteSwitchTargetNodeSystem::0",
+        "name": "TrafficFixedRouteSwitchTargetNodeSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/TrafficPublic/System/Target/TrafficFixedRouteSwitchTargetNodeSystem.cs"
+      }
+    ],
+    "TrafficSimulationGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Calculate/Core/TrafficObstacleSystem.cs::TrafficObstacleSystem::0",
+        "name": "TrafficObstacleSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/DetectObstacle/Calculate/Core/TrafficObstacleSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficChangeLaneSystem.cs::TrafficChangeLaneSystem::0",
+        "name": "TrafficChangeLaneSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/ChangeLane/TrafficChangeLaneSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficApproachSystem.cs::TrafficApproachSystem::0",
+        "name": "TrafficApproachSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Movement/TrafficApproachSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficPathfindingSystem.cs::TrafficPathfindingSystem::0",
+        "name": "TrafficPathfindingSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Navigation/System/TrafficPathfindingSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAdvancedAvoidanceSystem.cs::TrafficAdvancedAvoidanceSystem::0",
+        "name": "TrafficAdvancedAvoidanceSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Entity/System/Target/System/TrafficAdvancedAvoidanceSystem.cs"
+      },
+      {
+        "key": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficWagonSyncSystem.cs::TrafficWagonSyncSystem::0",
+        "name": "TrafficWagonSyncSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Simulation/Vehicle/Traffic/Train/Builtin/System/Dots/TrafficWagonSyncSystem.cs"
+      }
+    ],
+    "TransformSystemGroup": [
+      {
+        "key": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/InterpolateTransformToGameObjectSystem.cs::InterpolateTransformToGameObjectSystem::0",
+        "name": "InterpolateTransformToGameObjectSystem",
+        "kind": "system",
+        "source": "Scripts/GameFlow/DotsCity.Hybrid.Core/Entity/Sync/System/InterpolateTransformToGameObjectSystem.cs"
+      }
+    ]
+  },
+  "unresolved": [
+    {
+      "group": "AgentLocomotionSystemGroup",
+      "item": "AgentBodySyncSpeedSystem",
+      "relation": "before",
+      "target": "AgentLocomotionSystem"
+    },
+    {
+      "group": "AgentPathingSystemGroup",
+      "item": "AgentDisableSystem",
+      "relation": "after",
+      "target": "NavMeshSteeringSystem"
+    },
+    {
+      "group": "BakingSystemGroup",
+      "item": "TrafficRoadDebuggerBakingSystem",
+      "relation": "after",
+      "target": "TrafficNodeConversionSystem"
+    },
+    {
+      "group": "BakingSystemGroup",
+      "item": "TrafficPublicRouteConversionSystem",
+      "relation": "after",
+      "target": "TrafficPathConversionSystem"
+    },
+    {
+      "group": "BakingSystemGroup",
+      "item": "TrafficLightObjectBakingSystem",
+      "relation": "after",
+      "target": "TrafficLightConversionSystem"
+    },
+    {
+      "group": "BakingSystemGroup",
+      "item": "TrafficAreaConversionSystem",
+      "relation": "after",
+      "target": "TrafficNodeConversionSystem"
+    },
+    {
+      "group": "RukhankaAnimationSystemGroup",
+      "item": "PedestrianSteppedAnimationSystem",
+      "relation": "before",
+      "target": "AnimationProcessSystem"
+    },
+    {
+      "group": "RukhankaAnimationSystemGroup",
+      "item": "PedestrianSteppedAnimationSystem",
+      "relation": "after",
+      "target": "FillAnimationsFromControllerSystem"
+    },
+    {
+      "group": "SpawnerGroup",
+      "item": "SpawnEventSystem",
+      "relation": "before",
+      "target": "PedestrianEntitySpawnerSystem"
+    },
+    {
+      "group": "TransformSystemGroup",
+      "item": "InterpolateTransformToGameObjectSystem",
+      "relation": "after",
+      "target": "LocalToWorldSystem"
+    },
+    {
+      "group": "TransformSystemGroup",
+      "item": "InterpolateTransformToGameObjectSystem",
+      "relation": "after",
+      "target": "ParentSystem"
+    }
+  ],
+  "unorderedSpotChecks": [
+    {
+      "group": "BakingSystemGroup",
+      "before": "TrafficSectionConversionSystem",
+      "after": "VehicleCustomBakingSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "BeforeDestroyGroup",
+      "before": "PedestrianCustomPathEventInvokerSystem",
+      "after": "TrafficCustomPathEventInvokerSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "BeginSimulationGroup",
+      "before": "MonoSyncGroup",
+      "after": "NetcodeDepSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "CleanupGroup",
+      "before": "BenchCleanSystem",
+      "after": "CleanQueueWaitSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "CullSimulationGroup",
+      "before": "CullInitializerSystem",
+      "after": "CalcCameraCullingMultiplayerSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "DebugGroup",
+      "before": "PathIndexDebuggerSystem",
+      "after": "TrafficDebuggerSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "DestroyGroup",
+      "before": "PoolClientEntitySystem",
+      "after": "PoolEntitySystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "EarlyEventGroup",
+      "before": "LoadGPUSkinSystem",
+      "after": "LoadPermamentGPUSkinSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "EarlyJobGroup",
+      "before": "NavSimulationGroup",
+      "after": "CleanStaticPhysicsSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "FixedStepGroup",
+      "before": "PedestrianFixedSimulationGroup",
+      "after": "TrafficFixedUpdateGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "FixedStepSimulationSystemGroup",
+      "before": "FixedStepGroup",
+      "after": "PhysicsSimGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "GhostInputSystemGroup",
+      "before": "ClientCullPointCameraUpdateSystem",
+      "after": "ClientCullPointUpdateSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "HashMapGroup",
+      "before": "PedestrianPathHashMapSystem",
+      "after": "CarHashMapSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "InitGroup",
+      "before": "DestroyGroup",
+      "after": "DefaultWorldTimeSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "InitializationSystemGroup",
+      "before": "BeginInitializationEntityCommandBufferSystem",
+      "after": "GlobalTimeUpdateSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "LateEventGroup",
+      "before": "GPUAnimatorCustomStateSystem",
+      "after": "GPUAnimatorSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "LateInitGroup",
+      "before": "MainThreadInitGroup",
+      "after": "SpawnerGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "LateSimulationGroup",
+      "before": "TrafficLateSimulationGroup",
+      "after": "EntityTrackerSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "MainThreadEventGroup",
+      "before": "PedestrianPathfindingAchieveSystem",
+      "after": "AgentEnterHouseSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "MainThreadEventPlaybackGroup",
+      "before": "PedestrianCustomPathStructuralSystem",
+      "after": "TrafficCustomPathStructuralSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "MainThreadInitGroup",
+      "before": "InitCameraCullingMultiplayerSystem",
+      "after": "InitCameraCullingSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "MonoSyncGroup",
+      "before": "UnitySoundTrackTargetEntitySystem",
+      "after": "TrafficHybridMonoSyncSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "NavSimulationGroup",
+      "before": "NavAgentNavigationSystem",
+      "after": "NavAgentPersistTargetListenerSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "PedestrianFixedSimulationGroup",
+      "before": "AntistuckMovementSystem",
+      "after": "PedestrianAvoidanceMovementSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "PhysicsTriggerGroup",
+      "before": "PhysicsCollisionEventSystem",
+      "after": "TrafficCollisionEventSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "PostBakingSystemGroup",
+      "before": "RemovePhysicsBakingSystem",
+      "after": "CullPhysicsBakingSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "PreEarlyJobGroup",
+      "before": "CullSimulationGroup",
+      "after": "EarlyEventGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "PredictedFixedStepSimulationSystemGroup",
+      "before": "WheelContactSystem",
+      "after": "WheelSimulationSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "RaycastGroup",
+      "before": "WheelContactSystem",
+      "after": "TrafficRaycastObstacleSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "SimulationGroup",
+      "before": "TrafficSimulationGroup",
+      "after": "TrafficInputGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "SimulationSystemGroup",
+      "before": "FixedStepSimulationSystemGroup",
+      "after": "LateSimulationSystemGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "SpawnerGroup",
+      "before": "SpawnEventSystem",
+      "after": "TrafficPublicSpawnerSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "StructuralInitGroup",
+      "before": "TrafficNodeResolverSystem",
+      "after": "BenchStateSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "StructuralSystemGroup",
+      "before": "MainThreadEventGroup",
+      "after": "TrafficProcessNodeGroup",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "TrafficAreaSimulationGroup",
+      "before": "TrafficAreaExitIdleSystem",
+      "after": "TrafficAreaLockSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "TrafficFixedUpdateGroup",
+      "before": "TrafficAlignmentAtNodeSystem",
+      "after": "TrafficProcessMovementDataSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "TrafficInputGroup",
+      "before": "TrafficExplodedInputSystem",
+      "after": "TrafficInputBehaviorSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "TrafficLateSimulationGroup",
+      "before": "TrafficChangeLaneTargetSystem",
+      "after": "TrafficAvoidJamSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "TrafficProcessNodeGroup",
+      "before": "ProcessEnterParkingNodeSystem",
+      "after": "TrafficWaitForResolveNodeSystem",
+      "tieBreak": "source/inventory registration order"
+    },
+    {
+      "group": "TrafficSimulationGroup",
+      "before": "TrafficChangeLaneSystem",
+      "after": "TrafficApproachSystem",
+      "tieBreak": "source/inventory registration order"
+    }
+  ],
+  "inventorySystems": 381,
+  "systemPlacements": 389,
+  "customGroups": 41
+}

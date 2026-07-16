@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GAIA overlay</title>
+    <style>
+      :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+      html, body { width: 100%; height: 100%; margin: 0; background: transparent; }
+      body { display: grid; place-items: stretch; }
+      .panel { box-sizing: border-box; width: 100%; height: 100%; padding: 16px; border: 1px solid rgba(255,255,255,.45); border-radius: 14px; background: rgba(12,18,32,.72); box-shadow: 0 12px 30px rgba(0,0,0,.32); }
+      h1 { margin: 0 0 8px; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; }
+      p { margin: 0 0 14px; color: rgba(240,248,255,.8); font-size: 13px; line-height: 1.4; }
+      button { width: 100%; border: 0; border-radius: 8px; padding: 10px; color: #06101f; background: #91d9ff; font-weight: 700; cursor: pointer; }
+      button:active { transform: translateY(1px); }
+    </style>
+  </head>
+  <body>
+    <section class="panel">
+      <h1>Native wgpu + webview</h1>
+      <p>This transparent child webview is above the Metal-backed wgpu surface.</p>
+      <button id="ipc">Rust IPC log</button>
+    </section>
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      document.querySelector("#ipc").addEventListener("click", async () => {
+        await invoke("panel_pressed");
+        console.log("[overlay] panel_pressed invoked");
+      });
+    </script>
+  </body>
+</html>

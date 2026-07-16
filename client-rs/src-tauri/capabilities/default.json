@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Native wgpu surface plus child overlay webview",
+  "windows": ["wgpu-surface"],
+  "permissions": ["core:default"]
+}

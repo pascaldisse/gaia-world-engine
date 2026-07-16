@@ -1,0 +1,3 @@
+[workspace]
+members = ["src-tauri", "crates/gaia-protocol", "crates/gaia-ecs"]
+resolver = "2"

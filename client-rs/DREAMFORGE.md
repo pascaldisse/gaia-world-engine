@@ -96,6 +96,17 @@ Every subsystem must hold this invariant:
     held-camera recording). Anti-reference: Unity EditorXR (scrapped).
     XR laws parked in research/visionflow-recon.md apply (gaze-dive,
     voice+hands, rope before descent)
+13. TERRY CORE (Pascal 07-16, "the absolute motherlode"): Terry Davis's
+    engine = the size bar for the CORE — "not a single line of code more"
+    (exaggerated by his own words, but the point stands: the lightest core
+    imaginable, one mind can hold it whole — TempleOS = full OS+compiler+
+    games in ~100k lines). Core = ECS + data/schema + ops protocol +
+    scheduler + package loader. NOTHING else — no UI, no renderer, no
+    physics in core. EVERYTHING else = a PACKAGE (Unity-packages /
+    Bevy-plugins shape): renderer, physics, editor, create suite, nodes,
+    audio, VR, import — versioned, swappable, replaceable without touching
+    the kernel. "Modular as fuck." An idiot admires complexity; a genius
+    admires simplicity
 12. MULTIPLAYER IS FOR MAKING (Pascal 07-16: "multiplayer is not a
     feature for the games... it is a feature for the building of the
     games"). Games may use it too, but the DESIGN CENTER is co-creation:

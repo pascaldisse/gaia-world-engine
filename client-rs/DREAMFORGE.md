@@ -96,6 +96,19 @@ Every subsystem must hold this invariant:
     held-camera recording). Anti-reference: Unity EditorXR (scrapped).
     XR laws parked in research/visionflow-recon.md apply (gaze-dive,
     voice+hands, rope before descent)
+12. MULTIPLAYER IS FOR MAKING (Pascal 07-16: "multiplayer is not a
+    feature for the games... it is a feature for the building of the
+    games"). Games may use it too, but the DESIGN CENTER is co-creation:
+    invite someone into a world and build it together — and the same in
+    the code: node graphs in 3D space, co-present builders, point at a
+    node and others SEE the pointing, hold it, move it. VisionFlow Canto
+    XII verbatim ("bodies in one architecture... the gravity re-settling
+    as the work is moved by many hands"). Architecture: already true —
+    editing = ops on live shared world data, two editors = two clients.
+    NEW spec surface: the AWARENESS layer — presence in the edit surface
+    (visible pointing, selection highlights, grab/hold semantics) in-world
+    AND in-graph. Agents get the same presence — you see your AI
+    co-builder's hand too
 10. NODES = SURFACE, DATA = TRUTH (Pascal 07-16): AI agents are the
     engine's PRIMARY users — they interact with pure data (components/ops/
     schema, as today). Node graphs are the HUMAN view of that same data —

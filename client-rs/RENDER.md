@@ -126,6 +126,23 @@ R5 upscale: MetalFX interop + own temporal fallback. Gate: 60fps native-
 R6 scale: billion-triangle content test (Scthe proved 1.7B in a BROWSER —
    native must beat it), streaming pages under flight.
 
+## 8 · Apple-Silicon perf appendix (evidence: research/metal-recon.md)
+Portable wisdom (all backends): fewest passes · LoadOp::Clear +
+StoreOp::Discard on every transient target · fp16-first shaders
+(SHADER_F16) · subgroup ops (SUBGROUP, width 32 on M1, threadgroups ×32) ·
+minimize device atomics (Apple: 32-bit only — third vindication of
+hw-vis-first) · WGSL override for variants · single dispatch_indirect +
+persistent-queue culling (multi-draw-indirect absent on wgpu-Metal —
+non-event for a vis-buffer design).
+Trait-gated: TextureUsages::TRANSIENT → Metal memoryless (verify wgpu ≥
+PR#8247) · MetalFX · MTLIOCommandQueue.
+Unreachable via wgpu (accepted): on-tile single-pass deferred (imageblocks/
+ROG) — hurts classic deferred far more than our vis-buffer+compute-PT
+frame; revisit only if Buffer-RW limiter proves otherwise.
+Profiling law: every R-milestone gate includes Xcode GPU capture on the
+MacBook, read by LIMITER (ALU/Buffer/Texture), not utilization %. Xcode
+attaches transparently to the Tauri/wgpu binary.
+
 ## Rulings (Pascal 07-16: "you do whatever works, performance first")
 1. ✅ hw-vis-first on M1; sw-vis capability-gated. RULED.
 2. ✅ foliage/aggregates → density field at distance, clusters near, blend

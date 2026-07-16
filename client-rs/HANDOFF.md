@@ -78,8 +78,9 @@ Memory: nyari topic file `rust-port.md` = ruling digest. This doc = repo anchor.
    (live server+vite run from this tree — whip 154, never kill his app).
 
 ## Next waves (specs ready, launch order)
-1. **PHYSICS.md** ruling doc — write when the 2 recons land; Pascal rules on
-   it before contract entry.
+1. **PHYSICS.md — ON HOLD (Pascal 07-16: "let me do some magic myself first")**:
+   when the 2 recons land, PARK results in room, do NOT write/commit the
+   ruling doc until Pascal has done his own physics pass and gives the go.
 2. **Renderer MVP** — deferred G-buffer (Fyrox steal: pipelines never keyed by
    light set) + polygon pass; reads boomtown world via gaia-protocol+gaia-ecs;
    first pixels in Tauri window. Screenshot-verified.

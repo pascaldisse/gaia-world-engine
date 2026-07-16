@@ -970,32 +970,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "gaia-ecs"
+name = "gaia-core"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "gaia-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "gaia-tauri-wgpu-spike"
-version = "0.1.0"
-dependencies = [
- "block2",
- "objc2-app-kit",
- "pollster",
- "raw-window-handle",
- "tauri",
- "tauri-build",
- "wgpu",
 ]
 
 [[package]]
@@ -2727,6 +2706,21 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "render-window"
+version = "0.1.0"
+dependencies = [
+ "block2",
+ "gaia-core",
+ "objc2-app-kit",
+ "png 0.17.16",
+ "pollster",
+ "raw-window-handle",
+ "tauri",
+ "tauri-build",
+ "wgpu",
+]
 
 [[package]]
 name = "renderdoc-sys"

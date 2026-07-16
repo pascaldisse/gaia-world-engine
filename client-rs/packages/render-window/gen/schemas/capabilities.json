@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Render-window wgpu surface plus child overlay webview","local":true,"windows":["wgpu-surface"],"permissions":["core:default"]}}

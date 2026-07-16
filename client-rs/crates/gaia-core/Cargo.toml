@@ -1,10 +1,9 @@
 [package]
-name = "gaia-protocol"
+name = "gaia-core"
 version = "0.1.0"
 edition = "2021"
-description = "Serde protocol types for GAIA world documents and wire messages"
+description = "DreamForge core: ECS, protocol, scheduler, and package registry"
 license = "MIT"
-
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

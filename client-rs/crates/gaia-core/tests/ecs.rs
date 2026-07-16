@@ -1,4 +1,4 @@
-use gaia_ecs::*;
+use gaia_core::*;
 use serde::Deserialize;
 use serde_json::json;
 use std::{

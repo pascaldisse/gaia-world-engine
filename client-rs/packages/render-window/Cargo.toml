@@ -1,12 +1,16 @@
 [package]
-name = "gaia-tauri-wgpu-spike"
+name = "render-window"
 version = "0.1.0"
 edition = "2024"
+description = "DreamForge native Tauri + wgpu render-window package"
+license = "MIT"
 
 [build-dependencies]
 tauri-build = "2.6.3"
 
 [dependencies]
+gaia-core = { path = "../../crates/gaia-core" }
+png = "0.17.16"
 pollster = "0.4.0"
 raw-window-handle = "0.6.2"
 tauri = { version = "2.11.5", features = ["macos-private-api", "unstable"] }

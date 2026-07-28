@@ -26,6 +26,7 @@ const KEYS = {
   KeyA: { key: 'a', code: 'KeyA', keyCode: 65, text: 'a' },
   KeyS: { key: 's', code: 'KeyS', keyCode: 83, text: 's' },
   KeyD: { key: 'd', code: 'KeyD', keyCode: 68, text: 'd' },
+  KeyM: { key: 'm', code: 'KeyM', keyCode: 77, text: 'm' },
   Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
   Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
 };

@@ -25,6 +25,7 @@ import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
 import { setMaterialLibrary, mergeMaterial, partsOf } from './kernel/geometry.js';
 import { connect, clientId } from './kernel/net.js';
+import { connectStatic, staticModeRequested } from './kernel/static-world.js';
 import { isTyping } from './kernel/dom.js';
 import { substitute } from '../shared/ops.js';
 import { r2 } from '../shared/num.js';
@@ -72,7 +73,12 @@ const presenceId = `player-${clientId}`;
 view.ownPresence = presenceId;
 let pendingShot = null;
 
-const net = connect({
+// STATIC BOOT MODE: no world server, no vite dev — ?static=1 (or a build
+// baked with GAIA_STATIC_BUILD=1) hydrates from client/assets/world-snapshot.json
+// instead of opening a websocket. Same callbacks, same `net` shape either way
+// (see kernel/static-world.js) — nothing below this line knows which one ran.
+const staticMode = __GAIA_STATIC__ || staticModeRequested();
+const netConfig = {
   url: `ws://${location.hostname}:${__GAIA_PORT__}`,
   presence: presenceId,
   onSnapshot: (entities, time, world, game, materials) => {
@@ -197,7 +203,8 @@ const net = connect({
     if (from && from !== presenceId) return; // addressed to another tab
     pendingShot = id;
   },
-});
+};
+const net = staticMode ? connectStatic(netConfig) : connect(netConfig);
 
 // ---- title screen: a world's game.json replaces the default overlay with
 // NEW GAME / LEVEL SELECT. A level entry is pure data: { id, name, spawn:

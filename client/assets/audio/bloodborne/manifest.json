@@ -1,0 +1,112 @@
+[
+  {
+    "file": "doll-welcome-home.ogg",
+    "character": "Plain Doll",
+    "line": "Welcome home, good hunter. What is it you desire?",
+    "sourceUrl": "https://www.youtube.com/watch?v=AucX8PHJNt0",
+    "sourceNote": "English segment (0:00-8:09) of 'Bloodborne All Dialogues: Doll (Multi-language)' compilation by manfightdragon; trimmed with ffmpeg at exact word timestamps located via local whisper.cpp transcription.",
+    "durationSec": 7.2,
+    "bytes": 139416,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "doll-waking-up.ogg",
+    "character": "Plain Doll",
+    "line": "Ah, welcome home, good hunter. I must've drifted off. What is it you desire?",
+    "sourceUrl": "https://www.youtube.com/watch?v=AucX8PHJNt0",
+    "sourceNote": "Alternate/longer 'waking up' delivery of the welcome-home line, later in the same compilation.",
+    "durationSec": 7.3,
+    "bytes": 135795,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "doll-channelling-echoes.ogg",
+    "character": "Plain Doll",
+    "line": "Very well. Let the echoes become your strength. Let me stand close. Now shut your eyes.",
+    "sourceUrl": "https://www.youtube.com/watch?v=AucX8PHJNt0",
+    "sourceNote": "Level-up line, calm/soft delivery.",
+    "durationSec": 9.3,
+    "bytes": 181448,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "doll-farewell.ogg",
+    "character": "Plain Doll",
+    "line": "Farewell, good hunter. May you find your worth in the waking world.",
+    "sourceUrl": "https://www.youtube.com/watch?v=AucX8PHJNt0",
+    "sourceNote": "Farewell/leaving line.",
+    "durationSec": 5.5,
+    "bytes": 97626,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "doll-humming.ogg",
+    "character": "Plain Doll",
+    "line": "(wordless humming, no dialogue)",
+    "sourceUrl": "https://www.youtube.com/watch?v=AucX8PHJNt0",
+    "sourceNote": "Bonus atmospheric clip: the Doll's hum, also uploaded standalone at https://youtu.be/nEvHa9UQPR0.",
+    "durationSec": 12.7,
+    "bytes": 209602,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "micolash-grant-us-eyes.ogg",
+    "character": "Micolash, Host of the Nightmare",
+    "line": "Grant us eyes. Grant us eyes.",
+    "sourceUrl": "https://www.youtube.com/watch?v=K1E7NMVKEpE",
+    "sourceNote": "English segment (0:00-4:22) of 'Bloodborne Micolash, Host of the Nightmare's dialogues' compilation by manfightdragon.",
+    "durationSec": 4.7,
+    "bytes": 75176,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "willem-fear-the-old-blood.ogg",
+    "character": "Master Willem",
+    "line": "Our eyes are yet to open. Fear the old blood, by the gods, fear it, Lawrence.",
+    "sourceUrl": "https://www.youtube.com/watch?v=7lj5BmkggVU",
+    "sourceNote": "English segment (0:00-1:51) of 'Bloodborne Provost Willem's dialogues' compilation by manfightdragon.",
+    "durationSec": 18.3,
+    "bytes": 328862,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "gehrman-welcome-hunter.ogg",
+    "character": "Gehrman, the First Hunter",
+    "line": "Aha! You must be the new hunter. Welcome to the hunter's dream. This will be your home for now.",
+    "sourceUrl": "https://www.youtube.com/watch?v=7fgvHUfld9c",
+    "sourceNote": "Opening greeting line, English segment (0:00-11:37) of 'Bloodborne Old Hunter Gehrman's dialogues' compilation by manfightdragon.",
+    "durationSec": 16.7,
+    "bytes": 225808,
+    "format": "Ogg Vorbis, 44100Hz stereo"
+  },
+  {
+    "file": "ebrietas-cry-1.ogg",
+    "character": "Ebrietas, Daughter of the Cosmos",
+    "line": "(non-verbal vocalization/cry, no dialogue - Ebrietas has no spoken lines)",
+    "sourceUrl": "https://sounds-resource.com/playstation_4/bloodborne/sound/44435",
+    "sourceNote": "Datamined game sound file c251001001 from The Sounds Resource archive 'sprj_c2510 (Ebrietas, Daughter of the Cosmos)'; short idle/appear vocalization.",
+    "durationSec": 1.536,
+    "bytes": 28081,
+    "format": "Ogg Vorbis, 48000Hz stereo (re-encoded from extracted 48kHz mono PCM WAV)"
+  },
+  {
+    "file": "ebrietas-cry-2.ogg",
+    "character": "Ebrietas, Daughter of the Cosmos",
+    "line": "(non-verbal vocalization/cry, no dialogue - Ebrietas has no spoken lines)",
+    "sourceUrl": "https://sounds-resource.com/playstation_4/bloodborne/sound/44435",
+    "sourceNote": "Datamined game sound file s625105000, longer wail/scream.",
+    "durationSec": 6.187,
+    "bytes": 109408,
+    "format": "Ogg Vorbis, 48000Hz stereo (re-encoded from extracted 48kHz mono PCM WAV)"
+  },
+  {
+    "file": "ebrietas-damage-cry.ogg",
+    "character": "Ebrietas, Daughter of the Cosmos",
+    "line": "(non-verbal vocalization/cry, no dialogue - Ebrietas has no spoken lines)",
+    "sourceUrl": "https://sounds-resource.com/playstation_4/bloodborne/sound/44435",
+    "sourceNote": "Datamined game sound file c2510_Bigdamage1, pain/damage cry.",
+    "durationSec": 2.368,
+    "bytes": 60692,
+    "format": "Ogg Vorbis, 48000Hz stereo (re-encoded from extracted 48kHz mono PCM WAV)"
+  }
+]

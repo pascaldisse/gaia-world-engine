@@ -134,7 +134,11 @@ async function dryPass() {
     const scenes = gaia.director.scenes;
     return ticks.every((n,i) => n.title.includes('t0=' + scenes[i].t0.toFixed(2)) && n.dataset.t0 === scenes[i].t0.toFixed(2));`);
   check('stamps: every chapter tick is labelled with its t0 (raw seconds)', tickStamps);
+  // paint() and status() are read in the SAME turn (the overlay refreshes at
+  // opts.fps, so reading the DOM a tick later would measure playback, not the
+  // readout's law); one turn, one clock, character-for-character.
   const readout = await ev(`
+    gaia.atlasScrubber.scrubber.paint();
     const txt = document.querySelector('#atlas-scrubber .scr-t').textContent;
     const badge = document.querySelector('#atlas-scrubber .scr-now').textContent;
     const st = gaia.director.status();
@@ -180,13 +184,15 @@ async function dryPass() {
                released: d.released, reveal: d.status().reveal, forged: d.status().forged, rite: d.status().rite };`);
     const near = Math.abs(s.t - target) < 2.5;
     check(`dry: seek → ${sc.id} @ ${target.toFixed(1)}s lands on the chapter`,
-      near && s.chapter === sc.id && s.uiChapter === sc.id, `t=${s.t} chapter=${s.chapter} ui=${s.uiChapter}`);
+      near && s.chapter === sc.id && s.uiChapter.startsWith(sc.id) && s.uiChapter.includes(`t0=${sc.t0.toFixed(2)}`),
+      `t=${s.t} chapter=${s.chapter} ui="${s.uiChapter}"`);
     check(`dry: ${sc.id} · every earlier scene was entered (world state is exact)`,
       s.missing.length === 0, `missing=${JSON.stringify(s.missing)} reveal=${s.reveal} forged=${s.forged} rite=${s.rite}`);
     check(`dry: ${sc.id} · subtitle cue at that second`, s.uiCue === s.cue, `cue="${s.cue}"`);
     check(`dry: ${sc.id} · the scripted camera is writing (not released)`, s.released === false, `goal=${JSON.stringify(s.goal)}`);
     // the readout is the LANDED t, not the requested one
     const land = await ev(`
+      gaia.atlasScrubber.scrubber.paint();
       const st = gaia.director.status();
       const txt = document.querySelector('#atlas-scrubber .scr-t').textContent;
       const badge = document.querySelector('#atlas-scrubber .scr-now').textContent;

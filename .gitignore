@@ -2,3 +2,6 @@ node_modules/
 debug/
 .DS_Store
 world/saves/
+
+# generated paloptic atlas sidecar, copied from $GAIA_WORLD for same-origin fetch
+client/atlas-graph.json

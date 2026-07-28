@@ -7,9 +7,12 @@
 //   node tools/cdp-input.mjs click <x> <y>     move, press, release LMB at page px
 //   node tools/cdp-input.mjs wheel <dy>        wheel notch at the viewport centre
 //   node tools/cdp-input.mjs drag <dx> <dy>    right-button drag from the centre
+//   node tools/cdp-input.mjs ldrag <x> <y> <dx> <dy>   left-button drag from a point
+//   node tools/cdp-input.mjs move <x> <y>     hover (plugins pick at the cursor)
+//   node tools/cdp-input.mjs eval <expr>      read the page back (proof, not input)
 import { connectCdp } from './cdp-lib.mjs';
 
-const [, , cmd, a, b] = process.argv;
+const [, , cmd, a, b, c, d] = process.argv;
 const { ws, send } = await connectCdp();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -65,8 +68,30 @@ if (cmd === 'key') {
   }
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + dx, y: y + dy, button: 'right', buttons: 0, clickCount: 1, pointerType: 'mouse' });
   console.log(`drag ${dx},${dy}`);
+} else if (cmd === 'ldrag') {
+  // the left button is the plugin's grab: press ON the target, then move in
+  // steps so pointermove fires with real movementX/Y deltas
+  const x = Number(a);
+  const y = Number(b);
+  const dx = Number(c);
+  const dy = Number(d);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0, pointerType: 'mouse' });
+  await sleep(30);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
+  for (let i = 1; i <= 12; i++) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + (dx * i) / 12, y: y + (dy * i) / 12, button: 'left', buttons: 1, pointerType: 'mouse' });
+    await sleep(16);
+  }
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + dx, y: y + dy, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
+  console.log(`ldrag ${x},${y} +${dx},${dy}`);
+} else if (cmd === 'move') {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Number(a), y: Number(b), buttons: 0, pointerType: 'mouse' });
+  console.log(`move ${a},${b}`);
+} else if (cmd === 'eval') {
+  const { result } = await send('Runtime.evaluate', { expression: a, returnByValue: true, awaitPromise: true });
+  console.log(JSON.stringify(result.result?.value ?? result.exceptionDetails?.exception?.description ?? result, null, 2));
 } else {
-  console.log('usage: cdp-input.mjs key <Code> | click <x> <y> | wheel <dy> | drag <dx> <dy>');
+  console.log('usage: cdp-input.mjs key <Code> | click <x> <y> | move <x> <y> | wheel <dy> | drag <dx> <dy> | ldrag <x> <y> <dx> <dy> | eval <expr>');
 }
 ws.close();
 process.exit(0);

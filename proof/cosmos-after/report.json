@@ -1,0 +1,344 @@
+{
+ "at": "2026-07-28T15:33:23.187Z",
+ "outDir": "proof/cosmos-after",
+ "shots": {
+  "wide": {
+   "png": "proof/cosmos-after/wide.png",
+   "framed": {
+    "framing": "universe"
+   },
+   "fps": {
+    "fps": 36.4,
+    "frames": 41,
+    "why": "full"
+   },
+   "diag": {
+    "cosmos": {
+     "ready": true,
+     "enabled": false,
+     "starsActive": false,
+     "rite": "dream",
+     "nodes": 3061,
+     "veiled": 0,
+     "forsaken": 24
+    },
+    "forge": {
+     "enabled": true,
+     "visible": true,
+     "active": 44,
+     "kinds": {
+      "finding": 9,
+      "rule": 3,
+      "product": 9,
+      "customer": 19,
+      "store": 3,
+      "tenant": 1
+     },
+     "coverSum": 44,
+     "pinnedForged": 0,
+     "pinnedWant": 0,
+     "pending": 0,
+     "stats": {
+      "bodies": 44,
+      "pools": {
+       "finding": 9,
+       "rule": 3,
+       "product": 9,
+       "customer": 19,
+       "store": 3,
+       "tenant": 1
+      },
+      "prCut": 0.000254728744039312,
+      "degCut": 6,
+      "failed": [],
+      "healed": 0,
+      "enabled": true
+     }
+    },
+    "cam": {
+     "dist": 483,
+     "goalDist": 504
+    }
+   }
+  },
+  "cluster": {
+   "png": "proof/cosmos-after/cluster.png",
+   "framed": {
+    "framing": "covenant",
+    "community": 0,
+    "members": 517,
+    "radius": 38
+   },
+   "fps": {
+    "fps": 49.2,
+    "frames": 41,
+    "why": "full"
+   },
+   "diag": {
+    "cosmos": {
+     "ready": true,
+     "enabled": false,
+     "starsActive": false,
+     "rite": "dream",
+     "nodes": 3061,
+     "veiled": 0,
+     "forsaken": 24
+    },
+    "forge": {
+     "enabled": true,
+     "visible": true,
+     "active": 46,
+     "kinds": {
+      "customer": 19,
+      "store": 3,
+      "tenant": 1,
+      "finding": 3,
+      "rule": 1,
+      "consultant": 6,
+      "order": 11,
+      "product": 2
+     },
+     "coverSum": 46,
+     "pinnedForged": 2,
+     "pinnedWant": 2,
+     "pending": 0,
+     "stats": {
+      "bodies": 46,
+      "pools": {
+       "finding": 3,
+       "rule": 1,
+       "product": 2,
+       "customer": 19,
+       "store": 3,
+       "tenant": 1,
+       "consultant": 6,
+       "order": 11
+      },
+      "prCut": 0.000254728744039312,
+      "degCut": 6,
+      "failed": [],
+      "healed": 0,
+      "enabled": true
+     }
+    },
+    "cam": {
+     "dist": 328,
+     "goalDist": 99
+    }
+   }
+  },
+  "close": {
+   "png": "proof/cosmos-after/close.png",
+   "framed": {
+    "framing": "close",
+    "id": "5b4389a8a7f3f18c",
+    "kind": "customer",
+    "degree": 7,
+    "focus": {
+     "id": "5b4389a8a7f3f18c",
+     "kind": "customer",
+     "radius": 6.05,
+     "great": true,
+     "eye": false,
+     "aimed": true,
+     "held": 1
+    }
+   },
+   "fps": {
+    "fps": 47.8,
+    "frames": 41,
+    "why": "full"
+   },
+   "diag": {
+    "cosmos": {
+     "ready": true,
+     "enabled": false,
+     "starsActive": false,
+     "rite": "dream",
+     "nodes": 3061,
+     "veiled": 0,
+     "forsaken": 24
+    },
+    "forge": {
+     "enabled": true,
+     "visible": true,
+     "active": 60,
+     "kinds": {
+      "store": 3,
+      "tenant": 1,
+      "finding": 6,
+      "rule": 2,
+      "consultant": 6,
+      "order": 13,
+      "product": 10,
+      "customer": 19
+     },
+     "coverSum": 60,
+     "pinnedForged": 10,
+     "pinnedWant": 10,
+     "pending": 0,
+     "stats": {
+      "bodies": 60,
+      "pools": {
+       "finding": 6,
+       "rule": 2,
+       "product": 10,
+       "customer": 19,
+       "store": 3,
+       "tenant": 1,
+       "consultant": 6,
+       "order": 13
+      },
+      "prCut": 0.000254728744039312,
+      "degCut": 6,
+      "failed": [],
+      "healed": 0,
+      "enabled": true
+     }
+    },
+    "cam": {
+     "dist": 361,
+     "goalDist": 70
+    }
+   }
+  },
+  "altar": {
+   "png": "proof/cosmos-after/altar.png",
+   "framed": {
+    "framing": "altar",
+    "orphans": 24,
+    "ring": 24,
+    "assert": {
+     "camToEbrietas": 493,
+     "orphanD": [
+      342,
+      656
+     ],
+     "autoFrame": false
+    }
+   },
+   "fps": {
+    "fps": 55.3,
+    "frames": 41,
+    "why": "full"
+   },
+   "diag": {
+    "cosmos": {
+     "ready": true,
+     "enabled": false,
+     "starsActive": false,
+     "rite": "dream",
+     "nodes": 3061,
+     "veiled": 0,
+     "forsaken": 24
+    },
+    "forge": {
+     "enabled": true,
+     "visible": true,
+     "active": 74,
+     "kinds": {
+      "store": 3,
+      "tenant": 1,
+      "finding": 6,
+      "rule": 2,
+      "consultant": 6,
+      "order": 13,
+      "product": 24,
+      "customer": 19
+     },
+     "coverSum": 74,
+     "pinnedForged": 24,
+     "pinnedWant": 24,
+     "pending": 0,
+     "stats": {
+      "bodies": 74,
+      "pools": {
+       "finding": 6,
+       "rule": 2,
+       "product": 24,
+       "customer": 19,
+       "store": 3,
+       "tenant": 1,
+       "consultant": 6,
+       "order": 13
+      },
+      "prCut": 0.000254728744039312,
+      "degCut": 6,
+      "failed": [],
+      "healed": 0,
+      "enabled": true
+     }
+    },
+    "cam": {
+     "dist": 1230,
+     "goalDist": 493
+    }
+   }
+  },
+  "covenants": {
+   "png": "proof/cosmos-after/covenants.png",
+   "framed": {
+    "framing": "covenants",
+    "starsActive": true
+   },
+   "fps": {
+    "fps": 41.3,
+    "frames": 41,
+    "why": "full"
+   },
+   "diag": {
+    "cosmos": {
+     "ready": true,
+     "enabled": true,
+     "starsActive": true,
+     "rite": "covenants",
+     "nodes": 3061,
+     "veiled": 0,
+     "forsaken": 24
+    },
+    "forge": {
+     "enabled": true,
+     "visible": true,
+     "active": 50,
+     "kinds": {
+      "store": 3,
+      "tenant": 1,
+      "customer": 8,
+      "order": 13,
+      "rule": 1,
+      "product": 9,
+      "finding": 9,
+      "consultant": 6
+     },
+     "coverSum": 50,
+     "pinnedForged": 0,
+     "pinnedWant": 0,
+     "pending": 0,
+     "stats": {
+      "bodies": 50,
+      "pools": {
+       "finding": 9,
+       "rule": 1,
+       "product": 9,
+       "customer": 8,
+       "store": 3,
+       "tenant": 1,
+       "consultant": 6,
+       "order": 13
+      },
+      "prCut": 0.000254728744039312,
+      "degCut": 6,
+      "failed": [],
+      "healed": 0,
+      "enabled": true
+     }
+    },
+    "cam": {
+     "dist": 1637,
+     "goalDist": 1614
+    }
+   }
+  }
+ },
+ "console": []
+}

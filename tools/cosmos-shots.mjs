@@ -59,9 +59,14 @@ const DIAG = `(() => {
   if (f) { for (const [i] of f.active) { const k = c.nodes[i].kind; kinds[k] = (kinds[k] ?? 0) + 1; }
     for (let i = 0; i < f.cover.length; i += 1) coverSum += f.cover[i]; }
   const pinnedForged = f && c ? [...c.flockRing.keys()].filter((i) => f.active.has(i)).length : 0;
+  const pinnedWant = f && c ? [...c.flockRing.keys()].filter((i) => f.want.has(i)).length : 0;
   return {
     cosmos: c ? { ready: c.ready, enabled: c.enabled, starsActive: c.starsActive(), rite: c.rite, nodes: c.nodes.length, veiled: c.veiledCount ?? 0, forsaken: c.forsaken.length } : null,
-    forge: f ? { enabled: f.enabled, visible: f.group.visible, active: f.active.size, kinds, coverSum: +coverSum.toFixed(1), pinnedForged, stats: f.stats?.() ?? null } : null,
+    forge: f ? {
+      enabled: f.enabled, visible: f.group.visible, active: f.active.size, kinds,
+      coverSum: +coverSum.toFixed(1), pinnedForged, pinnedWant, pending: f.pending.length,
+      stats: f.stats?.() ?? null,
+    } : null,
     cam: s ? { dist: +s.camera.position.length().toFixed(0), goalDist: +(s.goalDistance ?? 0).toFixed(0) } : null,
   };
 })()`;
@@ -115,12 +120,25 @@ const SHOTS = {
   },
   // the Altar: Ebrietas and her forsaken. The orphan ring is r=95..233 around
   // her, so her own framing radius (300) is exactly the shot that has both.
+  // autoFrame is a STANDING ORDER, not a one-off: left on by an earlier wide
+  // shot it re-fits the universe every frame and quietly drags the camera back
+  // off the altar, so a shot taken 3s later photographs the right subject from
+  // the wrong place and every LOD number in it is a lie. It dies here by name.
   altar: {
-    settle: 3200,
+    settle: 3400,
     frame: `(() => {
-      const c = window.gaia.atlasCosmos;
+      const c = window.gaia.atlasCosmos, s = window.gaia.atlasStrategy;
+      s.autoFrame = false;
       c.openFigure('ebrietas');
       return { framing: 'altar', orphans: c.forsaken.length, ring: c.flockRing.size };
+    })()`,
+    // the shot is only the Altar if the camera is actually AT the Altar
+    assert: `(() => {
+      const c = window.gaia.atlasCosmos, f = window.gaia.atlasForge;
+      const V = c.camera.position.constructor; const p = new V();
+      let dmin = Infinity, dmax = 0;
+      for (const i of c.flockRing.keys()) { f.worldPos(i, p); const d = c.camera.position.distanceTo(p); dmin = Math.min(dmin, d); dmax = Math.max(dmax, d); }
+      return { camToEbrietas: +c.camera.position.distanceTo(new V(0, -1250, 0)).toFixed(0), orphanD: [+dmin.toFixed(0), +dmax.toFixed(0)], autoFrame: c.strategy.autoFrame };
     })()`,
   },
   // THE FAR TIER AS A WHOLE FIELD. In The Dream the instanced layer stands
@@ -152,6 +170,7 @@ for (const name of names) {
   await sleep(300);
   const fps = JSON.parse(await ev(FPS));
   const diag = await evJson(DIAG);
+  if (shot.assert) framed.assert = await evJson(shot.assert);
   const png = `${outDir}/${name}.png`;
   const cap = await send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(png, Buffer.from(cap.result.data, 'base64'));

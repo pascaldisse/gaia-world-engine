@@ -1,0 +1,262 @@
+{
+  "when": "2026-07-28T16:39:32.297Z",
+  "pass": 51,
+  "total": 51,
+  "results": [
+    {
+      "name": "dry: page + atlas + director + scrubber loaded",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: director exposes duration + handoverAt",
+      "ok": true,
+      "detail": "duration=293.44 handoverAt=288.6"
+    },
+    {
+      "name": "dry: nothing on screen and no DOM before the key",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: the key refuses when there is no film to cut",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: film rolling",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: ` opens the scrubber",
+      "ok": true,
+      "detail": "t=0.85 chapter=void"
+    },
+    {
+      "name": "dry: the engine debug panel did NOT toggle with it",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: one chapter tick per SCENES row",
+      "ok": true,
+      "detail": "15 ticks / 15 scenes"
+    },
+    {
+      "name": "dry: every tick carries its chapter name",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "stamps: every chapter tick is labelled with its t0 (raw seconds)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "stamps: head readout AND cursor badge print t= copy-exact to director.status().t",
+      "ok": true,
+      "detail": "readout=\"0:00.9 · t=0.98 / 4:53.4 · t=293.44\" badge=\"0:00.9 · t=0.98\" status.t=0.98"
+    },
+    {
+      "name": "stamps: the readout is mm:ss.s PLUS raw seconds",
+      "ok": true,
+      "detail": "0:00.9 · t=0.98 / 4:53.4 · t=293.44"
+    },
+    {
+      "name": "stamps: hovering the bar prints the timestamp under the pointer",
+      "ok": true,
+      "detail": "tip=\"1:57.3 · t=117.38 · split t0=103.32CHORUS: \"could not bear to burn alone\"\" (pointer at 117.38)"
+    },
+    {
+      "name": "dry: seek → candle @ 67.0s lands on the chapter",
+      "ok": true,
+      "detail": "t=67.15 chapter=candle ui=\"candle t0=64.00\""
+    },
+    {
+      "name": "dry: candle · every earlier scene was entered (world state is exact)",
+      "ok": true,
+      "detail": "missing=[] reveal=0 forged=0 rite=dream"
+    },
+    {
+      "name": "dry: candle · subtitle cue at that second",
+      "ok": true,
+      "detail": "cue=\"\""
+    },
+    {
+      "name": "dry: candle · the scripted camera is writing (not released)",
+      "ok": true,
+      "detail": "goal=[174.3,-382.8,-115.2]"
+    },
+    {
+      "name": "stamps: candle · readout = the EXACT landed t (post-seek), target chip cleared",
+      "ok": true,
+      "detail": "status.t=67.17 readout=\"1:07.1 · t=67.17 / 4:53.4 · t=293.44\" target=null"
+    },
+    {
+      "name": "dry: seek → split @ 106.3s lands on the chapter",
+      "ok": true,
+      "detail": "t=106.51 chapter=split ui=\"split t0=103.32\""
+    },
+    {
+      "name": "dry: split · every earlier scene was entered (world state is exact)",
+      "ok": true,
+      "detail": "missing=[] reveal=0.004 forged=9 rite=dream"
+    },
+    {
+      "name": "dry: split · subtitle cue at that second",
+      "ok": true,
+      "detail": "cue=\"It could not bear to burn alone\""
+    },
+    {
+      "name": "dry: split · the scripted camera is writing (not released)",
+      "ok": true,
+      "detail": "goal=[161.6,-368.3,-124.7]"
+    },
+    {
+      "name": "stamps: split · readout = the EXACT landed t (post-seek), target chip cleared",
+      "ok": true,
+      "detail": "status.t=106.55 readout=\"1:46.5 · t=106.55 / 4:53.4 · t=293.44\" target=null"
+    },
+    {
+      "name": "dry: seek → covenants @ 164.8s lands on the chapter",
+      "ok": true,
+      "detail": "t=165.03 chapter=covenants ui=\"covenants t0=161.76\""
+    },
+    {
+      "name": "dry: covenants · every earlier scene was entered (world state is exact)",
+      "ok": true,
+      "detail": "missing=[] reveal=1 forged=16 rite=covenants"
+    },
+    {
+      "name": "dry: covenants · subtitle cue at that second",
+      "ok": true,
+      "detail": "cue=\"No light burns alone, no thread hangs free\""
+    },
+    {
+      "name": "dry: covenants · the scripted camera is writing (not released)",
+      "ok": true,
+      "detail": "goal=[50,-110,64]"
+    },
+    {
+      "name": "stamps: covenants · readout = the EXACT landed t (post-seek), target chip cleared",
+      "ok": true,
+      "detail": "status.t=165.06 readout=\"2:45.0 · t=165.06 / 4:53.4 · t=293.44\" target=null"
+    },
+    {
+      "name": "dry: seek → descent @ 230.8s lands on the chapter",
+      "ok": true,
+      "detail": "t=230.93 chapter=descent ui=\"descent t0=227.78\""
+    },
+    {
+      "name": "dry: descent · every earlier scene was entered (world state is exact)",
+      "ok": true,
+      "detail": "missing=[] reveal=1 forged=18 rite=dream"
+    },
+    {
+      "name": "dry: descent · subtitle cue at that second",
+      "ok": true,
+      "detail": "cue=\"\""
+    },
+    {
+      "name": "dry: descent · the scripted camera is writing (not released)",
+      "ok": true,
+      "detail": "goal=[31.2,73.6,142.9]"
+    },
+    {
+      "name": "stamps: descent · readout = the EXACT landed t (post-seek), target chip cleared",
+      "ok": true,
+      "detail": "status.t=230.96 readout=\"3:50.9 · t=230.96 / 4:53.4 · t=293.44\" target=null"
+    },
+    {
+      "name": "dry: seek → altar @ 247.0s lands on the chapter",
+      "ok": true,
+      "detail": "t=247.16 chapter=altar ui=\"altar t0=244.00\""
+    },
+    {
+      "name": "dry: altar · every earlier scene was entered (world state is exact)",
+      "ok": true,
+      "detail": "missing=[] reveal=1 forged=20 rite=dream"
+    },
+    {
+      "name": "dry: altar · subtitle cue at that second",
+      "ok": true,
+      "detail": "cue=\"\""
+    },
+    {
+      "name": "dry: altar · the scripted camera is writing (not released)",
+      "ok": true,
+      "detail": "goal=[0,-1279.4,0]"
+    },
+    {
+      "name": "stamps: altar · readout = the EXACT landed t (post-seek), target chip cleared",
+      "ok": true,
+      "detail": "status.t=247.19 readout=\"4:07.1 · t=247.19 / 4:53.4 · t=293.44\" target=null"
+    },
+    {
+      "name": "dry: → is +5s",
+      "ok": true,
+      "detail": "247.32 → 252.59"
+    },
+    {
+      "name": "dry: ← is −5s",
+      "ok": true,
+      "detail": "252.59 → 247.86"
+    },
+    {
+      "name": "dry: ⇧→ jumps to the next chapter t0",
+      "ok": true,
+      "detail": "247.86 → 268.25 (home @ 268)"
+    },
+    {
+      "name": "dry: ⇧← jumps to the previous chapter t0",
+      "ok": true,
+      "detail": "268.25 → 244.25 (altar @ 244)"
+    },
+    {
+      "name": "dry: space pauses and the clock STOPS",
+      "ok": true,
+      "detail": "t held at 244.27"
+    },
+    {
+      "name": "dry: pause-scrub keeps it paused at the new time",
+      "ok": true,
+      "detail": "{\"playing\":false,\"t\":160}"
+    },
+    {
+      "name": "dry: space resumes FROM the scrubbed point",
+      "ok": true,
+      "detail": "{\"playing\":true,\"t\":161.02}"
+    },
+    {
+      "name": "dry: drag lands where the hand let go",
+      "ok": true,
+      "detail": "t=182.09 target=181.93"
+    },
+    {
+      "name": "dry: a drag resumes what it interrupted",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: the handover still fires on the music after a scrub",
+      "ok": true,
+      "detail": "{\"at\":288.6285000000001,\"released\":true,\"handedOver\":true}"
+    },
+    {
+      "name": "dry: scrubbing back re-enters film state (camera re-taken)",
+      "ok": true,
+      "detail": "{\"t\":150,\"released\":false,\"handedOver\":false,\"stage\":true,\"chapter\":\"name\",\"entered\":8}"
+    },
+    {
+      "name": "dry: esc closes the scrubber",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dry: F9 is the same secret key",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

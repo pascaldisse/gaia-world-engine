@@ -714,5 +714,8 @@
          and independent of main.js (it waits for gaia.atlasStrategy to come up),
          so the boot order is the plugin's own business. ?intro=off disables it. -->
     <script type="module" src="/plugins/atlas-intro.js"></script>
+    <!-- the director's scrubber: a key listener and nothing else until the
+         secret key (` / F9) summons it — no DOM, no hint, not in a recording -->
+    <script type="module" src="/plugins/atlas-scrubber.js"></script>
   </body>
 </html>

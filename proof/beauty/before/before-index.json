@@ -1,0 +1,58 @@
+{
+  "rig": {
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36",
+    "adapter": {
+      "vendor": "apple",
+      "arch": "metal-3",
+      "desc": ""
+    },
+    "limits": 16384
+  },
+  "rows": [
+    {
+      "t": 270,
+      "scene": "home",
+      "rite": "dream",
+      "file": "proof/beauty/before/before-t270.png",
+      "bytes": 52608,
+      "perf": {
+        "fps": 53.1,
+        "p5": 24,
+        "worst": 20,
+        "drawCalls": null,
+        "triangles": null,
+        "pixelRatio": null
+      }
+    },
+    {
+      "t": 236,
+      "scene": "descent",
+      "rite": "dream",
+      "file": "proof/beauty/before/before-t236.png",
+      "bytes": 26607,
+      "perf": {
+        "fps": 60,
+        "p5": 59.9,
+        "worst": 59.5,
+        "drawCalls": null,
+        "triangles": null,
+        "pixelRatio": null
+      }
+    },
+    {
+      "t": 258,
+      "scene": "altar",
+      "rite": "dream",
+      "file": "proof/beauty/before/before-t258.png",
+      "bytes": 142717,
+      "perf": {
+        "fps": 60,
+        "p5": 59.9,
+        "worst": 59.5,
+        "drawCalls": null,
+        "triangles": null,
+        "pixelRatio": null
+      }
+    }
+  ]
+}

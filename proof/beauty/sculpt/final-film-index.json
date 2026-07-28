@@ -1,0 +1,43 @@
+{
+  "rig": {
+    "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/149.0.0.0 Safari/537.36",
+    "adapter": {
+      "vendor": "apple",
+      "arch": "metal-3",
+      "desc": ""
+    },
+    "limits": 16384
+  },
+  "rows": [
+    {
+      "t": 258,
+      "scene": "altar",
+      "rite": "dream",
+      "file": "proof/beauty/sculpt/final-film-t258.png",
+      "bytes": 176575,
+      "perf": {
+        "fps": 60,
+        "p5": 59.5,
+        "worst": 59.5,
+        "drawCalls": 295,
+        "triangles": 738249,
+        "pixelRatio": 1
+      }
+    },
+    {
+      "t": 270,
+      "scene": "home",
+      "rite": "dream",
+      "file": "proof/beauty/sculpt/final-film-t270.png",
+      "bytes": 58197,
+      "perf": {
+        "fps": 60,
+        "p5": 59.9,
+        "worst": 59.5,
+        "drawCalls": 291,
+        "triangles": 734069,
+        "pixelRatio": 1
+      }
+    }
+  ]
+}

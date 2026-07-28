@@ -1,13 +1,13 @@
 {
-  "username": "proof-hunter-1785272741325",
+  "username": "proof-hunter-1785272801141",
   "escBlockedOnFirstView": true,
   "registeredUser": {
-    "id": "c6386b6b-7a7c-40c7-ad51-cb46ecd25729",
-    "username": "proof-hunter-1785272741325",
+    "id": "cdc40776-de51-4cbc-8ab2-359754e35b00",
+    "username": "proof-hunter-1785272801141",
     "avatar": {
       "lineage": "cainhurst",
       "iris": "#7a1128",
-      "id": "proof-hunter-1785272741325",
+      "id": "proof-hunter-1785272801141",
       "skin": "#f3d9c4",
       "hair": "#160b22",
       "outfit": "#2c1742",
@@ -375,8 +375,8 @@
         ]
       }
     },
-    "mythosName": "Wrenna the Bloodletter",
-    "createdAt": "2026-07-28T21:05:52.026Z"
+    "mythosName": "Father Tamsin",
+    "createdAt": "2026-07-28T21:06:51.945Z"
   },
   "returnMenuHadLoginForm": true,
   "consoleErrorsFresh": [],

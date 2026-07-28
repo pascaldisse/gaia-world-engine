@@ -40,6 +40,13 @@ const MATERIAL_FIELDS = [
   'fadeAbove', 'flicker',
   'horizon', 'bands', 'bright', 'sunPos', 'sunColor', 'sunGlow', 'sunRadius', 'noiseScale', 'cover',
   'waveHeight', 'waveScale', 'crest', 'haze', 'blockSize', 'grout', 'grain', 'doubleSide',
+  // nebula (§IRON NEBULA, presets.js): `norm` carries the shell radius on
+  // purpose — putting the geometry field `radius` in this list would give
+  // every differently-sized sphere in the world its own material.
+  'norm', 'seed', 'arms', 'thick', 'warp', 'warpScale', 'skew', 'octaves', 'rough', 'freq',
+  'gain', 'floor', 'lane', 'laneScale', 'laneSoft', 'laneOctaves', 'laneCut', 'laneOnly',
+  'facing', 'far', 'farMean', 'farGain', 'edge', 'accent', 'accentMix', 'accent2', 'accent2Mix',
+  'warm', 'mode', 'hole', 'spin', 'squash', 'armCount', 'armSharp', 'armFloor', 'lopsided', 'coreFall',
 ];
 
 function recipeKey(part, fields) {

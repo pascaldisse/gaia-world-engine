@@ -519,6 +519,12 @@ export class View {
       }
       mesh.castShadow = part.castShadow ?? true;
       mesh.receiveShadow = true;
+      // renderOrder: transparent parts that SHARE a centre (nested nebula
+      // shells) have no distance to sort by, so three's back-to-front order
+      // between them is arbitrary — and a dust-lane shell drawn BEFORE the
+      // glow it is supposed to occlude gets washed out by the additive pass.
+      // Authors state the stack explicitly instead.
+      if (part.renderOrder !== undefined) mesh.renderOrder = part.renderOrder;
       mesh.userData.kind = 'mesh-part';
       group.add(mesh);
     }

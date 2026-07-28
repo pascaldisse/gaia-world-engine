@@ -1,0 +1,3 @@
+{"tag":"n1","at":"galaxy:0","dist":520,"file":"proof/beauty/universe/probe/n1-d520.png","bytes":522411,"perf":{"fps":120,"p95":113.6,"worst":106.4,"drawCalls":210,"triangles":682721,"pixelRatio":2,"adapter":"apple/common-3","errs":[]}}
+{"tag":"n1","at":"galaxy:0","dist":150,"file":"proof/beauty/universe/probe/n1-d150.png","bytes":522411,"perf":{"fps":120,"p95":112.4,"worst":106.4,"drawCalls":172,"triangles":668225,"pixelRatio":2,"adapter":"apple/common-3","errs":[]}}
+{"tag":"n1","at":"galaxy:0","dist":42,"file":"proof/beauty/universe/probe/n1-d42.png","bytes":522411,"perf":{"fps":120,"p95":109.9,"worst":107.5,"drawCalls":179,"triangles":676505,"pixelRatio":2,"adapter":"apple/common-3","errs":[]}}

@@ -5,7 +5,9 @@
 // usage:
 //   node tools/cdp-input.mjs key Digit2        press+release a key (e.code)
 //   node tools/cdp-input.mjs click <x> <y>     move, press, release LMB at page px
-//   node tools/cdp-input.mjs wheel <dy>        wheel notch at the viewport centre
+//   node tools/cdp-input.mjs altclick <x> <y>  same, with Alt held (bloodline's far end)
+//   node tools/cdp-input.mjs wheel <dy> [x y]  wheel notch (default: viewport centre;
+//                                              give x/y to scroll a PANEL, not the camera)
 //   node tools/cdp-input.mjs drag <dx> <dy>    right-button drag from the centre
 //   node tools/cdp-input.mjs ldrag <x> <y> <dx> <dy>   left-button drag from a point
 //   node tools/cdp-input.mjs move <x> <y>     hover (plugins pick at the cursor)
@@ -29,6 +31,11 @@ const KEYS = {
   KeyM: { key: 'm', code: 'KeyM', keyCode: 77, text: 'm' },
   Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
   Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  // range-input keys: the honest way to set a slider to an exact value
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  Home: { key: 'Home', code: 'Home', keyCode: 36 },
+  End: { key: 'End', code: 'End', keyCode: 35 },
 };
 
 if (cmd === 'key') {
@@ -51,11 +58,26 @@ if (cmd === 'key') {
   await sleep(40);
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 });
   console.log(`click ${x},${y}`);
+} else if (cmd === 'altclick') {
+  const x = Number(a);
+  const y = Number(b);
+  const base = { x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse', modifiers: 1 }; // 1 = Alt
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0, modifiers: 1, pointerType: 'mouse' });
+  await sleep(30);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
+  await sleep(40);
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 });
+  console.log(`altclick ${x},${y}`);
 } else if (cmd === 'wheel') {
-  const { result } = await send('Runtime.evaluate', { expression: '[innerWidth/2, innerHeight/2]', returnByValue: true });
-  const [x, y] = result.result.value;
+  let x;
+  let y;
+  if (b !== undefined && c !== undefined) { x = Number(b); y = Number(c); } else {
+    const { result } = await send('Runtime.evaluate', { expression: '[innerWidth/2, innerHeight/2]', returnByValue: true });
+    [x, y] = result.result.value;
+  }
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0, pointerType: 'mouse' });
   await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY: Number(a), pointerType: 'mouse' });
-  console.log(`wheel ${a}`);
+  console.log(`wheel ${a} @ ${x},${y}`);
 } else if (cmd === 'drag') {
   const { result } = await send('Runtime.evaluate', { expression: '[innerWidth/2, innerHeight/2]', returnByValue: true });
   const [x, y] = result.result.value;
@@ -92,7 +114,7 @@ if (cmd === 'key') {
   const { result } = await send('Runtime.evaluate', { expression: a, returnByValue: true, awaitPromise: true });
   console.log(JSON.stringify(result.result?.value ?? result.exceptionDetails?.exception?.description ?? result, null, 2));
 } else {
-  console.log('usage: cdp-input.mjs key <Code> | click <x> <y> | move <x> <y> | wheel <dy> | drag <dx> <dy> | ldrag <x> <y> <dx> <dy> | eval <expr>');
+  console.log('usage: cdp-input.mjs key <Code> | click <x> <y> | altclick <x> <y> | move <x> <y> | wheel <dy> [x y] | drag <dx> <dy> | ldrag <x> <y> <dx> <dy> | eval <expr>');
 }
 ws.close();
 process.exit(0);

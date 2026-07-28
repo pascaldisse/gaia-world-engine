@@ -43,7 +43,7 @@
     "reveal": 0,
     "subtitleText": null,
     "file": "proof/fold-framecheck/0550-55s.png",
-    "bytes": 13153
+    "bytes": 21092
   },
   {
     "t": 79.7,
@@ -66,7 +66,7 @@
     "reveal": 0,
     "subtitleText": null,
     "file": "proof/fold-framecheck/0797-79_7s.png",
-    "bytes": 25518
+    "bytes": 28784
   },
   {
     "t": 108.9,
@@ -89,7 +89,7 @@
     "reveal": 0.028,
     "subtitleText": null,
     "file": "proof/fold-framecheck/1089-108_9s.png",
-    "bytes": 66496
+    "bytes": 66622
   },
   {
     "t": 135.8,
@@ -112,7 +112,7 @@
     "reveal": 0.675,
     "subtitleText": null,
     "file": "proof/fold-framecheck/1358-135_8s.png",
-    "bytes": 36109
+    "bytes": 36226
   },
   {
     "t": 180.8,
@@ -135,7 +135,7 @@
     "reveal": 1,
     "subtitleText": null,
     "file": "proof/fold-framecheck/1808-180_8s.png",
-    "bytes": 62290
+    "bytes": 62763
   },
   {
     "t": 236.3,
@@ -158,7 +158,7 @@
     "reveal": 1,
     "subtitleText": null,
     "file": "proof/fold-framecheck/2363-236_3s.png",
-    "bytes": 5913
+    "bytes": 5948
   },
   {
     "t": 258,
@@ -181,7 +181,7 @@
     "reveal": 1,
     "subtitleText": null,
     "file": "proof/fold-framecheck/2580-258s.png",
-    "bytes": 35688
+    "bytes": 35910
   },
   {
     "t": 270,
@@ -204,7 +204,7 @@
     "reveal": 1,
     "subtitleText": null,
     "file": "proof/fold-framecheck/2700-270s.png",
-    "bytes": 18810
+    "bytes": 18796
   },
   {
     "t": 285,
@@ -227,6 +227,6 @@
     "reveal": 1,
     "subtitleText": null,
     "file": "proof/fold-framecheck/2850-285s.png",
-    "bytes": 190486
+    "bytes": 190539
   }
 ]

@@ -714,6 +714,10 @@
          and independent of main.js (it waits for gaia.atlasStrategy to come up),
          so the boot order is the plugin's own business. ?intro=off disables it. -->
     <script type="module" src="/plugins/atlas-intro.js"></script>
+    <!-- ONBOARDING (2026-07-28): account creation on a first view, login on
+         return — hooks into atlas-intro.js's handover()/showMenu() (see that
+         file's ONBOARDING comments). ?onboarding=off disables it. -->
+    <script type="module" src="/plugins/atlas-onboarding.js"></script>
     <!-- the director's scrubber: a key listener and nothing else until the
          secret key (` / F9) summons it — no DOM, no hint, not in a recording -->
     <script type="module" src="/plugins/atlas-scrubber.js"></script>

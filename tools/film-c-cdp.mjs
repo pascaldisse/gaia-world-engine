@@ -46,25 +46,66 @@ async function connect() {
 }
 
 const { ws, send } = await connect();
-const evalIn = async (expr, ms = DEADLINE) => {
+async function evalIn(expr, ms = DEADLINE) {
   const msg = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }, ms);
   const r = msg.result?.result;
   if (msg.result?.exceptionDetails) throw new Error(`page threw: ${JSON.stringify(msg.result.exceptionDetails.exception?.description ?? msg.result.exceptionDetails)}`);
   return r?.value;
-};
+}
+// PAGE-SIDE CAPTURE. Page.captureScreenshot waits for the compositor to hand
+// over a fresh frame; with four software-WebGPU chromiums on one machine that
+// wait is minutes, and it times out. The recorder plugin already proves the
+// honest way to get the picture: inside a rAF the WebGL drawing buffer is
+// still intact, so drawImage(canvas) into a 2D canvas and read THAT. Same
+// pixels, no compositor round trip. Set SHOT_MODE=cdp to force the old path.
+const PAGE_SHOT = `(() => new Promise((res) => {
+  const gl = document.querySelector('canvas');
+  if (!gl) return res(null);
+  requestAnimationFrame(() => {
+    try {
+      const k = ${Number(process.env.SHOT_SCALE ?? 1)};
+      const c = document.createElement('canvas');
+      c.width = Math.round(gl.width * k); c.height = Math.round(gl.height * k);
+      const x = c.getContext('2d');
+      x.drawImage(gl, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/png').slice(22));
+    } catch (e) { res('ERR:' + e.message); }
+  });
+}))()`;
+
 const shoot = async (file) => {
-  const msg = await send('Page.captureScreenshot', { format: 'png' }, DEADLINE);
-  if (!msg.result?.data) throw new Error('no screenshot data');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, Buffer.from(msg.result.data, 'base64'));
+  if (process.env.SHOT_MODE === 'cdp') {
+    const msg = await send('Page.captureScreenshot', { format: 'png' }, DEADLINE);
+    if (!msg.result?.data) throw new Error('no screenshot data');
+    fs.writeFileSync(file, Buffer.from(msg.result.data, 'base64'));
+    return fs.statSync(file).size;
+  }
+  const data = await evalIn(PAGE_SHOT, DEADLINE);
+  if (!data || String(data).startsWith('ERR:')) throw new Error(`page shot failed: ${data}`);
+  fs.writeFileSync(file, Buffer.from(String(data), 'base64'));
   return fs.statSync(file).size;
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const [, , cmd, a, b, c, d] = process.argv;
+// THE FRAME BUDGET IS THE LANE'S REAL CONSTRAINT. Four lanes share one
+// machine and this browser has no hardware WebGPU adapter: at 1600×900 a frame
+// costs 4 SECONDS (measured, cosmos.measureFps), which makes a 2fps real-time
+// capture physically impossible. The picture is resolution-bound, not
+// logic-bound, so the viewport is shrunk for motion windows (the choreography
+// is what is being proved) and opened back up for hero stills.
+const viewport = async (w, h) => {
+  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false }, DEADLINE);
+  await sleep(500);
+  return evalIn('(()=>{const c=document.querySelector("canvas");return c?`${c.width}x${c.height}`:"no canvas";})()');
+};
+
+const [, , cmd, a, b, c, d, e] = process.argv;
 try {
   if (cmd === 'eval') {
     console.log(await evalIn(a));
+  } else if (cmd === 'viewport') {
+    console.log(await viewport(Number(a), Number(b)));
   } else if (cmd === 'shot') {
     console.log(`${a} (${await shoot(a)} bytes)`);
   } else if (cmd === 'seek') {
@@ -73,25 +114,33 @@ try {
     await sleep(600);
     console.log(`${b} (${await shoot(b)} bytes)`);
   } else if (cmd === 'shots') {
+    // WINDOWED CAPTURE. The film clock is the director's own (audio:false →
+    // virtual += dt·speed), so `speed` is the only honest way to sample motion
+    // on a machine where one frame costs seconds: at speed 0.2 a 25s window
+    // renders ~25 plates one film-second apart, and every plate is LABELLED
+    // with the film time it was actually taken at. Nothing about the picture
+    // changes — every effect in atlas-fx-rites is f(t), not an integration.
     const dir = a;
     const t0 = Number(b);
     const t1 = Number(c);
-    const fps = Number(d ?? 2);
+    const speed = Number(d ?? 0.2);
+    if (e) { const [w, h] = e.split('x').map(Number); console.log(`viewport ${await viewport(w, h)}`); }
     fs.mkdirSync(dir, { recursive: true });
-    // roll REAL TIME from t0: audio:false gives the virtual clock at speed 1,
-    // which is the same picture the scored take shows, minus the sound
-    await evalIn(`(async()=>{gaia.director.stop({restore:false});const r=await gaia.director.play({record:false,audio:false,speed:1,from:${t0},subtitles:true});return JSON.stringify(r);})()`);
-    const step = 1000 / fps;
+    await evalIn(`(async()=>{try{gaia.director.stop({restore:false});}catch(err){}
+      const r=await gaia.director.play({record:false,audio:false,speed:${speed},from:${t0},subtitles:true});
+      return JSON.stringify(r);})()`, 240000);
     let shots = 0;
+    let last = -1;
     for (;;) {
-      const st = await evalIn('JSON.stringify(gaia.director.status())');
-      const s = JSON.parse(st);
-      if (s.t >= t1 || !s.playing) break;
-      const name = `${dir}/t${s.t.toFixed(2).replace('.', '_')}.png`;
+      const s0 = JSON.parse(await evalIn('JSON.stringify(gaia.director.status())'));
+      const fx = await evalIn('JSON.stringify(gaia.fxRites?.status?.()??null)');
+      if (s0.t >= t1 || !s0.playing) break;
+      const name = `${dir}/t${s0.t.toFixed(2).replace('.', '_')}.png`;
       const bytes = await shoot(name);
       shots += 1;
-      console.log(`${s.t.toFixed(2)} ${s.scene} forged:${s.forged} reveal:${s.reveal} ${path.basename(name)} ${bytes}b`);
-      await sleep(step);
+      const f = JSON.parse(fx) ?? {};
+      console.log(`${s0.t.toFixed(2)} ${s0.scene} fx[e${f.ember ?? '-'} s${f.streak ?? '-'} h${f.shell ?? '-'}] forged:${s0.forged} rev:${s0.reveal} ${bytes}b${last >= 0 ? ` Δt=${(s0.t - last).toFixed(2)}` : ''}`);
+      last = s0.t;
     }
     await evalIn('JSON.stringify(gaia.director.stop({restore:false}))');
     console.log(`captured ${shots} plates → ${dir}`);

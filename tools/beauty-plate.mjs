@@ -100,8 +100,8 @@ for (const t of times) {
   const row = { ...info, file, bytes };
   if (wantFps) {
     row.perf = await evaluate(`(async () => {
-      const s = window.gaia?.state ?? window.D?.s;
-      const r = s?.renderer;
+      const r = window.gaia.view.renderer; // the ONLY renderer handle that
+      // exists on the page (gaia.state does not; drawCalls came back null once)
       const dt = [];
       await new Promise((done) => {
         let last = performance.now(), n = 0;

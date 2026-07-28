@@ -12,6 +12,8 @@ import fs from 'node:fs';
 import { connectTimed } from './fold-framecheck3-lib.mjs';
 
 const OUT = process.env.OUT ?? 'proof/fold-framecheck';
+const CLIENT_PORT = process.env.GAIA_CLIENT_PORT ?? '5221';
+const BASE = `http://localhost:${CLIENT_PORT}`;
 const TIMES = (process.env.TIMES ?? '10,55,79.7,108.9,135.8,180.8,236.3,258,270,285')
   .split(',').map(Number);
 fs.mkdirSync(OUT, { recursive: true });
@@ -19,6 +21,26 @@ fs.mkdirSync(OUT, { recursive: true });
 const c = await connectTimed();
 const rows = [];
 try {
+  // navigate to the plates entry point (?intro=off: no title/gate overlay,
+  // &mute=1: audio element muted at the source) — atlas-director.js is still
+  // imported unconditionally by atlas-intro.js's boot chain even with
+  // intro=off (only boot() itself early-returns on the param), so it still
+  // races main.js's late fresh `window.gaia = {...}` and gets wiped the same
+  // way documented in fold-framecheck3-surfaces.mjs. Re-import it ourselves
+  // (cache-busted, merge-style self-registration) once the kernel is up, and
+  // expose window.D / window.__filmB the way the older film-b-plates.mjs
+  // driver expected them (D = the raw Director instance; __filmB = the
+  // module namespace, for its named export sampleCamera()).
+  await c.send('Page.navigate', { url: `${BASE}/?intro=off&mute=1` }, 15000);
+  await c.waitFor(`return !!(window.gaia?.atlasStrategy?.active);`, { timeoutMs: 60000 });
+  await c.evaluate(`(async () => {
+    const mod = await import('/plugins/atlas-director.js?fc=' + Date.now());
+    window.gaia.director = mod.default;
+    window.__filmB = mod;
+    window.D = mod.default.director;
+  })()`, { ms: 20000 });
+  await c.waitFor(`return !!(window.D && window.__filmB && window.gaia?.atlasStrategy?.cosmos?.ready);`, { timeoutMs: 30000 });
+
   for (const t of TIMES) {
     const info = await c.evaluate(`(async () => {
       const D = window.D;

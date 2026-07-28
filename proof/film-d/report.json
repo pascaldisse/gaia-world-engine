@@ -1,7 +1,7 @@
 {
-  "when": "2026-07-28T16:37:15.672Z",
-  "pass": 68,
-  "total": 68,
+  "when": "2026-07-28T16:39:32.297Z",
+  "pass": 51,
+  "total": 51,
   "results": [
     {
       "name": "dry: page + atlas + director + scrubber loaded",
@@ -31,7 +31,7 @@
     {
       "name": "dry: ` opens the scrubber",
       "ok": true,
-      "detail": "t=0.67 chapter=void"
+      "detail": "t=0.85 chapter=void"
     },
     {
       "name": "dry: the engine debug panel did NOT toggle with it",
@@ -56,12 +56,12 @@
     {
       "name": "stamps: head readout AND cursor badge print t= copy-exact to director.status().t",
       "ok": true,
-      "detail": "readout=\"0:00.7 · t=0.75 / 4:53.4 · t=293.44\" badge=\"0:00.7 · t=0.75\" status.t=0.75"
+      "detail": "readout=\"0:00.9 · t=0.98 / 4:53.4 · t=293.44\" badge=\"0:00.9 · t=0.98\" status.t=0.98"
     },
     {
       "name": "stamps: the readout is mm:ss.s PLUS raw seconds",
       "ok": true,
-      "detail": "0:00.7 · t=0.75 / 4:53.4 · t=293.44"
+      "detail": "0:00.9 · t=0.98 / 4:53.4 · t=293.44"
     },
     {
       "name": "stamps: hovering the bar prints the timestamp under the pointer",
@@ -96,12 +96,12 @@
     {
       "name": "dry: seek → split @ 106.3s lands on the chapter",
       "ok": true,
-      "detail": "t=106.53 chapter=split ui=\"split t0=103.32\""
+      "detail": "t=106.51 chapter=split ui=\"split t0=103.32\""
     },
     {
       "name": "dry: split · every earlier scene was entered (world state is exact)",
       "ok": true,
-      "detail": "missing=[] reveal=0.004 forged=10 rite=dream"
+      "detail": "missing=[] reveal=0.004 forged=9 rite=dream"
     },
     {
       "name": "dry: split · subtitle cue at that second",
@@ -116,12 +116,12 @@
     {
       "name": "stamps: split · readout = the EXACT landed t (post-seek), target chip cleared",
       "ok": true,
-      "detail": "status.t=106.56 readout=\"1:46.5 · t=106.56 / 4:53.4 · t=293.44\" target=null"
+      "detail": "status.t=106.55 readout=\"1:46.5 · t=106.55 / 4:53.4 · t=293.44\" target=null"
     },
     {
       "name": "dry: seek → covenants @ 164.8s lands on the chapter",
       "ok": true,
-      "detail": "t=164.92 chapter=covenants ui=\"covenants t0=161.76\""
+      "detail": "t=165.03 chapter=covenants ui=\"covenants t0=161.76\""
     },
     {
       "name": "dry: covenants · every earlier scene was entered (world state is exact)",
@@ -141,17 +141,17 @@
     {
       "name": "stamps: covenants · readout = the EXACT landed t (post-seek), target chip cleared",
       "ok": true,
-      "detail": "status.t=164.94 readout=\"2:44.9 · t=164.94 / 4:53.4 · t=293.44\" target=null"
+      "detail": "status.t=165.06 readout=\"2:45.0 · t=165.06 / 4:53.4 · t=293.44\" target=null"
     },
     {
       "name": "dry: seek → descent @ 230.8s lands on the chapter",
       "ok": true,
-      "detail": "t=230.94 chapter=descent ui=\"descent t0=227.78\""
+      "detail": "t=230.93 chapter=descent ui=\"descent t0=227.78\""
     },
     {
       "name": "dry: descent · every earlier scene was entered (world state is exact)",
       "ok": true,
-      "detail": "missing=[] reveal=1 forged=20 rite=dream"
+      "detail": "missing=[] reveal=1 forged=18 rite=dream"
     },
     {
       "name": "dry: descent · subtitle cue at that second",
@@ -161,17 +161,17 @@
     {
       "name": "dry: descent · the scripted camera is writing (not released)",
       "ok": true,
-      "detail": "goal=[31.1,72,142.7]"
+      "detail": "goal=[31.2,73.6,142.9]"
     },
     {
       "name": "stamps: descent · readout = the EXACT landed t (post-seek), target chip cleared",
       "ok": true,
-      "detail": "status.t=230.97 readout=\"3:50.9 · t=230.97 / 4:53.4 · t=293.44\" target=null"
+      "detail": "status.t=230.96 readout=\"3:50.9 · t=230.96 / 4:53.4 · t=293.44\" target=null"
     },
     {
       "name": "dry: seek → altar @ 247.0s lands on the chapter",
       "ok": true,
-      "detail": "t=247.15 chapter=altar ui=\"altar t0=244.00\""
+      "detail": "t=247.16 chapter=altar ui=\"altar t0=244.00\""
     },
     {
       "name": "dry: altar · every earlier scene was entered (world state is exact)",
@@ -186,37 +186,37 @@
     {
       "name": "dry: altar · the scripted camera is writing (not released)",
       "ok": true,
-      "detail": "goal=[0,-1279.3,0]"
+      "detail": "goal=[0,-1279.4,0]"
     },
     {
       "name": "stamps: altar · readout = the EXACT landed t (post-seek), target chip cleared",
       "ok": true,
-      "detail": "status.t=247.18 readout=\"4:07.1 · t=247.18 / 4:53.4 · t=293.44\" target=null"
+      "detail": "status.t=247.19 readout=\"4:07.1 · t=247.19 / 4:53.4 · t=293.44\" target=null"
     },
     {
       "name": "dry: → is +5s",
       "ok": true,
-      "detail": "247.30 → 252.57"
+      "detail": "247.32 → 252.59"
     },
     {
       "name": "dry: ← is −5s",
       "ok": true,
-      "detail": "252.57 → 247.84"
+      "detail": "252.59 → 247.86"
     },
     {
       "name": "dry: ⇧→ jumps to the next chapter t0",
       "ok": true,
-      "detail": "247.84 → 268.26 (home @ 268)"
+      "detail": "247.86 → 268.25 (home @ 268)"
     },
     {
       "name": "dry: ⇧← jumps to the previous chapter t0",
       "ok": true,
-      "detail": "268.26 → 244.26 (altar @ 244)"
+      "detail": "268.25 → 244.25 (altar @ 244)"
     },
     {
       "name": "dry: space pauses and the clock STOPS",
       "ok": true,
-      "detail": "t held at 244.28"
+      "detail": "t held at 244.27"
     },
     {
       "name": "dry: pause-scrub keeps it paused at the new time",
@@ -226,12 +226,12 @@
     {
       "name": "dry: space resumes FROM the scrubbed point",
       "ok": true,
-      "detail": "{\"playing\":true,\"t\":161.03}"
+      "detail": "{\"playing\":true,\"t\":161.02}"
     },
     {
       "name": "dry: drag lands where the hand let go",
       "ok": true,
-      "detail": "t=182.08 target=181.93"
+      "detail": "t=182.09 target=181.93"
     },
     {
       "name": "dry: a drag resumes what it interrupted",
@@ -241,7 +241,7 @@
     {
       "name": "dry: the handover still fires on the music after a scrub",
       "ok": true,
-      "detail": "{\"at\":288.60809999999407,\"released\":true,\"handedOver\":true}"
+      "detail": "{\"at\":288.6285000000001,\"released\":true,\"handedOver\":true}"
     },
     {
       "name": "dry: scrubbing back re-enters film state (camera re-taken)",
@@ -257,91 +257,6 @@
       "name": "dry: F9 is the same secret key",
       "ok": true,
       "detail": ""
-    },
-    {
-      "name": "live: first-visit title screen is up and ready",
-      "ok": true,
-      "detail": ""
-    },
-    {
-      "name": "live: the proof browser is SILENT (element muted, gains at 0)",
-      "ok": true,
-      "detail": "{\"elMuted\":true,\"music\":0,\"voice\":0}"
-    },
-    {
-      "name": "live: the film rolls with real audio",
-      "ok": true,
-      "detail": "ctx=running audioT=3.11 t=3.1"
-    },
-    {
-      "name": "live: the secret key works mid-film",
-      "ok": true,
-      "detail": ""
-    },
-    {
-      "name": "live: A/V lock after a seek to 64.5s (muted — currentTime still runs)",
-      "ok": true,
-      "detail": "t=65.21 el.currentTime=65.21 playing=true chapter=candle elMuted=true"
-    },
-    {
-      "name": "live: A/V lock after a seek to 110s (muted — currentTime still runs)",
-      "ok": true,
-      "detail": "t=110.76 el.currentTime=110.76 playing=true chapter=split elMuted=true"
-    },
-    {
-      "name": "live: A/V lock after a seek to 165s (muted — currentTime still runs)",
-      "ok": true,
-      "detail": "t=165.71 el.currentTime=165.71 playing=true chapter=covenants elMuted=true"
-    },
-    {
-      "name": "live: A/V lock after a seek to 230s (muted — currentTime still runs)",
-      "ok": true,
-      "detail": "t=230.71 el.currentTime=230.71 playing=true chapter=descent elMuted=true"
-    },
-    {
-      "name": "live: A/V lock after a seek to 250s (muted — currentTime still runs)",
-      "ok": true,
-      "detail": "t=250.71 el.currentTime=250.71 playing=true chapter=altar elMuted=true"
-    },
-    {
-      "name": "live: the director keeps reading el.currentTime, not a virtual clock",
-      "ok": true,
-      "detail": "t 250.81→252.31 el 250.81→252.32"
-    },
-    {
-      "name": "live: esc closes the scrubber and does NOT shadow the intro",
-      "ok": true,
-      "detail": "intro playing → playing"
-    },
-    {
-      "name": "live: with the scrubber closed, esc is the intro skip again",
-      "ok": true,
-      "detail": "intro=done"
-    },
-    {
-      "name": "live: the handover fires from a scrubbed clock",
-      "ok": true,
-      "detail": "intro=handover released=true"
-    },
-    {
-      "name": "live: the intro completed its restore (stage torn down, camera the visitor’s)",
-      "ok": true,
-      "detail": "{\"stage\":false,\"released\":true,\"intro\":\"done\",\"cinematic\":false,\"open\":true}"
-    },
-    {
-      "name": "live: scrubbing back after a completed handover re-enters film state",
-      "ok": true,
-      "detail": "{\"t\":151.37,\"audioT\":151.37,\"stage\":true,\"released\":false,\"playing\":true,\"gain\":0.9,\"elMuted\":true,\"cinematic\":false,\"chapter\":\"name\",\"entered\":8}"
-    },
-    {
-      "name": "live: resume re-arms the mix the handover had faded out",
-      "ok": true,
-      "detail": "musicGain=0.9 elMuted=true"
-    },
-    {
-      "name": "live: closing the scrubber restores the chrome it re-asserted",
-      "ok": true,
-      "detail": "cinematic false → false"
     }
   ]
 }

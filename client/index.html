@@ -710,5 +710,9 @@
       <p id="overlay-keys">WASD move &middot; mouse look &middot; shift run &middot; E grab &middot; M mute &middot; Tab create &middot; G game mode &middot; esc release</p>
     </div>
     <script type="module" src="/main.js"></script>
+    <!-- THE OPENING: gate → title → live cinematic → handover. Self-registering
+         and independent of main.js (it waits for gaia.atlasStrategy to come up),
+         so the boot order is the plugin's own business. ?intro=off disables it. -->
+    <script type="module" src="/plugins/atlas-intro.js"></script>
   </body>
 </html>

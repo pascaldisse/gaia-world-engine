@@ -1,0 +1,232 @@
+[
+  {
+    "t": 10,
+    "scene": "void",
+    "rite": "dream",
+    "tgt": [
+      280,
+      -504,
+      -36
+    ],
+    "dist": 901,
+    "yaw": 0.29,
+    "pitch": 0.11,
+    "eye": [
+      208,
+      295,
+      321
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/0100-10s.png",
+    "bytes": 6580
+  },
+  {
+    "t": 55,
+    "scene": "deep",
+    "rite": "dream",
+    "tgt": [
+      190,
+      -401,
+      -103
+    ],
+    "dist": 620,
+    "yaw": 0.7,
+    "pitch": 0.139,
+    "eye": [
+      538,
+      -405,
+      821
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/0550-55s.png",
+    "bytes": 13153
+  },
+  {
+    "t": 79.7,
+    "scene": "candle",
+    "rite": "dream",
+    "tgt": [
+      162,
+      -368,
+      -125
+    ],
+    "dist": 300,
+    "yaw": 0.86,
+    "pitch": 0.13,
+    "eye": [
+      584,
+      -315,
+      368
+    ],
+    "forged": 1,
+    "reveal": 0,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/0797-79_7s.png",
+    "bytes": 25518
+  },
+  {
+    "t": 108.9,
+    "scene": "split",
+    "rite": "dream",
+    "tgt": [
+      163,
+      -364,
+      -127
+    ],
+    "dist": 406,
+    "yaw": 1.28,
+    "pitch": 0.136,
+    "eye": [
+      387,
+      -329,
+      69
+    ],
+    "forged": 2,
+    "reveal": 0.028,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/1089-108_9s.png",
+    "bytes": 66496
+  },
+  {
+    "t": 135.8,
+    "scene": "sparks",
+    "rite": "dream",
+    "tgt": [
+      107,
+      -236,
+      -237
+    ],
+    "dist": 620,
+    "yaw": 2.7,
+    "pitch": 0.23,
+    "eye": [
+      548,
+      -309,
+      -12
+    ],
+    "forged": 4,
+    "reveal": 0.675,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/1358-135_8s.png",
+    "bytes": 36109
+  },
+  {
+    "t": 180.8,
+    "scene": "watchers",
+    "rite": "covenants",
+    "tgt": [
+      -71,
+      228,
+      -34
+    ],
+    "dist": 775,
+    "yaw": 4.97,
+    "pitch": 0.328,
+    "eye": [
+      367,
+      -95,
+      -781
+    ],
+    "forged": 8,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/1808-180_8s.png",
+    "bytes": 62290
+  },
+  {
+    "t": 236.3,
+    "scene": "descent",
+    "rite": "dream",
+    "tgt": [
+      122,
+      -877,
+      -93
+    ],
+    "dist": 504,
+    "yaw": 7.51,
+    "pitch": 0.422,
+    "eye": [
+      -780,
+      477,
+      154
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/2363-236_3s.png",
+    "bytes": 5913
+  },
+  {
+    "t": 258,
+    "scene": "altar",
+    "rite": "dream",
+    "tgt": [
+      0,
+      -1216,
+      0
+    ],
+    "dist": 282,
+    "yaw": 8.34,
+    "pitch": 0.14,
+    "eye": [
+      556,
+      -670,
+      61
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/2580-258s.png",
+    "bytes": 35688
+  },
+  {
+    "t": 270,
+    "scene": "home",
+    "rite": "dream",
+    "tgt": [
+      -2,
+      -1197,
+      -1
+    ],
+    "dist": 447,
+    "yaw": 8.8,
+    "pitch": 0.435,
+    "eye": [
+      247,
+      -1177,
+      -130
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/2700-270s.png",
+    "bytes": 18810
+  },
+  {
+    "t": 285,
+    "scene": "home",
+    "rite": "dream",
+    "tgt": [
+      16,
+      98,
+      14
+    ],
+    "dist": 587,
+    "yaw": 9.29,
+    "pitch": -0.504,
+    "eye": [
+      235,
+      -1009,
+      -330
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": "proof/fold-framecheck/2850-285s.png",
+    "bytes": 190486
+  }
+]

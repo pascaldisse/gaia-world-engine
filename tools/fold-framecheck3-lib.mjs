@@ -22,8 +22,19 @@ export async function connectTimed() {
   }
 
   async function evaluate(expression, { ms = 10000, awaitPromise = true } = {}) {
-    // scripts write `return x;` bodies — wrap in an IIFE (bare return is illegal at top level)
-    const wrapped = /\breturn\b/.test(expression) ? `(()=>{ ${expression} })()` : expression;
+    // scripts write `return x;` bodies — wrap in an IIFE (bare return is illegal at top level).
+    // BUT: an expression that is ALREADY a self-invoking function (callers
+    // that hand-roll their own `(async () => { ... return x; })()` for a
+    // top-level `await`, e.g. the plates driver's per-frame data collector)
+    // must NOT be wrapped again — the naive /return/ test matches the word
+    // anywhere in the string, including nested inside that already-complete
+    // IIFE, and double-wrapping deposits it as a bare fire-and-forget
+    // statement in a new outer block with no return of its own, silently
+    // discarding the resolved value (evaluate() comes back undefined even
+    // though the script ran fine) — proof this lane, fold-framecheck3-plates.
+    const trimmed = expression.trim();
+    const alreadyInvoked = /^\(\s*(async\s*)?(\(|function|\w+\s*=>)/.test(trimmed) && /\)\s*\(\s*\)\s*;?\s*$/.test(trimmed);
+    const wrapped = !alreadyInvoked && /\breturn\b/.test(expression) ? `(()=>{ ${expression} })()` : expression;
     const msg = await sendT('Runtime.evaluate', { expression: wrapped, returnByValue: true, awaitPromise }, ms);
     if (msg.result?.exceptionDetails) {
       throw new Error(msg.result.exceptionDetails.exception?.description ?? msg.result.exceptionDetails.text ?? 'eval failed');

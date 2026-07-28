@@ -31,6 +31,7 @@ const KEYS = {
   KeyD: { key: 'd', code: 'KeyD', keyCode: 68, text: 'd' },
   KeyM: { key: 'm', code: 'KeyM', keyCode: 77, text: 'm' },
   Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
+  Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
   Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
   // range-input keys: the honest way to set a slider to an exact value
   ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },

@@ -46,7 +46,7 @@ const MATERIAL_FIELDS = [
   'norm', 'seed', 'arms', 'thick', 'warp', 'warpScale', 'skew', 'octaves', 'rough', 'freq',
   'gain', 'floor', 'lane', 'laneScale', 'laneSoft', 'laneOctaves', 'laneCut', 'laneOnly',
   'facing', 'far', 'farMean', 'farGain', 'edge', 'accent', 'accentMix', 'accent2', 'accent2Mix',
-  'warm', 'mode', 'hole', 'spin', 'squash', 'armCount', 'armSharp', 'armFloor', 'lopsided', 'coreFall',
+  'warm', 'mode', 'hole', 'spin', 'squash', 'armCount', 'armSharp', 'armFloor', 'lopsided', 'coreFall', 'hot', 'hotColor', 'hotFall', 'near', 'rimEnd', 'laneNeed', 'laneNeedSoft',
 ];
 
 function recipeKey(part, fields) {

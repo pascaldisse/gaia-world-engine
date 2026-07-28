@@ -1,0 +1,2 @@
+{"tag":"s4","at":"galaxy:0","dist":150,"file":"proof/beauty/universe/probe/s4-d150.png","bytes":254925,"perf":{"fps":50.5,"p95":23.6,"worst":19.8,"drawCalls":174,"triangles":665357,"pixelRatio":2,"adapter":"apple/common-3","errs":[]}}
+{"tag":"s4","at":"galaxy:0","dist":42,"file":"proof/beauty/universe/probe/s4-d42.png","bytes":891731,"perf":{"fps":12.9,"p95":6,"worst":5.7,"drawCalls":179,"triangles":673633,"pixelRatio":2,"adapter":"apple/common-3","errs":[]}}

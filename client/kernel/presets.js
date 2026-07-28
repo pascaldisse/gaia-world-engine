@@ -237,32 +237,40 @@ export function makePresetMaterial(part) {
         const armC = part.armCount ?? 2;
         let armF = cos(th.mul(armC)).mul(0.5).add(0.5);
         armF = armF.mul(cos(th).mul(part.lopsided ?? 0.34).add(1));
-        armF = pow(saturate(armF), part.armSharp ?? 1.7);
+        armF = pow(saturate(armF), part.armSharp ?? 1.35);
         // the arms never go fully dark: `armFloor` is the inter-arm haze that
         // keeps a galaxy from reading as a pinwheel decal.
-        armF = armF.mul(1 - (part.armFloor ?? 0.3)).add(part.armFloor ?? 0.3);
+        armF = armF.mul(1 - (part.armFloor ?? 0.24)).add(part.armFloor ?? 0.24);
         // radial mass: bright at the core, gone by the quad's rim (which MUST
         // reach zero or the frame shows a rectangle).
-        const mass = exp(rs.mul(rs).mul(-(part.coreFall ?? 2.6)));
-        const rim = pow(smoothstep(part.hole ?? 0.0, 1.0, length(cu)).oneMinus(), part.facing ?? 1.5);
+        const mass = exp(rs.mul(rs).mul(-(part.coreFall ?? 0.5)));
+        // The quad's alpha must reach zero WELL INSIDE its own rectangle, not
+        // at the edge: reaching zero exactly at |cu|=1 still showed faint box
+        // edges where the corners (|cu| up to 1.41) met the void (probe
+        // b1-d150). rimEnd 0.8 leaves a margin no framing can find.
+        const rim = pow(smoothstep(part.hole ?? 0.0, part.rimEnd ?? 0.8, length(cu)).oneMinus(), part.facing ?? 1.5);
 
         // ── the cloud field ───────────────────────────────────────────────
         // 4 octaves is the whole per-fragment budget for one fbm (bible §3);
         // at 6 the wide plate cost ~9 fps for detail no distance resolved.
-        const oct = Math.max(1, Math.min(4, Math.round(part.octaves ?? (lanesMode ? 3 : 4))));
+        // The LANE layer needs shape, not detail: dropping it from 2 octaves to 1
+        // (and its ridge field likewise) bought ~7 fps at the close framing for
+        // no visible loss, because the lanes are already a threshold of a
+        // coarse field. The glow layer keeps 3.
+        const oct = Math.max(1, Math.min(4, Math.round(part.octaves ?? (lanesMode ? 1 : 3))));
         const q = w.mul(part.freq ?? 2.2).add(seed);
         const field = mx_fractal_noise_float(q, oct, 2, part.rough ?? 0.55).mul(0.5).add(0.5);
         // A vacuum FLOOR separates cloud from haze: without it every fragment
         // carries some density and the whole thing reads as one soft ball.
-        const floorK = part.floor ?? 0.3;
-        let dens = max(field.sub(floorK), 0).mul(part.gain ?? 2.6).mul(armF).mul(mass);
+        const floorK = part.floor ?? 0.28;
+        let dens = max(field.sub(floorK), 0).mul(part.gain ?? 3.4).mul(armF).mul(mass);
         // DUST LANES: a ridged second field (|noise| inverted = sharp crest
         // lines) at a coarser scale and a different offset. Correlating them
         // with the cloud field itself is free but put every lane exactly on a
         // crest and read as banding, so the offset is not optional.
-        const lOct = Math.max(1, Math.min(4, Math.round(part.laneOctaves ?? 2)));
+        const lOct = Math.max(1, Math.min(4, Math.round(part.laneOctaves ?? (lanesMode ? 1 : 2))));
         const ridge = mx_fractal_noise_float(w.mul(part.laneScale ?? 1.5).add(7.7 + seed), lOct, 2, 0.6).abs().oneMinus();
-        const lane = smoothstep(part.lane ?? 0.66, (part.lane ?? 0.66) + (part.laneSoft ?? 0.2), ridge);
+        const lane = smoothstep(part.lane ?? 0.62, (part.lane ?? 0.62) + (part.laneSoft ?? 0.2), ridge);
         // DEPTH GRADE, no extra noise: far away the same field is flattened
         // toward its mean (soft mass), near it keeps full contrast (structure).
         // Cross-fading ONE field is why there is no pop — two different fields
@@ -276,7 +284,11 @@ export function makePresetMaterial(part) {
         if (lanesMode) {
           // the occluder: dark only where a lane crosses cloud that HAS
           // density, so lanes never hang in empty sky as a black web.
-          const a = lane.mul(saturate(dens.mul(part.laneOnly ?? 2.2))).mul(rim).mul(part.opacity ?? 0.8);
+          // A lane must REQUIRE cloud under it. saturate(dens * k) let the
+          // far-distance density floor paint a dark rectangle over open sky
+          // around every galaxy (probe b1/b2); a threshold does not.
+          const need = part.laneNeed ?? 0.2;
+          const a = smoothstep(need, need + (part.laneNeedSoft ?? 0.18), dens).mul(lane).mul(rim).mul(part.opacity ?? 0.8);
           material.colorNode = mix(color(part.color ?? '#080610'), color(part.warm ?? '#241206'), n1.mul(0.5).add(0.5));
           material.opacityNode = saturate(a);
           material.transparent = true;
@@ -292,18 +304,31 @@ export function makePresetMaterial(part) {
         // cloud carries three temperatures. Uniform hue was the puff tell.
         const acc = n1.mul(0.5).add(0.5);
         let col = mix(color(part.color ?? '#a8c6ff'), color(part.edge ?? '#2b1c56'), smoothstep(0.05, 0.9, rs));
+        // THE HOT CORE. A galaxy's centre is white-hot and unresolved. Without
+        // this the core had to be carried by a big emissive SPHERE, and at mid
+        // distance that sphere read as a shaded MOON with a terminator across
+        // it (probe s4-d150). The cloud carries the core instead, so the solid
+        // sphere can shrink out of the way.
+        col = mix(col, color(part.hotColor ?? '#fff6e8'), exp(rs.mul(rs).mul(-(part.hotFall ?? 6.5))).mul(part.hot ?? 0.9));
         col = mix(col, color(part.accent ?? '#ff6ad5'), smoothstep(0.58, 0.95, acc).mul(part.accentMix ?? 0.8));
         // NOT smoothstep(0.4, 0.05, acc): WGSL rejects an inverted edge pair
         // outright ("low not less than high") and that fails the WHOLE
         // pipeline silently — the cloud drew zero pixels and only Dawn's log
         // said why. Invert the RESULT instead.
         col = mix(col, color(part.accent2 ?? '#7fe6d2'), smoothstep(0.05, 0.42, acc).oneMinus().mul(part.accent2Mix ?? 0.5));
-        const a = saturate(dens).mul(rim).mul(part.opacity ?? 0.7);
+        // NEAR FADE. A cloud you are INSIDE is fog, not a cloud: at close range
+        // the quad covers the frame and washes it flat (the same law the fx
+        // layer learned with its universe-scale shells). Fading it out below
+        // `near` keeps the approach honest AND is why the close plate is not a
+        // lavender wall.
+        const [near0, near1] = part.near ?? [40, 160];
+        const nearK = near1 > near0 ? smoothstep(near0, near1, dist) : float(1);
+        const a = saturate(dens).mul(rim).mul(nearK).mul(part.opacity ?? 0.95);
         // colorNode is NOT pre-multiplied by alpha: THREE.AdditiveBlending
         // already scales the source by srcAlpha, so doing both squared it and
         // the cloud came out at ~1% strength — three "invisible nebula" plates
         // were this one line, not the noise.
-        material.colorNode = col.mul(part.glowStrength ?? 1.7);
+        material.colorNode = col.mul(part.glowStrength ?? 2.2);
         material.opacityNode = a;
         material.transparent = true;
         material.blending = THREE.AdditiveBlending;

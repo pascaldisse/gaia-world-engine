@@ -1,0 +1,3 @@
+{"t":236,"scene":"descent","rite":"dream","file":"proof/beauty/universe/after/final-t236.png","bytes":117194,"perf":{"fps":60.6,"p95":24.1,"drawCalls":297,"triangles":603333,"pixelRatio":1.5,"adapter":"apple/common-3"}}
+{"t":258,"scene":"altar","rite":"dream","file":"proof/beauty/universe/after/final-t258.png","bytes":372970,"perf":{"fps":60.4,"p95":24.5,"drawCalls":306,"triangles":668481,"pixelRatio":1.5,"adapter":"apple/common-3"}}
+{"t":270,"scene":"home","rite":"dream","file":"proof/beauty/universe/after/final-t270.png","bytes":116186,"perf":{"fps":119.9,"p95":103.1,"drawCalls":302,"triangles":664301,"pixelRatio":2,"adapter":"apple/common-3"}}

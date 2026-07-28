@@ -7,6 +7,10 @@ import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 
+// nebula-cull scratch (see cullFadedClouds)
+const _cullPos = new THREE.Vector3();
+const _cullAt = new THREE.Vector3();
+
 // In the node renderer the SET of scene lights is part of every material's
 // shader cache key (LightsNode hashes light.id + castShadow) — adding or
 // removing one light recompiles every pipeline in the scene. So runtime
@@ -129,6 +133,7 @@ export class View {
   // run against a per-frame millisecond deadline, weighted by mesh-part
   // count (pipelines were all warmed at load; first-draw setup wasn't)
   update() {
+    this.cullFadedClouds();
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
       this.hide(this.hideQueue.shift());
@@ -453,7 +458,26 @@ export class View {
     group.userData.base = { position: [x, py, z], rotation: [rx, ry, rz], scale: s };
   }
 
+  // §IRON NEBULA CULL. A nebula quad fades out below its `near` range (a cloud
+  // you are INSIDE is fog, not a cloud) — but a fully transparent full-screen
+  // quad still shades every one of its fragments, and 3 of them cost ~12 fps at
+  // the close framing (measured: probe c2-d42 35.7 fps with the fade alone).
+  // Alpha 0 is not free; not drawing is. Culling is by the mesh's own centre
+  // distance, which is exactly what the shader's fade uses, so a quad can never
+  // pop: it is already invisible at the moment it stops being drawn.
+  cullFadedClouds() {
+    const list = this.nebulaQuads;
+    if (!list?.length || !this.camera) return;
+    const cam = this.camera.getWorldPosition(_cullPos);
+    for (const q of list) {
+      if (!q.mesh.parent) continue;
+      const d = q.mesh.getWorldPosition(_cullAt).distanceTo(cam);
+      q.mesh.visible = d > q.near0;
+    }
+  }
+
   applyMesh(group, recipe) {
+    if (this.nebulaQuads?.length) this.nebulaQuads = this.nebulaQuads.filter((q) => q.mesh.parent && q.mesh.parent !== group);
     for (const child of [...group.children]) {
       if (child.userData.kind === 'mesh-part') {
         if (child.userData.vrm) liveVrms.delete(child.userData.vrm);
@@ -525,6 +549,10 @@ export class View {
       // glow it is supposed to occlude gets washed out by the additive pass.
       // Authors state the stack explicitly instead.
       if (part.renderOrder !== undefined) mesh.renderOrder = part.renderOrder;
+      // nebula quads with a near-fade join the cull list (see cullFadedClouds)
+      if (part.preset === 'nebula' && Array.isArray(part.near) && part.near[1] > part.near[0]) {
+        (this.nebulaQuads ??= []).push({ mesh, near0: part.near[0] });
+      }
       mesh.userData.kind = 'mesh-part';
       group.add(mesh);
     }

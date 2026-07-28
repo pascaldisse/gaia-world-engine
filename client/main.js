@@ -36,7 +36,7 @@ const overlay = document.getElementById('overlay');
 const crosshairEl = document.getElementById('crosshair');
 const hintEl = document.getElementById('hint');
 
-const { renderer, scene, camera, hemi, sun, post } = await createRenderer();
+const { renderer, scene, camera, hemi, sun, post, pixels } = await createRenderer();
 const store = new WorldStore();
 const audio = new AudioEngine(camera);
 const effects = new Effects({ scene, audio });
@@ -808,6 +808,7 @@ document.addEventListener('pointerlockchange', syncCrosshair);
 
 // debug handle: poke the kernel from the devtools console (or CDP)
 window.gaia = {
+  pixels, // §IRON pixel governor — proofs pin it to measure at a known ratio
   store,
   view,
   rain: makeRain({ store, view }),
@@ -859,6 +860,9 @@ renderer.setAnimationLoop(() => {
   const now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  // §IRON adaptive pixel ratio (kernel/renderer.js PIXEL_IRON): a procedural
+  // sky is fragment-bound, so resolution is the budget that gives way first.
+  pixels?.sample(dt, now);
   const t = clock.now();
   // ■ stop skips the world's own motion — behaviors, particles, triggers —
   // but not you (the body still answers), not the streaming, not edits.

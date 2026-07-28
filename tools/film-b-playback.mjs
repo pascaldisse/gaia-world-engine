@@ -22,7 +22,11 @@
 import fs from 'node:fs';
 import { connectCdp } from './cdp-lib.mjs';
 
-const out = process.argv[2] ?? 'proof/film-b/playback.json';
+// `--reduce` re-reduces the probe rows a previous roll left in the page
+// instead of rolling the film again (five minutes of real time per roll).
+const args = process.argv.slice(2).filter((a) => a !== '--reduce');
+const reduceOnly = process.argv.includes('--reduce');
+const out = args[0] ?? 'proof/film-b/playback.json';
 const { ws, send } = await connectCdp();
 const evaluate = async (expression, awaitPromise = true) => {
   const msg = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise });
@@ -30,7 +34,7 @@ const evaluate = async (expression, awaitPromise = true) => {
   return msg.result?.result?.value;
 };
 
-const started = await evaluate(`(async () => {
+const started = reduceOnly ? { reduceOnly: true } : await evaluate(`(async () => {
   const D = window.D;
   if (D.audio?.el) D.audio.el.muted = true;
   window.__probe = { rows: [], last: null };
@@ -63,7 +67,7 @@ console.log('play:', JSON.stringify(started));
 
 // poll until the film ends (293.44s of film at 1x)
 let last = -1;
-for (let i = 0; i < 400; i += 1) {
+for (let i = 0; i < (reduceOnly ? 0 : 400); i += 1) {
   await new Promise((r) => setTimeout(r, 3000));
   const st = await evaluate('JSON.stringify({ t: window.D.t, playing: window.D.playing, n: window.__probe.rows.length })');
   const { t, playing, n } = JSON.parse(st);
@@ -74,11 +78,30 @@ for (let i = 0; i < 400; i += 1) {
 process.stderr.write('\n');
 
 const report = JSON.parse(await evaluate(`(() => {
-  const rows = window.__probe.rows.filter((r) => r[2] !== null);
+  const all = window.__probe.rows.filter((r) => r[2] !== null);
+  // A VARIABLE FRAME RATE IS NOT CAMERA MOTION. accel = Δv/dt scales as 1/dt²,
+  // so one long frame (a forge birth, a rite re-layout, GC) throws a five-
+  // figure number that has nothing to do with the flight: the rig's damping
+  // catches up 86% in a 250ms step and the next frame reads it back. Steady
+  // frames are those whose own dt AND their predecessor's are within 1.6× the
+  // median; hitches are counted and reported instead of being averaged in.
+  const dts = [...all.map((r) => r[3])].sort((a, b) => a - b);
+  const medDt = dts[Math.floor(dts.length / 2)];
+  const rows = [];
+  for (let i = 1; i < all.length; i += 1) {
+    if (all[i][3] <= medDt * 1.6 && all[i - 1][3] <= medDt * 1.6) rows.push(all[i]);
+  }
+  const hitches = all.filter((r) => r[3] > medDt * 1.6);
   const speeds = rows.map((r) => r[1]);
   const accels = rows.map((r) => r[2]);
   const sorted = (xs) => [...xs].sort((a, b) => a - b);
   const q = (xs, f) => { const s = sorted(xs); return s[Math.min(s.length - 1, Math.floor(f * s.length))]; };
+  // THE INTERPRETABLE METRIC. What the eye actually does in one frame, in
+  // world units — and how much that step CHANGES from the frame before. A
+  // lurch is a big step-change; 1/dt² arithmetic is not.
+  const steps = rows.map((r) => r[1] * r[3]);
+  const stepChange = [];
+  for (let i = 1; i < rows.length; i += 1) stepChange.push(Math.abs(rows[i][1] - rows[i - 1][1]) * rows[i][3]);
   const bins = new Map();
   for (const [t, sp] of rows) {
     const k = Math.floor(t);
@@ -91,6 +114,13 @@ const report = JSON.parse(await evaluate(`(() => {
   const worstAccel = [...rows].sort((a, b) => b[2] - a[2]).slice(0, 10).map((r) => ({ t: +r[0].toFixed(2), accel: +r[2].toFixed(1), speed: +r[1].toFixed(1) }));
   const fps = rows.length / (rows[rows.length - 1][0] - rows[0][0]);
   return JSON.stringify({
+    frames: all.length,
+    steadyFrames: rows.length,
+    hitches: hitches.length,
+    medianDtMs: +(medDt * 1000).toFixed(1),
+    hitchTop: hitches.sort((a, b) => b[3] - a[3]).slice(0, 6).map((r) => ({ t: +r[0].toFixed(2), dtMs: +(r[3] * 1000).toFixed(0) })),
+    perFrameStepUnits: { median: +q(steps, 0.5).toFixed(3), p99: +q(steps, 0.99).toFixed(2), max: +q(steps, 1).toFixed(2) },
+    stepChangePerFrameUnits: { median: +q(stepChange, 0.5).toFixed(4), p99: +q(stepChange, 0.99).toFixed(3), max: +q(stepChange, 1).toFixed(3) },
     samples: rows.length,
     fps: +fps.toFixed(1),
     span: [+rows[0][0].toFixed(2), +rows[rows.length - 1][0].toFixed(2)],

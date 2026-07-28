@@ -1,0 +1,288 @@
+{
+  "samples": 35216,
+  "dt": 0.008333333333333333,
+  "keyCount": 51,
+  "worstKeySpeedJumpPct": [
+    {
+      "t": 288.6,
+      "before": 15.44,
+      "after": 14.5,
+      "jump": 6.27
+    },
+    {
+      "t": 103.32,
+      "before": 12.69,
+      "after": 12.33,
+      "jump": 2.94
+    },
+    {
+      "t": 189.96,
+      "before": 23.88,
+      "after": 24.35,
+      "jump": 1.92
+    },
+    {
+      "t": 287,
+      "before": 63.92,
+      "after": 62.73,
+      "jump": 1.88
+    },
+    {
+      "t": 184.25,
+      "before": 37.16,
+      "after": 36.54,
+      "jump": 1.69
+    },
+    {
+      "t": 89.5,
+      "before": 8.22,
+      "after": 8.34,
+      "jump": 1.38
+    }
+  ],
+  "speed": {
+    "min": 1.65,
+    "p01": 3.49,
+    "median": 30.28,
+    "p99": 111.67,
+    "max": 133.8,
+    "mean": 37.18
+  },
+  "stops": 0,
+  "stopsAt": [],
+  "slowBelow2": 0,
+  "slowestMidFilm": {
+    "t": 289.83,
+    "speed": 2.19
+  },
+  "accel": {
+    "min": 0.06,
+    "p01": 0.16,
+    "median": 4.26,
+    "p99": 53.02,
+    "max": 125.5,
+    "mean": 8.05
+  },
+  "accelSpikes": [
+    {
+      "t": 287.01,
+      "mag": 125.5
+    },
+    {
+      "t": 287.02,
+      "mag": 124.7
+    },
+    {
+      "t": 287.03,
+      "mag": 123.9
+    },
+    {
+      "t": 287.04,
+      "mag": 123.1
+    },
+    {
+      "t": 287.05,
+      "mag": 122.2
+    },
+    {
+      "t": 287.05,
+      "mag": 121.4
+    },
+    {
+      "t": 287,
+      "mag": 120.8
+    },
+    {
+      "t": 287.06,
+      "mag": 120.6
+    },
+    {
+      "t": 287.07,
+      "mag": 119.8
+    },
+    {
+      "t": 227.77,
+      "mag": 119.3
+    },
+    {
+      "t": 287.08,
+      "mag": 118.9
+    },
+    {
+      "t": 227.76,
+      "mag": 118.1
+    }
+  ],
+  "biggestAccelerations": [
+    {
+      "t": 287.01,
+      "mag": 125.5,
+      "samplesAbove80pct": 31
+    },
+    {
+      "t": 227.77,
+      "mag": 119.3,
+      "samplesAbove80pct": 22
+    },
+    {
+      "t": 288.59,
+      "mag": 117.8,
+      "samplesAbove80pct": 20
+    }
+  ],
+  "perceivedRadPerSec": {
+    "min": 0.0033,
+    "p01": 0.0173,
+    "median": 0.1066,
+    "p99": 0.3794,
+    "max": 0.517,
+    "mean": 0.116
+  },
+  "perceivedWorst": [
+    {
+      "t": 287.69,
+      "degPerSec": 29.6
+    },
+    {
+      "t": 287.68,
+      "degPerSec": 29.6
+    },
+    {
+      "t": 287.7,
+      "degPerSec": 29.6
+    },
+    {
+      "t": 287.68,
+      "degPerSec": 29.6
+    },
+    {
+      "t": 287.71,
+      "degPerSec": 29.6
+    }
+  ],
+  "envelopeCorrelation": 0.437,
+  "beatSpeeds": {
+    "ignition": 12.7,
+    "split": 53.6,
+    "naming": 31.2,
+    "stirred": 48.8,
+    "bell": 69.8,
+    "come": 28.3,
+    "dive": 132.3,
+    "leftBehind": 10.4,
+    "peak": 64.2,
+    "welcome": 34.5,
+    "handover": 14.7
+  },
+  "phases": [
+    {
+      "phase": "crane",
+      "from": 0,
+      "to": 79.7,
+      "min": 8.5,
+      "mean": 12.4,
+      "max": 17.7
+    },
+    {
+      "phase": "watch+lonely",
+      "from": 79.7,
+      "to": 103.32,
+      "min": 3.1,
+      "mean": 24.3,
+      "max": 43.8
+    },
+    {
+      "phase": "fracture",
+      "from": 103.32,
+      "to": 123.6,
+      "min": 4.8,
+      "mean": 41.9,
+      "max": 64.3
+    },
+    {
+      "phase": "accretion",
+      "from": 123.6,
+      "to": 144.08,
+      "min": 22.3,
+      "mean": 33,
+      "max": 43.7
+    },
+    {
+      "phase": "naming",
+      "from": 144.08,
+      "to": 161.76,
+      "min": 20.9,
+      "mean": 38.1,
+      "max": 66.3
+    },
+    {
+      "phase": "covenants",
+      "from": 161.76,
+      "to": 176.32,
+      "min": 17.8,
+      "mean": 69.4,
+      "max": 96.7
+    },
+    {
+      "phase": "greatones",
+      "from": 176.32,
+      "to": 192.5,
+      "min": 16.9,
+      "mean": 45.4,
+      "max": 85.1
+    },
+    {
+      "phase": "rites",
+      "from": 192.5,
+      "to": 205.48,
+      "min": 50.3,
+      "mean": 68.9,
+      "max": 86.2
+    },
+    {
+      "phase": "bloodline",
+      "from": 205.48,
+      "to": 227.78,
+      "min": 28.6,
+      "mean": 66.5,
+      "max": 84.1
+    },
+    {
+      "phase": "DIVE",
+      "from": 227.78,
+      "to": 244,
+      "min": 18.1,
+      "mean": 74.3,
+      "max": 133.8
+    },
+    {
+      "phase": "altar",
+      "from": 244,
+      "to": 264,
+      "min": 9.6,
+      "mean": 12.3,
+      "max": 23.2
+    },
+    {
+      "phase": "rise",
+      "from": 264,
+      "to": 288.6,
+      "min": 15.4,
+      "mean": 63.5,
+      "max": 108.5
+    },
+    {
+      "phase": "rest",
+      "from": 288.6,
+      "to": 293.44,
+      "min": 1.7,
+      "mean": 4.1,
+      "max": 14.7
+    }
+  ],
+  "distRange": [
+    "98",
+    "1147"
+  ],
+  "yawMonotone": true
+}

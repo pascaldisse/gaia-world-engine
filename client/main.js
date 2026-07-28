@@ -19,6 +19,7 @@ import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
 import { CharacterCreator } from './plugins/character-creator.js';
 import { VrmEditor } from './plugins/vrm-editor.js';
+import { AtlasStrategy } from './plugins/atlas-strategy.js';
 import { updateVrms } from './kernel/vrm.js';
 import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
@@ -42,6 +43,7 @@ const environment = new Environment({ renderer, scene, hemi, sun, post, audio })
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 view.player = player;
+const atlasStrategy = new AtlasStrategy({ store, view, camera, player, dom: renderer.domElement });
 // a scene's `camera` component drives the rig: side mode fixes the frame,
 // shows the body, and retires the crosshair (E picks by the body instead)
 const scenes = new Scenes({
@@ -146,6 +148,7 @@ const net = connect({
     scenes.setWorld(world);
     scenes.update(player.position);
     store.applySnapshot(entities);
+    atlasStrategy.sync();
     // the scene was current before its entities existed (setWorld precedes
     // the snapshot apply) — now that they do, derive its camera rig
     scenes.applyCamera();
@@ -175,6 +178,7 @@ const net = connect({
       }
     }
     store.applyOps(ops);
+    atlasStrategy.sync();
     countEl.textContent = store.entities.size;
     for (const op of ops) {
       // a warp landed on OUR presence: world logic moved the body
@@ -815,6 +819,7 @@ window.gaia = {
   sim,
   characterCreator,
   vrmEditor,
+  atlasStrategy,
   setDrawMode,
   setStopped,
 };
@@ -865,6 +870,7 @@ renderer.setAnimationLoop(() => {
     }
   }
   player.update(dt);
+  atlasStrategy.update(dt);
   scenes.update(player.position);
   player.voidY = scenes.currentVoidY;
   view.update();

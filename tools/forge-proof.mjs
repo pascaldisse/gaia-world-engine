@@ -16,9 +16,13 @@
 import { connectCdp } from './cdp-lib.mjs';
 
 process.env.GAIA_CLIENT_PORT ??= '5174';
-const [, , target, out = 'proof/forge.png', radiiArg, holdArg] = process.argv;
+const [, , target, out = 'proof/forge.png', radiiArg, holdArg, faceArg] = process.argv;
 const radii = Number(radiiArg ?? 3.4);
 const holdMs = Number(holdArg ?? 2600);
+// how far off the star axis to stand. 95 puts the terminator down the middle;
+// past ~125 the neighbouring stars' BLOOM stops spilling into the frame, which
+// is a different problem from the star itself being in it
+const face = faceArg === undefined ? 95 : Number(faceArg);
 
 const { ws, send } = await connectCdp();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -50,7 +54,7 @@ const pick = `(() => {
 const id = await evaluate(pick);
 if (!id) { console.error(`no record for ${target}`); process.exit(1); }
 
-const info = await evaluate(`JSON.stringify(window.gaia.atlasForge.focus(${JSON.stringify(id)}, { radii: ${radii}, ms: 1100 }))`);
+const info = await evaluate(`JSON.stringify(window.gaia.atlasForge.focus(${JSON.stringify(id)}, { radii: ${radii}, ms: 1100, face: ${face} }))`);
 await sleep(holdMs);
 
 // re-asserted here, not just at the start: macOS Chrome flips a window that

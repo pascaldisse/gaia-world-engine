@@ -1,5 +1,5 @@
 {
- "at": "2026-07-28T15:33:23.187Z",
+ "at": "2026-07-28T15:41:25.913Z",
  "outDir": "proof/cosmos-after",
  "shots": {
   "wide": {
@@ -8,7 +8,7 @@
     "framing": "universe"
    },
    "fps": {
-    "fps": 36.4,
+    "fps": 35.9,
     "frames": 41,
     "why": "full"
    },
@@ -34,7 +34,7 @@
       "store": 3,
       "tenant": 1
      },
-     "coverSum": 44,
+     "coverSum": 12.8,
      "pinnedForged": 0,
      "pinnedWant": 0,
      "pending": 0,
@@ -70,7 +70,7 @@
     "radius": 38
    },
    "fps": {
-    "fps": 49.2,
+    "fps": 46.9,
     "frames": 41,
     "why": "full"
    },
@@ -98,7 +98,7 @@
       "order": 11,
       "product": 2
      },
-     "coverSum": 46,
+     "coverSum": 37.2,
      "pinnedForged": 2,
      "pinnedWant": 2,
      "pending": 0,
@@ -145,7 +145,7 @@
     }
    },
    "fps": {
-    "fps": 47.8,
+    "fps": 46.4,
     "frames": 41,
     "why": "full"
    },
@@ -173,7 +173,7 @@
       "product": 10,
       "customer": 19
      },
-     "coverSum": 60,
+     "coverSum": 38.9,
      "pinnedForged": 10,
      "pinnedWant": 10,
      "pending": 0,
@@ -218,7 +218,7 @@
     }
    },
    "fps": {
-    "fps": 55.3,
+    "fps": 58.6,
     "frames": 41,
     "why": "full"
    },
@@ -246,7 +246,7 @@
       "product": 24,
       "customer": 19
      },
-     "coverSum": 74,
+     "coverSum": 0.7,
      "pinnedForged": 24,
      "pinnedWant": 24,
      "pending": 0,
@@ -282,7 +282,7 @@
     "starsActive": true
    },
    "fps": {
-    "fps": 41.3,
+    "fps": 43.5,
     "frames": 41,
     "why": "full"
    },
@@ -310,7 +310,7 @@
       "finding": 9,
       "consultant": 6
      },
-     "coverSum": 50,
+     "coverSum": 0,
      "pinnedForged": 0,
      "pinnedWant": 0,
      "pending": 0,

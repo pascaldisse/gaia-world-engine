@@ -1,0 +1,35 @@
+# paloptic-atlas — Cloudflare Pages project + attached Worker (Pages
+# Functions, see functions/_middleware.js) fronting the static Atlas build.
+#
+# This file lives at deploy/cloudflare/wrangler.toml so `wrangler pages
+# deploy` run FROM THIS DIRECTORY finds functions/_middleware.js next to it
+# (Pages Functions convention: a `functions/` dir at the project root the
+# deploy command runs from — NOT inside the build output). The build output
+# itself (`dist/`) is generated separately at the repo root by `vite build`
+# and referenced here by relative path.
+#
+# Deploy commands: see README.md in this directory.
+
+name = "paloptic-atlas"
+compatibility_date = "2026-07-28"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare Pages build output — the static site (client + plugins + assets
+# + world-snapshot.json + atlas-graph.json), produced by:
+#   GAIA_STATIC_BUILD=1 npx vite build   (run from repo root)
+pages_build_output_dir = "../../dist"
+
+# GATE_HASH is NOT secret — it's the same SHA-256 already shipped client-side
+# in client/assets/gate-config.json (the presentation-layer gate reads it
+# same-origin). Binding it here too lets the edge Worker enforce the same
+# secret BEFORE any bytes ship, which the client-side gate alone cannot do.
+# Source of truth: /Users/pascaldisse/projects/paloptic/gate/gate-config.json
+# — the hash only, never PASSWORD.txt.
+[vars]
+GATE_HASH = "8fc666825e1a4b0683854a0fb24b506de10560cf3f66d516a72350cae5d6ce57"
+GATE_HINT = "Fear the old blood (visually)"
+
+# SESSION_SECRET is a REAL secret (HMAC key that signs the gate_session
+# cookie) — never put it in this file. Set it once per environment with:
+#   wrangler pages secret put SESSION_SECRET --project-name paloptic-atlas
+# (generate one locally: `openssl rand -hex 32`)

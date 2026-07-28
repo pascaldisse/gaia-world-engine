@@ -73,6 +73,28 @@ const presenceId = `player-${clientId}`;
 view.ownPresence = presenceId;
 let pendingShot = null;
 
+// THE GATE, BEFORE THE BOOT: everything below this line is the world's data
+// path — the WS connect a few lines down, and (sequentially, same top-level
+// module) every fetch every plugin constructed after it fires eagerly
+// (Palette's /prefabs load chief among them). atlas-gate.js's overlay alone
+// is presentation-layer only (see its own HONESTY NOTE) — the real stop has
+// to be this await, not a DOM layer sitting on top of an already-booted
+// client. Mirrors atlas-intro.js's waitForGate(): passedAlready() (valid
+// localStorage token) lets a returning visitor through with zero delay, and
+// an unreachable gate config never becomes a second, silent lock.
+async function waitForGate() {
+  try {
+    await import('./plugins/atlas-gate.js');
+    const gate = window.gaia?.atlasGate?.gate;
+    if (gate && (await gate.passedAlready())) return;
+  } catch (err) {
+    console.warn('[gaia] gate unavailable — booting anyway', err);
+    return;
+  }
+  await new Promise((res) => window.addEventListener('atlas-gate-passed', res, { once: true }));
+}
+await waitForGate();
+
 // STATIC BOOT MODE: no world server, no vite dev — ?static=1 (or a build
 // baked with GAIA_STATIC_BUILD=1) hydrates from client/assets/world-snapshot.json
 // instead of opening a websocket. Same callbacks, same `net` shape either way

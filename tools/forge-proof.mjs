@@ -53,6 +53,12 @@ if (!id) { console.error(`no record for ${target}`); process.exit(1); }
 const info = await evaluate(`JSON.stringify(window.gaia.atlasForge.focus(${JSON.stringify(id)}, { radii: ${radii}, ms: 1100 }))`);
 await sleep(holdMs);
 
+// re-asserted here, not just at the start: macOS Chrome flips a window that
+// another app has OCCLUDED to visibilityState 'hidden' and throttles rAF, so a
+// tab that was in front when the flight began can be asleep by the time the
+// measurement runs — that is how a 120fps close-up measured 0
+await send('Page.bringToFront');
+await sleep(400);
 // a frame is only a frame if rAF is turning: sample it, never assume it
 const fps = await evaluate(`new Promise((res) => {
   const dts = []; let last = performance.now(); let n = 0; let done = false;

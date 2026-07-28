@@ -13,7 +13,17 @@
 # the machine a human is sitting at.
 set -euo pipefail
 
-CHROME=${CHROME:-/Users/pascaldisse/Library/Caches/ms-playwright/chromium-1228/chrome-mac/Chromium.app/Contents/MacOS/Chromium}
+# 07-28: the rig lane's hard-coded chrome-mac/Chromium.app path does not exist
+# on this machine (playwright 1228 ships chrome-mac-arm64/"Google Chrome for
+# Testing.app") — that path produced "browser did not come up" with nohup: No
+# such file. Resolved by probing, newest build first, so no lane pins a path.
+if [ -z "${CHROME:-}" ]; then
+  for c in "$HOME/Library/Caches/ms-playwright"/chromium-*/chrome-mac-arm64/*.app/Contents/MacOS/* \
+           "$HOME/Library/Caches/ms-playwright"/chromium-*/chrome-mac/*.app/Contents/MacOS/*; do
+    [ -x "$c" ] && CHROME="$c"
+  done
+fi
+CHROME=${CHROME:?no playwright chromium found}
 PORT=${GAIA_CLIENT_PORT:-5191}
 CDP=${CDP_PORT:-9241}
 DIR=${BEAUTY_TMP:-/tmp/beauty}

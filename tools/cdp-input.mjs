@@ -11,6 +11,7 @@
 //   node tools/cdp-input.mjs drag <dx> <dy>    right-button drag from the centre
 //   node tools/cdp-input.mjs ldrag <x> <y> <dx> <dy>   left-button drag from a point
 //   node tools/cdp-input.mjs move <x> <y>     hover (plugins pick at the cursor)
+//   node tools/cdp-input.mjs type <text>      type into the focused field, char by char
 //   node tools/cdp-input.mjs eval <expr>      read the page back (proof, not input)
 import { connectCdp } from './cdp-lib.mjs';
 
@@ -107,6 +108,18 @@ if (cmd === 'key') {
   }
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + dx, y: y + dy, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
   console.log(`ldrag ${x},${y} +${dx},${dy}`);
+} else if (cmd === 'type') {
+  // per-character keyDown/char/keyUp: a field that listens for keydown (the
+  // atlas search swallows Escape there) must see the same events a hand does
+  for (const ch of String(a ?? '')) {
+    // keyDown carries NO text (Chrome would insert it) — the 'char' event is
+    // what actually types; sending text on both doubles every character
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch });
+    await send('Input.dispatchKeyEvent', { type: 'char', text: ch, key: ch, unmodifiedText: ch });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+    await sleep(25);
+  }
+  console.log(`type ${a}`);
 } else if (cmd === 'move') {
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Number(a), y: Number(b), buttons: 0, pointerType: 'mouse' });
   console.log(`move ${a},${b}`);

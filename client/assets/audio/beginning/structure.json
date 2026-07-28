@@ -1,0 +1,66 @@
+{
+  "song": "The Paleblood Rain",
+  "durationSec": 293.44,
+  "sections": [
+    {
+      "start": 0.0,
+      "end": 30.0,
+      "label": "drone"
+    },
+    {
+      "start": 30.0,
+      "end": 53.88,
+      "label": "verse1"
+    },
+    {
+      "start": 55.0,
+      "end": 59.44,
+      "label": "hold"
+    },
+    {
+      "start": 73.64,
+      "end": 89.56,
+      "label": "verse2"
+    },
+    {
+      "start": 89.56,
+      "end": 101.8,
+      "label": "beat"
+    },
+    {
+      "start": 103.32,
+      "end": 123.6,
+      "label": "chorus"
+    },
+    {
+      "start": 128.88,
+      "end": 144.08,
+      "label": "verse3"
+    },
+    {
+      "start": 144.08,
+      "end": 159.68,
+      "label": "naming"
+    },
+    {
+      "start": 161.76,
+      "end": 192.36,
+      "label": "bridge"
+    },
+    {
+      "start": 205.48,
+      "end": 228.4,
+      "label": "build"
+    },
+    {
+      "start": 256.8,
+      "end": 273.0,
+      "label": "low-verse"
+    },
+    {
+      "start": 276.44,
+      "end": 293.44,
+      "label": "outro"
+    }
+  ]
+}

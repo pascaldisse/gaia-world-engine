@@ -41,6 +41,7 @@ export default defineConfig({
   server: { port: Number(process.env.GAIA_CLIENT_PORT ?? 5173), fs: { allow: ['..'] } },
   define: {
     __GAIA_PORT__: JSON.stringify(process.env.GAIA_PORT ?? '8420'),
+    __QUEST_URL__: JSON.stringify(process.env.QUEST_URL ?? 'http://localhost:4610'),
     __GAIA_STATIC__: JSON.stringify(process.env.GAIA_STATIC_BUILD === '1'),
   },
   build: {

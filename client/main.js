@@ -829,7 +829,9 @@ function syncCrosshair() {
 document.addEventListener('pointerlockchange', syncCrosshair);
 
 // debug handle: poke the kernel from the devtools console (or CDP)
-window.gaia = {
+// plugins self-register on window.gaia before this line — never overwrite, extend
+// (3 independent victims 07-28: scrubber, QA intro, frame-check menu)
+window.gaia = Object.assign(window.gaia ?? {}, {
   pixels, // §IRON pixel governor — proofs pin it to measure at a known ratio
   store,
   view,
@@ -852,7 +854,7 @@ window.gaia = {
   atlasStrategy,
   setDrawMode,
   setStopped,
-};
+});
 
 // publish the player's pose so agents can sense them
 let lastPresence = { x: 0, y: 0, z: 0, yaw: 0, t: 0 };

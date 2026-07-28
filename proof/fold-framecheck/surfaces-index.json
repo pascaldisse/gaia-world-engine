@@ -1,22 +1,22 @@
 {
   "gate": {
     "file": "proof/fold-framecheck/surf-01-gate.png",
-    "bytes": 49591
+    "bytes": 49590
   },
   "startScreen": {
     "file": "proof/fold-framecheck/surf-02-start-screen.png",
-    "bytes": 58524
+    "bytes": 57691
   },
   "creator": {
     "file": "proof/fold-framecheck/surf-03-creator.png",
-    "bytes": 79655
+    "bytes": 79651
   },
   "dollPanel": {
     "file": "proof/fold-framecheck/surf-04-doll-panel.png",
-    "bytes": 200870
+    "bytes": 201058
   },
   "scrubber": {
     "file": "proof/fold-framecheck/surf-05-scrubber.png",
-    "bytes": 68216
+    "bytes": 68253
   }
 }

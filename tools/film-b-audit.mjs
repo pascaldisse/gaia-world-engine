@@ -64,22 +64,28 @@ for (const [rite, t0, t1] of ERAS) {
 }
 
 // ── velocity / acceleration of the eye ──────────────────────────────────────
+// ERA SEAMS ARE NOT CAMERA MOTION. Between two eras the audit teleports the
+// WORLD (it sets the next rite and settles it instantly), so the difference
+// quotient across that one step measures a re-layout, not the flight. Those
+// steps are dropped here and the real thing — the camera crossing a live 2s
+// layout transition — is what the playback audit measures.
 const dt = 1 / 120;
 const vel = [];
 for (let i = 1; i < samples.length; i += 1) {
   const a = samples[i - 1]; const b = samples[i];
-  if (b.t < a.t) continue; // era seam: measured separately below
+  if (b.t < a.t || b.rite !== a.rite) continue;
   const v = [0, 1, 2].map((j) => (b.eye[j] - a.eye[j]) / dt);
   vel.push({ t: (a.t + b.t) / 2, rite: b.rite, v, speed: Math.hypot(...v) });
 }
 const acc = [];
 for (let i = 1; i < vel.length; i += 1) {
   const a = vel[i - 1]; const b = vel[i];
-  if (b.t < a.t || b.rite !== a.rite) continue;
+  if (b.t < a.t || b.rite !== a.rite || b.t - a.t > 2 * dt) continue;
   const d = [0, 1, 2].map((j) => (b.v[j] - a.v[j]) / dt);
   acc.push({ t: (a.t + b.t) / 2, mag: Math.hypot(...d) });
 }
 
+const clampN = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const stat = (xs) => {
   const s = [...xs].sort((p, q) => p - q);
   const at = (f) => s[Math.min(s.length - 1, Math.floor(f * s.length))];
@@ -120,8 +126,69 @@ const corr = (() => {
   return sxy / Math.sqrt(sxx * syy);
 })();
 
+// ── C1 at every key, measured ───────────────────────────────────────────────
+// The claim the one shot rests on is that a key is a bend, not a bump. So:
+// read the speed 1/60s either side of every authored key and report the
+// biggest relative jump. A cut showed up here as ~100%; C1 must be ~0%.
+const keyTimes = await evaluate('window.D.keys.map((k) => k.t)');
+const nearest = (t) => vel.reduce((best, x) => (Math.abs(x.t - t) < Math.abs(best.t - t) ? x : best), vel[0]);
+const eraEdges = ERAS.map(([, t0]) => t0).filter((t) => t > 0);
+const keyJumps = keyTimes.map((kt) => {
+  const before = vel.filter((x) => x.t < kt - 1 / 240 && x.t > kt - 0.2).slice(-1)[0];
+  const after = vel.filter((x) => x.t > kt + 1 / 240 && x.t < kt + 0.2)[0];
+  if (!before || !after) return { t: kt, jump: null };
+  // a key that sits ON an era edge is measured in two DIFFERENT layouts, so
+  // its two sides are not comparable here (the live 2s transition is the
+  // playback audit's business, not this one's)
+  if (eraEdges.some((e) => Math.abs(e - kt) < 1e-6) || before.rite !== after.rite) {
+    return { t: kt, jump: null, note: 'era edge — layouts differ either side' };
+  }
+  const rel = Math.abs(after.speed - before.speed) / Math.max(1, (after.speed + before.speed) / 2);
+  return { t: kt, before: +before.speed.toFixed(2), after: +after.speed.toFixed(2), jump: +(rel * 100).toFixed(2) };
+});
+const worstKeyJump = keyJumps.filter((k) => k.jump !== null).sort((a, b) => b.jump - a.jump).slice(0, 6);
+
+// ── JERK, AND WHAT A "SPIKE" WOULD LOOK LIKE ────────────────────────────────
+// A spike is a NARROW excursion: one or two frames of huge acceleration, which
+// is what a cut used to be. A ramp is wide. So for the biggest accelerations,
+// report how many consecutive samples stay above 80% of the peak — a genuine
+// spike is 1-3 samples, an authored move is dozens.
+const spikeWidth = (idx) => {
+  const peak = acc[idx].mag; const thr = peak * 0.8;
+  let lo = idx; let hi = idx;
+  while (lo > 0 && acc[lo - 1].mag >= thr) lo -= 1;
+  while (hi < acc.length - 1 && acc[hi + 1].mag >= thr) hi += 1;
+  return hi - lo + 1;
+};
+const accIdx = acc.map((x, i) => i).sort((a, b) => acc[b].mag - acc[a].mag);
+const topAccel = accIdx.slice(0, 40).reduce((keep, i) => {
+  if (keep.some((j) => Math.abs(acc[j].t - acc[i].t) < 1.5)) return keep;
+  keep.push(i); return keep;
+}, []).slice(0, 8).map((i) => ({ t: +acc[i].t.toFixed(2), mag: +acc[i].mag.toFixed(1), samplesAbove80pct: spikeWidth(i) }));
+
+// ── PERCEIVED MOTION ──────────────────────────────────────────────────
+// 70 units/s at distance 110 is a hurtling flythrough; 70 units/s at distance
+// 1100 is a stately drift. What the eye judges is ANGULAR rate, so the audit
+// measures that too: how fast the view direction turns, plus the optical flow
+// the subject's own translation and the dolly produce, in rad/s.
+const perceived = [];
+for (let i = 1; i < samples.length; i += 1) {
+  const a = samples[i - 1]; const b = samples[i];
+  if (b.t < a.t || b.rite !== a.rite) continue;
+  const ua = [Math.sin(a.yaw) * Math.cos(a.pitch), Math.sin(a.pitch), Math.cos(a.yaw) * Math.cos(a.pitch)];
+  const ub = [Math.sin(b.yaw) * Math.cos(b.pitch), Math.sin(b.pitch), Math.cos(b.yaw) * Math.cos(b.pitch)];
+  const dot = clampN(ua[0] * ub[0] + ua[1] * ub[1] + ua[2] * ub[2], -1, 1);
+  const omega = Math.acos(dot) / dt;                       // the view direction turning
+  const radial = Math.abs(b.dist - a.dist) / dt / b.dist;  // the dolly, as a fraction of frame
+  const tgtA = [0, 1, 2].map((j) => a.eye[j] - ua[j] * a.dist);
+  const tgtB = [0, 1, 2].map((j) => b.eye[j] - ub[j] * b.dist);
+  const pan = Math.hypot(...[0, 1, 2].map((j) => tgtB[j] - tgtA[j])) / dt / b.dist;
+  perceived.push({ t: (a.t + b.t) / 2, rate: omega + radial + pan });
+}
+const pc = stat(perceived.map((x) => x.rate));
+
 // per-beat speeds (the anchors the brief names) + the phase profile
-const at = (t) => vel.reduce((best, x) => (Math.abs(x.t - t) < Math.abs(best.t - t) ? x : best), vel[0]);
+const at = (t) => nearest(t);
 const beats = { ignition: 79.7, split: 107.13, naming: 148.33, stirred: 181.34, bell: 214.89, come: 227.78, dive: 236, leftBehind: 258, peak: 270.5, welcome: 276.44, handover: 288.6 };
 const beatSpeeds = Object.fromEntries(Object.entries(beats).map(([k, t]) => [k, Number(at(t).speed.toFixed(1))]));
 
@@ -135,6 +202,8 @@ const phaseRows = phases.map(([a, b, name]) => {
 const report = {
   samples: samples.length,
   dt,
+  keyCount: keyTimes.length,
+  worstKeySpeedJumpPct: worstKeyJump,
   speed: Object.fromEntries(Object.entries(sp).map(([k, v]) => [k, +v.toFixed(2)])),
   stops: stops.length,
   stopsAt: stops.slice(0, 10).map((x) => +x.t.toFixed(2)),
@@ -142,6 +211,9 @@ const report = {
   slowestMidFilm: (() => { const m = vel.filter((x) => x.t > 1 && x.t < 291).reduce((a, b) => (b.speed < a.speed ? b : a)); return { t: +m.t.toFixed(2), speed: +m.speed.toFixed(2) }; })(),
   accel: Object.fromEntries(Object.entries(ac).map(([k, v]) => [k, +v.toFixed(2)])),
   accelSpikes: spikes.map((x) => ({ t: +x.t.toFixed(2), mag: +x.mag.toFixed(1) })),
+  biggestAccelerations: topAccel,
+  perceivedRadPerSec: Object.fromEntries(Object.entries(pc).map(([k, v]) => [k, +v.toFixed(4)])),
+  perceivedWorst: [...perceived].sort((a, b) => b.rate - a.rate).slice(0, 5).map((x) => ({ t: +x.t.toFixed(2), degPerSec: +(x.rate * 180 / Math.PI).toFixed(1) })),
   envelopeCorrelation: +corr.toFixed(3),
   beatSpeeds,
   phases: phaseRows,

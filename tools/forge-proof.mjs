@@ -51,10 +51,15 @@ const pick = `(() => {
   return best;
 })()`;
 
-const id = await evaluate(pick);
-if (!id) { console.error(`no record for ${target}`); process.exit(1); }
+// 'wide' frames nothing: the universe as the LOD actually leaves it, which is
+// the only honest way to photograph coexistence and to measure orbit fps
+const wide = target === 'wide';
+const id = wide ? null : await evaluate(pick);
+if (!wide && !id) { console.error(`no record for ${target}`); process.exit(1); }
 
-const info = await evaluate(`JSON.stringify(window.gaia.atlasForge.focus(${JSON.stringify(id)}, { radii: ${radii}, ms: 1100, face: ${face} }))`);
+const info = wide
+  ? await evaluate('(() => { const s = window.gaia.atlasStrategy; window.gaia.atlasForge.release_hold(); s.deselect?.(); s.autoFrame = true; return JSON.stringify({ wide: true }); })()')
+  : await evaluate(`JSON.stringify(window.gaia.atlasForge.focus(${JSON.stringify(id)}, { radii: ${radii}, ms: 1100, face: ${face} }))`);
 await sleep(holdMs);
 
 // re-asserted here, not just at the start: macOS Chrome flips a window that
@@ -76,7 +81,12 @@ const fps = await evaluate(`new Promise((res) => {
   setTimeout(() => finish('timeout'), 4000);
 })`);
 
-const live = await evaluate(`(() => {
+const live = wide ? await evaluate(`(() => {
+  const f = window.gaia.atlasForge, c = window.gaia.atlasCosmos;
+  const kinds = {};
+  for (const [i] of f.active) { const k = c.nodes[i].kind; kinds[k] = (kinds[k] ?? 0) + 1; }
+  return JSON.stringify({ wide: true, kinds, camDist: +c.camera.position.length().toFixed(0), stats: f.stats() });
+})()`) : await evaluate(`(() => {
   const c = window.gaia.atlasCosmos, f = window.gaia.atlasForge;
   const i = c.idIndex.get(${JSON.stringify(id)});
   const slot = f.active.get(i);

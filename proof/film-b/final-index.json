@@ -1,0 +1,662 @@
+[
+  {
+    "t": 0,
+    "scene": "void",
+    "rite": "dream",
+    "tgt": [
+      312,
+      -538,
+      -15
+    ],
+    "dist": 980,
+    "yaw": 0.18,
+    "pitch": 0.09,
+    "eye": [
+      241,
+      508,
+      350
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-000s.png",
+    "bytes": 191812
+  },
+  {
+    "t": 10,
+    "scene": "void",
+    "rite": "dream",
+    "tgt": [
+      280,
+      -504,
+      -36
+    ],
+    "dist": 901,
+    "yaw": 0.29,
+    "pitch": 0.11,
+    "eye": [
+      486,
+      -450,
+      946
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-010s.png",
+    "bytes": 158919
+  },
+  {
+    "t": 20,
+    "scene": "sea",
+    "rite": "dream",
+    "tgt": [
+      256,
+      -478,
+      -53
+    ],
+    "dist": 843,
+    "yaw": 0.38,
+    "pitch": 0.122,
+    "eye": [
+      538,
+      -405,
+      821
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-020s.png",
+    "bytes": 145898
+  },
+  {
+    "t": 30,
+    "scene": "sea",
+    "rite": "dream",
+    "tgt": [
+      232,
+      -450,
+      -71
+    ],
+    "dist": 795,
+    "yaw": 0.49,
+    "pitch": 0.132,
+    "eye": [
+      569,
+      -375,
+      724
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-030s.png",
+    "bytes": 167912
+  },
+  {
+    "t": 40,
+    "scene": "sea",
+    "rite": "dream",
+    "tgt": [
+      213,
+      -428,
+      -86
+    ],
+    "dist": 748,
+    "yaw": 0.58,
+    "pitch": 0.138,
+    "eye": [
+      604,
+      -346,
+      624
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-040s.png",
+    "bytes": 172195
+  },
+  {
+    "t": 50,
+    "scene": "deep",
+    "rite": "dream",
+    "tgt": [
+      197,
+      -409,
+      -98
+    ],
+    "dist": 670,
+    "yaw": 0.66,
+    "pitch": 0.14,
+    "eye": [
+      621,
+      -325,
+      533
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-050s.png",
+    "bytes": 195008
+  },
+  {
+    "t": 60,
+    "scene": "deep",
+    "rite": "dream",
+    "tgt": [
+      185,
+      -395,
+      -107
+    ],
+    "dist": 570,
+    "yaw": 0.73,
+    "pitch": 0.138,
+    "eye": [
+      606,
+      -315,
+      424
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-060s.png",
+    "bytes": 218514
+  },
+  {
+    "t": 70,
+    "scene": "candle",
+    "rite": "dream",
+    "tgt": [
+      172,
+      -380,
+      -117
+    ],
+    "dist": 431,
+    "yaw": 0.79,
+    "pitch": 0.134,
+    "eye": [
+      559,
+      -317,
+      315
+    ],
+    "forged": 0,
+    "reveal": 0,
+    "file": "proof/film-b/final-070s.png",
+    "bytes": 235425
+  },
+  {
+    "t": 80,
+    "scene": "candle",
+    "rite": "dream",
+    "tgt": [
+      161,
+      -368,
+      -125
+    ],
+    "dist": 296,
+    "yaw": 0.86,
+    "pitch": 0.13,
+    "eye": [
+      477,
+      -323,
+      182
+    ],
+    "forged": 1,
+    "reveal": 0,
+    "file": "proof/film-b/final-080s.png",
+    "bytes": 266192
+  },
+  {
+    "t": 90,
+    "scene": "candle",
+    "rite": "dream",
+    "tgt": [
+      164,
+      -370,
+      -125
+    ],
+    "dist": 214,
+    "yaw": 0.91,
+    "pitch": 0.131,
+    "eye": [
+      384,
+      -330,
+      67
+    ],
+    "forged": 1,
+    "reveal": 0,
+    "file": "proof/film-b/final-090s.png",
+    "bytes": 268799
+  },
+  {
+    "t": 100,
+    "scene": "alone",
+    "rite": "dream",
+    "tgt": [
+      216,
+      -407,
+      -138
+    ],
+    "dist": 522,
+    "yaw": 1.02,
+    "pitch": 0.171,
+    "eye": [
+      331,
+      -342,
+      5
+    ],
+    "forged": 1,
+    "reveal": 0,
+    "file": "proof/film-b/final-100s.png",
+    "bytes": 223274
+  },
+  {
+    "t": 110,
+    "scene": "split",
+    "rite": "dream",
+    "tgt": [
+      167,
+      -362,
+      -129
+    ],
+    "dist": 338,
+    "yaw": 1.35,
+    "pitch": 0.121,
+    "eye": [
+      655,
+      -318,
+      130
+    ],
+    "forged": 4,
+    "reveal": 0.058,
+    "file": "proof/film-b/final-110s.png",
+    "bytes": 296160
+  },
+  {
+    "t": 120,
+    "scene": "split",
+    "rite": "dream",
+    "tgt": [
+      152,
+      -345,
+      -125
+    ],
+    "dist": 145,
+    "yaw": 2.05,
+    "pitch": 0.036,
+    "eye": [
+      494,
+      -321,
+      -54
+    ],
+    "forged": 4,
+    "reveal": 0.095,
+    "file": "proof/film-b/final-120s.png",
+    "bytes": 600603
+  },
+  {
+    "t": 130,
+    "scene": "sparks",
+    "rite": "dream",
+    "tgt": [
+      111,
+      -263,
+      -205
+    ],
+    "dist": 493,
+    "yaw": 2.51,
+    "pitch": 0.172,
+    "eye": [
+      280,
+      -339,
+      -192
+    ],
+    "forged": 4,
+    "reveal": 0.279,
+    "file": "proof/film-b/final-130s.png",
+    "bytes": 360500
+  },
+  {
+    "t": 140,
+    "scene": "sparks",
+    "rite": "dream",
+    "tgt": [
+      112,
+      -227,
+      -260
+    ],
+    "dist": 629,
+    "yaw": 2.83,
+    "pitch": 0.253,
+    "eye": [
+      397,
+      -179,
+      -598
+    ],
+    "forged": 4,
+    "reveal": 0.919,
+    "file": "proof/film-b/final-140s.png",
+    "bytes": 307192
+  },
+  {
+    "t": 150,
+    "scene": "name",
+    "rite": "dream",
+    "tgt": [
+      139,
+      -237,
+      -333
+    ],
+    "dist": 362,
+    "yaw": 3.36,
+    "pitch": 0.161,
+    "eye": [
+      296,
+      -69,
+      -840
+    ],
+    "forged": 5,
+    "reveal": 1,
+    "file": "proof/film-b/final-150s.png",
+    "bytes": 440697
+  },
+  {
+    "t": 160,
+    "scene": "name",
+    "rite": "dream",
+    "tgt": [
+      118,
+      -236,
+      -188
+    ],
+    "dist": 447,
+    "yaw": 3.93,
+    "pitch": 0.142,
+    "eye": [
+      63,
+      -179,
+      -682
+    ],
+    "forged": 6,
+    "reveal": 1,
+    "file": "proof/film-b/final-160s.png",
+    "bytes": 553249
+  },
+  {
+    "t": 170,
+    "scene": "covenants",
+    "rite": "covenants",
+    "tgt": [
+      75,
+      -182,
+      -75
+    ],
+    "dist": 978,
+    "yaw": 4.43,
+    "pitch": 0.396,
+    "eye": [
+      -196,
+      -172,
+      -501
+    ],
+    "forged": 6,
+    "reveal": 1,
+    "file": "proof/film-b/final-170s.png",
+    "bytes": 638351
+  },
+  {
+    "t": 180,
+    "scene": "watchers",
+    "rite": "covenants",
+    "tgt": [
+      -62,
+      191,
+      -37
+    ],
+    "dist": 795,
+    "yaw": 4.93,
+    "pitch": 0.341,
+    "eye": [
+      -792,
+      195,
+      -327
+    ],
+    "forged": 6,
+    "reveal": 1,
+    "file": "proof/film-b/final-180s.png",
+    "bytes": 623358
+  },
+  {
+    "t": 190,
+    "scene": "watchers",
+    "rite": "covenants",
+    "tgt": [
+      -42,
+      385,
+      -95
+    ],
+    "dist": 600,
+    "yaw": 5.44,
+    "pitch": 0.23,
+    "eye": [
+      -793,
+      457,
+      128
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "file": "proof/film-b/final-190s.png",
+    "bytes": 573657
+  },
+  {
+    "t": 200,
+    "scene": "rites",
+    "rite": "moons",
+    "tgt": [
+      64,
+      -154,
+      -46
+    ],
+    "dist": 1117,
+    "yaw": 5.97,
+    "pitch": 0.256,
+    "eye": [
+      -478,
+      521,
+      294
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-200s.png",
+    "bytes": 520043
+  },
+  {
+    "t": 210,
+    "scene": "bloodline",
+    "rite": "dream",
+    "tgt": [
+      161,
+      620,
+      -315
+    ],
+    "dist": 777,
+    "yaw": 6.46,
+    "pitch": 0.197,
+    "eye": [
+      -273,
+      128,
+      982
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-210s.png",
+    "bytes": 177781
+  },
+  {
+    "t": 220,
+    "scene": "bloodline",
+    "rite": "dream",
+    "tgt": [
+      82,
+      323,
+      313
+    ],
+    "dist": 520,
+    "yaw": 6.86,
+    "pitch": 0.15,
+    "eye": [
+      296,
+      772,
+      435
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-220s.png",
+    "bytes": 524787
+  },
+  {
+    "t": 230,
+    "scene": "descent",
+    "rite": "dream",
+    "tgt": [
+      -27,
+      63,
+      696
+    ],
+    "dist": 443,
+    "yaw": 7.19,
+    "pitch": 0.219,
+    "eye": [
+      362,
+      401,
+      744
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-230s.png",
+    "bytes": 507625
+  },
+  {
+    "t": 240,
+    "scene": "descent",
+    "rite": "dream",
+    "tgt": [
+      26,
+      -1117,
+      89
+    ],
+    "dist": 409,
+    "yaw": 7.7,
+    "pitch": 0.238,
+    "eye": [
+      315,
+      159,
+      961
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-240s.png",
+    "bytes": 34384
+  },
+  {
+    "t": 250,
+    "scene": "altar",
+    "rite": "dream",
+    "tgt": [
+      0,
+      -1224,
+      0
+    ],
+    "dist": 300,
+    "yaw": 8.08,
+    "pitch": 0.1,
+    "eye": [
+      419,
+      -1020,
+      152
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-250s.png",
+    "bytes": 44529
+  },
+  {
+    "t": 260,
+    "scene": "altar",
+    "rite": "dream",
+    "tgt": [
+      0,
+      -1213,
+      0
+    ],
+    "dist": 291,
+    "yaw": 8.41,
+    "pitch": 0.155,
+    "eye": [
+      291,
+      -1194,
+      -67
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-260s.png",
+    "bytes": 44279
+  },
+  {
+    "t": 270,
+    "scene": "home",
+    "rite": "dream",
+    "tgt": [
+      -2,
+      -1197,
+      -1
+    ],
+    "dist": 447,
+    "yaw": 8.8,
+    "pitch": 0.435,
+    "eye": [
+      244,
+      -1168,
+      -152
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-270s.png",
+    "bytes": 34025
+  },
+  {
+    "t": 280,
+    "scene": "home",
+    "rite": "dream",
+    "tgt": [
+      29,
+      -396,
+      20
+    ],
+    "dist": 717,
+    "yaw": 9.12,
+    "pitch": -0.242,
+    "eye": [
+      235,
+      -1009,
+      -330
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-280s.png",
+    "bytes": 306833
+  },
+  {
+    "t": 290,
+    "scene": "home",
+    "rite": "dream",
+    "tgt": [
+      53,
+      -122,
+      67
+    ],
+    "dist": 499,
+    "yaw": 9.39,
+    "pitch": 0.223,
+    "eye": [
+      235,
+      -568,
+      -645
+    ],
+    "forged": 10,
+    "reveal": 1,
+    "file": "proof/film-b/final-290s.png",
+    "bytes": 622462
+  }
+]

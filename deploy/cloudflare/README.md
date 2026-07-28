@@ -1,58 +1,52 @@
-# paloptic-atlas — Cloudflare Pages deploy
+# paloptic-atlas — Cloudflare Worker (static assets) deploy
 
 Ships the Atlas as a static site (see `../../docs/atlas-static.md`) behind an
-edge password gate (`functions/_middleware.js`) that blocks every request —
-HTML, JS bundle, `atlas-graph.json`, `world-snapshot.json`, every VRM/audio
-asset — until a signed session cookie is present. Groundwork only: **not
-deployed yet**, no `CLOUDFLARE_API_TOKEN` exists in this environment.
+edge password gate (`worker.js`) that blocks every request — HTML, JS
+bundle, `atlas-graph.json`, `world-snapshot.json`, every VRM/audio asset —
+until a signed session cookie is present. **Deployed 2026-07-28.**
+
+## Architecture (why Worker, not Pages)
+
+`CLOUDFLARE_API_TOKEN` in `~/.gaia/secrets.env` has the **"Edit Cloudflare
+Workers"** template scope only — verified via `wrangler whoami` — no Pages
+scope. So this ships as **one Worker with a bound `[assets]` directory**
+(Workers Static Assets, GA since 2025), not a Pages project. Functionally
+equivalent: `worker.js` is the entry point, gates every request, and falls
+through to `env.ASSETS.fetch(request)` for authenticated static serving.
+
+An earlier Pages-style draft (`functions/_middleware.js` as a Pages
+Function) exists in git history (commit `0ccf782c`) — superseded, removed
+from the working tree, semantics carried forward into `worker.js` almost
+unchanged (just `SESSION_SECRET` → `GATE_COOKIE_KEY` and
+`context.next()` → `env.ASSETS.fetch(request)`).
 
 ## What's here
 
 ```
 deploy/cloudflare/
-  wrangler.toml              Pages project "paloptic-atlas" config
-  functions/_middleware.js   the attached Worker (Pages Functions) — the gate
-  README.md                  this file
+  wrangler.toml   Worker "paloptic-atlas" config: main=worker.js, [assets] -> ../../dist
+  worker.js       the gate + asset passthrough
+  README.md       this file
+  proof/          browser screenshots from the live verification pass
 ```
-
-`wrangler.toml`'s `pages_build_output_dir = "../../dist"` points at the repo
-root's `dist/`, built separately (see below). `functions/` sits next to
-`wrangler.toml`, not inside `dist/` — that's the Pages Functions convention:
-Wrangler looks for `functions/` at the directory it's invoked from, not in
-the build output.
 
 ## One-time setup (human steps)
 
-1. Install wrangler if you want it resident (otherwise every command below
-   works fine via `npx wrangler …`, which is what this README uses — no
-   global install happened during this task):
+1. Wrangler: not installed globally — every command below runs via
+   `bunx wrangler`, which is fine.
+2. Auth:
    ```
-   npm i -D wrangler        # optional
+   source ~/.gaia/secrets.env   # CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+   export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
    ```
-2. Auth: `CLOUDFLARE_API_TOKEN` comes from `~/.gaia/secrets.env` **when
-   Pascal provides it** — it is not there yet (checked 2026-07-28: 0
-   `CLOUDFLARE*` entries). Once it exists:
+   Wrangler picks both up from the environment automatically.
+3. Bind the real secret (the HMAC key that signs the session cookie):
    ```
-   set -a && source ~/.gaia/secrets.env && set +a
+   openssl rand -hex 32 | bunx wrangler secret put GATE_COOKIE_KEY
    ```
-   (or `export CLOUDFLARE_API_TOKEN=…` directly). Wrangler picks it up from
-   the environment automatically — no `wrangler login` needed in a
-   non-interactive environment.
-3. Create the Pages project (first deploy also does this implicitly, but
-   explicit is clearer):
-   ```
-   cd deploy/cloudflare
-   npx wrangler pages project create paloptic-atlas
-   ```
-4. Bind the real secret (the HMAC key that signs the session cookie —
-   generate one, don't reuse the local test value below):
-   ```
-   openssl rand -hex 32 | npx wrangler pages secret put SESSION_SECRET --project-name paloptic-atlas
-   ```
-   `GATE_HASH` and `GATE_HINT` are already plain `[vars]` in `wrangler.toml`
-   (not secret — see the comment there for why) and ship with every deploy
-   automatically; no `secret put` needed for those. If the password ever
-   changes, update `GATE_HASH` in `wrangler.toml` from
+   `GATE_HASH` and `GATE_HINT` are plain `[vars]` in `wrangler.toml` (not
+   secret — see the comment there) and ship with every deploy automatically.
+   If the password ever changes, update `GATE_HASH` from
    `/Users/pascaldisse/projects/paloptic/gate/gate-config.json`'s `"sha256"`
    field (the hash only — never commit `PASSWORD.txt`).
 
@@ -64,72 +58,45 @@ From the repo root (`GAIA-World-Engine/`):
 GAIA_STATIC_BUILD=1 npx vite build
 ```
 
-Produces `dist/` — verified contents (2026-07-28 build): `index.html`,
-`assets/index-*.js` (client+plugins bundle, ~1.4 MB), `assets/vrm/` (62 MB),
-`assets/audio/` (37 MB), `assets/vrma/`, `assets/gate-config.json`,
-`assets/world-snapshot.json` (~632 KB), `atlas-graph.json` (4.1 MB) — 106 MB
-total, largest single file 18.5 MB (`cand-Sakurada_Fumiriya.vrm`), well
-under Cloudflare Pages' 25 MB per-file limit.
+Produces `dist/` (verified 2026-07-28 build, 108 MB / 48 files): `index.html`
+(21 KB), `assets/index-*.js` (client+plugins bundle incl. atlas-gate,
+atlas-director, atlas-analytics — plugins that aren't statically imported
+are still reachable at runtime via `fetch`; forge/cosmos/eidos ship inside
+the same bundle since the module graph pulls them in), `assets/vrm/` (4
+files, largest 19.3 MB), `assets/vrma/`, `assets/audio/beginning/` +
+`assets/audio/bloodborne/`, `assets/gate-config.json`,
+`assets/world-snapshot.json` (933 KB, 436 entities incl. Dream locus, v3),
+`atlas-graph.json` (4.38 MB). Largest single file 19.3 MB
+(`cand-Sakurada_Fumiriya.vrm`) — every file confirmed under Workers' 25 MB
+per-asset-file limit.
 
 ## Deploy
 
 ```
 cd deploy/cloudflare
-npx wrangler pages deploy ../../dist --project-name paloptic-atlas
+source ~/.gaia/secrets.env
+export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
+bunx wrangler deploy
 ```
 
-`wrangler.toml`'s `pages_build_output_dir` makes the directory arg
-redundant in newer wrangler versions but harmless to keep explicit.
+`wrangler.toml`'s `main = "worker.js"` + `[assets] directory = "../../dist"`
+make the deploy self-contained — no extra flags needed. Prints the live
+`*.workers.dev` URL on success.
 
-## Local test (no deploy, no token needed)
+## Verified live (2026-07-28)
 
-Pages Functions dev server, run from this directory so it finds
-`functions/_middleware.js`:
-
-```
-cd deploy/cloudflare
-npx wrangler pages dev ../../dist --port 8788 \
-  -b GATE_HASH=<sha256-of-a-test-password> \
-  -b GATE_HINT="local test" \
-  -b SESSION_SECRET=<any-test-string>
-```
-
-`wrangler pages dev` does **not** read `[vars]`/secrets from `wrangler.toml`
-(confirmed on wrangler 4.114.0 — only `CF_PAGES*` defaults show up without
-`-b`); pass `GATE_HASH`/`GATE_HINT`/`SESSION_SECRET` as `-b` bindings for a
-local run. `wrangler pages deploy` (the real deploy path) does read
-`wrangler.toml`'s `[vars]` — only the secret needs the separate
-`secret put` step above.
-
-Verified 2026-07-28 against the built `dist/` with a throwaway test
-password/hash pair (not the real gate secret):
-- `GET /` unauthenticated → `401`, gate shell HTML only (hint text present,
+- `GET /` unauthenticated → `401`, gate shell HTML only (liturgy + hint,
   zero app bytes)
-- `GET /atlas-graph.json` unauthenticated → `401` (the 4.2 MB file never
-  leaves the edge without a session)
+- `GET /atlas-graph.json` unauthenticated → `401` (no asset leakage)
 - `POST /gate` wrong password → `401`, no cookie
 - `POST /gate` correct password → `200`, `Set-Cookie: gate_session=…;
   HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`
-- same request replayed with the cookie → `GET /atlas-graph.json` `200`
-  full 4,225,492 bytes; `GET /assets/world-snapshot.json` `200` full 645,798
-  bytes; `GET /` `200` the real `index.html` (not the gate shell)
-- forged/tampered cookie (`gate_session=1700000000.deadbeef`) → `401`, back
-  to the gate (HMAC signature check rejects it)
-
-## Remaining human steps to actually ship
-
-1. Get `CLOUDFLARE_API_TOKEN` into `~/.gaia/secrets.env` (Pages:Edit
-   permission on the target account).
-2. `npx wrangler pages project create paloptic-atlas` (once).
-3. `openssl rand -hex 32 | npx wrangler pages secret put SESSION_SECRET --project-name paloptic-atlas` (once, or whenever rotating).
-4. `GAIA_STATIC_BUILD=1 npx vite build` from repo root (every deploy).
-5. `npx wrangler pages deploy ../../dist --project-name paloptic-atlas` from
-   `deploy/cloudflare/` (every deploy).
-6. Visit the `*.pages.dev` URL Wrangler prints, confirm the gate prompt
-   appears, unlock with the real password, confirm the Atlas loads.
-7. Optional: attach a custom domain in the Cloudflare dashboard (Pages
-   project → Custom domains) — no code change needed, the Worker gates
-   every hostname that routes to the project.
+- authenticated `GET /` → real `index.html`
+- authenticated `GET /atlas-graph.json` → `200`, full 4,383,780 bytes
+- authenticated `GET /assets/audio/beginning/full-mix.m4a` → `200`, full
+  bytes
+- Browser (CDP): gate → correct password → eye opens → "THE BEGINNING" →
+  film plays → Esc → database/universe renders. Screenshots in `proof/`.
 
 ## Known limitation carried over
 

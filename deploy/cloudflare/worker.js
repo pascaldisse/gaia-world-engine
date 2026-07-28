@@ -1,53 +1,49 @@
-// _middleware.js — THE REAL GATE: runs on every request to every path in
-// the Pages project, before any static asset (index.html, main.js, the VRM
-// files, atlas-graph.json, world-snapshot.json — all of it) ever leaves the
-// edge. client/plugins/atlas-gate.js is presentation-only (its own honesty
-// note says as much: a devtools user can strip that overlay or read its
-// hash straight out of client/assets/gate-config.json, because by the time
-// it runs, the whole app already shipped to the browser). This is the
-// enforcement atlas-gate.js said had to "land at deploy time" — same secret,
-// checked server-side, before any byte of the site is served.
+// worker.js — THE REAL GATE, adapted from the original Pages Functions
+// middleware (functions/_middleware.js, kept for history) to a Workers-
+// with-static-assets deploy: the account's CLOUDFLARE_API_TOKEN has only
+// "Edit Cloudflare Workers" scope, no Pages scope, so this ships as a
+// single Worker with a bound [assets] directory instead of a Pages project.
 //
-// Flow:
-//   unauthenticated (no valid signed cookie) + any path        -> gate shell (401)
+// Flow (identical semantics to the Pages version):
+//   unauthenticated (no valid signed cookie) + any path        -> gate shell (401), zero asset bytes
 //   unauthenticated + POST /gate {password}                    -> check, set cookie, or 401
-//   authenticated (valid signed cookie)                        -> next() -> normal Pages static serving
+//   authenticated (valid signed cookie)                        -> env.ASSETS.fetch(request) -> normal static serving
 //
 // Secret handling:
-//   GATE_HASH      — SHA-256 of the raw password (see hashHex below), bound
-//                     as a plain var in wrangler.toml. Not secret by itself:
-//                     it's the exact same hash client/assets/gate-config.json
-//                     already ships to every browser for the presentation
-//                     gate. What makes this Worker meaningful is WHEN it
-//                     checks it, not that the hash is hidden.
-//   SESSION_SECRET — a real secret (HMAC key), never in wrangler.toml. Set
-//                     with `wrangler pages secret put SESSION_SECRET`. Signs
-//                     the gate_session cookie so it can't be forged by
-//                     guessing or copying a cookie shape.
+//   GATE_HASH        — SHA-256 of the raw password (see sha256Hex below),
+//                       bound as a plain var in wrangler.toml. Not secret by
+//                       itself: it's the exact same hash
+//                       client/assets/gate-config.json already ships to
+//                       every browser for the presentation gate. What makes
+//                       this Worker meaningful is WHEN it checks it.
+//   GATE_COOKIE_KEY   — a real secret (HMAC key), never in wrangler.toml.
+//                       Set with `wrangler secret put GATE_COOKIE_KEY`.
+//                       Signs the gate_session cookie so it can't be forged.
 
 const COOKIE_NAME = 'gate_session';
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
-export async function onRequest(context) {
-  const { request, env, next } = context;
-  const url = new URL(request.url);
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
 
-  if (request.method === 'POST' && url.pathname === '/gate') {
-    return handleGate(request, env);
-  }
+    if (request.method === 'POST' && url.pathname === '/gate') {
+      return handleGate(request, env);
+    }
 
-  if (await isAuthenticated(request, env)) {
-    return next();
-  }
+    if (await isAuthenticated(request, env)) {
+      return env.ASSETS.fetch(request);
+    }
 
-  return gateShell(env);
-}
+    return gateShell(env);
+  },
+};
 
 // ── the check ────────────────────────────────────────────────────────────
 
 async function handleGate(request, env) {
-  if (!env.SESSION_SECRET) {
-    return json({ ok: false, error: 'server misconfigured: SESSION_SECRET unset' }, 500);
+  if (!env.GATE_COOKIE_KEY) {
+    return json({ ok: false, error: 'server misconfigured: GATE_COOKIE_KEY unset' }, 500);
   }
   let body;
   try {
@@ -62,7 +58,7 @@ async function handleGate(request, env) {
   if (!match) return json({ ok: false }, 401);
 
   const issuedAt = String(Math.floor(Date.now() / 1000));
-  const sig = await sign(issuedAt, env.SESSION_SECRET);
+  const sig = await sign(issuedAt, env.GATE_COOKIE_KEY);
   const cookie = `${issuedAt}.${sig}`;
   const headers = new Headers({ 'content-type': 'application/json' });
   headers.append(
@@ -73,14 +69,14 @@ async function handleGate(request, env) {
 }
 
 async function isAuthenticated(request, env) {
-  if (!env.SESSION_SECRET) return false;
+  if (!env.GATE_COOKIE_KEY) return false;
   const cookie = getCookie(request, COOKIE_NAME);
   if (!cookie) return false;
   const [issuedAt, sig] = cookie.split('.');
   if (!issuedAt || !sig) return false;
   const age = Math.floor(Date.now() / 1000) - Number(issuedAt);
   if (!Number.isFinite(age) || age < 0 || age > MAX_AGE_SECONDS) return false;
-  const expected = await sign(issuedAt, env.SESSION_SECRET);
+  const expected = await sign(issuedAt, env.GATE_COOKIE_KEY);
   return timingSafeEqual(expected, sig);
 }
 
@@ -137,9 +133,10 @@ function json(data, status = 200) {
 // ── the shell ────────────────────────────────────────────────────────────
 // Unauthenticated visitors get ONLY this — never the app bundle, never the
 // world snapshot, never a single VRM byte. Deliberately plain: it is a
-// password prompt, not a re-implementation of atlas-gate.js's ritual (that
-// stays the in-app experience for the SECOND, presentation-layer gate that
-// still runs after this one lets you through).
+// password prompt matching the client's atlas-gate.js aesthetic (black
+// background, serif liturgy, single centered input), not a re-implementation
+// of its full ritual — that stays the in-app experience for the SECOND,
+// presentation-layer gate that still runs after this one lets you through.
 
 function gateShell(env) {
   const hint = escapeHtml(env.GATE_HINT ?? '');
@@ -154,6 +151,8 @@ function gateShell(env) {
     font-family:'Cormorant Garamond','Palatino Linotype',Palatino,Georgia,serif;
     display:flex;align-items:center;justify-content:center}
   .wrap{max-width:26em;padding:0 8vw;text-align:center}
+  .liturgy{opacity:.55;font-size:13px;letter-spacing:.06em;line-height:1.7;
+    margin-bottom:2.2em;font-style:italic}
   .hint{opacity:.7;font-size:14px;letter-spacing:.08em;margin-bottom:1.6em}
   input{width:100%;box-sizing:border-box;background:transparent;border:none;
     border-bottom:1px solid rgba(230,220,205,.3);color:#e6dccd;font:inherit;
@@ -164,6 +163,7 @@ function gateShell(env) {
 </head>
 <body>
   <div class="wrap">
+    <p class="liturgy">Fear the old blood.</p>
     <p class="hint">${hint}</p>
     <input id="pw" type="password" autocomplete="off" spellcheck="false" autofocus />
     <p class="msg" id="msg"></p>

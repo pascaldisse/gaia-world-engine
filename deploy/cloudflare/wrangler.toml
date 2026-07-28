@@ -1,23 +1,35 @@
-# paloptic-atlas — Cloudflare Pages project + attached Worker (Pages
-# Functions, see functions/_middleware.js) fronting the static Atlas build.
+# paloptic-atlas — Cloudflare Worker w/ static assets fronting the built
+# Atlas. Adapted 2026-07-28 from an earlier Pages-style scaffold: the
+# account's CLOUDFLARE_API_TOKEN has the "Edit Cloudflare Workers" template
+# scope only (verified via `wrangler whoami`), NOT Pages — so this ships as
+# ONE Worker with a bound [assets] directory, not a Pages project.
 #
-# This file lives at deploy/cloudflare/wrangler.toml so `wrangler pages
-# deploy` run FROM THIS DIRECTORY finds functions/_middleware.js next to it
-# (Pages Functions convention: a `functions/` dir at the project root the
-# deploy command runs from — NOT inside the build output). The build output
-# itself (`dist/`) is generated separately at the repo root by `vite build`
-# and referenced here by relative path.
+# worker.js sits next to this file and is the entry point: it gates every
+# request (HTML, JS bundle, atlas-graph.json, world-snapshot.json, every
+# VRM/audio asset) behind a signed session cookie before falling through to
+# env.ASSETS.fetch(request) for the real static serving.
 #
 # Deploy commands: see README.md in this directory.
 
 name = "paloptic-atlas"
+main = "worker.js"
 compatibility_date = "2026-07-28"
 compatibility_flags = ["nodejs_compat"]
 
-# Cloudflare Pages build output — the static site (client + plugins + assets
-# + world-snapshot.json + atlas-graph.json), produced by:
-#   GAIA_STATIC_BUILD=1 npx vite build   (run from repo root)
-pages_build_output_dir = "../../dist"
+# The static Atlas build — client + plugins + assets + world-snapshot.json +
+# atlas-graph.json — produced by (run from repo root):
+#   GAIA_STATIC_BUILD=1 npx vite build
+# run_worker_first = true is load-bearing: without it, Cloudflare's asset
+# routing serves any request matching a file in dist/ (including / ->
+# index.html, /atlas-graph.json, every VRM/audio file) DIRECTLY, bypassing
+# worker.js's fetch() entirely -- the gate would never run. Verified
+# 2026-07-28: first deploy without this leaked the full app + atlas-graph.json
+# unauthenticated. With it, every request hits fetch() first, and only an
+# authenticated request reaches env.ASSETS.fetch(request).
+[assets]
+directory = "../../dist"
+binding = "ASSETS"
+run_worker_first = true
 
 # GATE_HASH is NOT secret — it's the same SHA-256 already shipped client-side
 # in client/assets/gate-config.json (the presentation-layer gate reads it
@@ -29,7 +41,7 @@ pages_build_output_dir = "../../dist"
 GATE_HASH = "8fc666825e1a4b0683854a0fb24b506de10560cf3f66d516a72350cae5d6ce57"
 GATE_HINT = "Fear the old blood (visually)"
 
-# SESSION_SECRET is a REAL secret (HMAC key that signs the gate_session
-# cookie) — never put it in this file. Set it once per environment with:
-#   wrangler pages secret put SESSION_SECRET --project-name paloptic-atlas
+# GATE_COOKIE_KEY is a REAL secret (HMAC key that signs the gate_session
+# cookie) — never in this file. Set once per environment with:
+#   bunx wrangler secret put GATE_COOKIE_KEY
 # (generate one locally: `openssl rand -hex 32`)

@@ -13,7 +13,7 @@
 # the machine a human is sitting at.
 set -euo pipefail
 
-CHROME=${CHROME:-/Users/pascaldisse/Library/Caches/ms-playwright/chromium-1228/chrome-mac/Chromium.app/Contents/MacOS/Chromium}
+CHROME=${CHROME:-/Users/pascaldisse/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing}
 PORT=${GAIA_CLIENT_PORT:-5191}
 CDP=${CDP_PORT:-9241}
 DIR=${BEAUTY_TMP:-/tmp/beauty}

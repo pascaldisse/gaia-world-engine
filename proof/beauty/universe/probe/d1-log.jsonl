@@ -1,0 +1,2 @@
+{"tag":"d1","at":"galaxy:0","dist":520,"file":"proof/beauty/universe/probe/d1-d520.png","bytes":436414,"perf":{"fps":68.7,"p95":29.9,"worst":20.2,"drawCalls":206,"triangles":620813,"pixelRatio":1.5,"adapter":"apple/common-3","errs":[]}}
+{"tag":"d1","at":"galaxy:0","dist":150,"file":"proof/beauty/universe/probe/d1-d150.png","bytes":332942,"perf":{"fps":43.1,"p95":19.9,"worst":17.2,"drawCalls":180,"triangles":614957,"pixelRatio":1,"adapter":"apple/common-3","errs":[]}}

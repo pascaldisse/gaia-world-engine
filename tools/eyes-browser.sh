@@ -23,8 +23,8 @@ for c in \
 done
 CHROME=${CHROME:?no browser binary found}
 
-CDP=${CDP_PORT:-9251}
-CLIENT=${GAIA_CLIENT_PORT:-5187}
+CDP=${EYES_CDP_PORT:-9251}
+CLIENT=${EYES_CLIENT_PORT:-5187}
 PROFILE=${PROFILE:-/tmp/eyes/browser}
 LOG=${LOG:-/tmp/eyes/logs/browser.log}
 SIZE=${SIZE:-1600,900}

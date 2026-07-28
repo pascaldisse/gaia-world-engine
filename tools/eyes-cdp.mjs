@@ -21,8 +21,8 @@ import WebSocket from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const CDP = process.env.CDP_PORT ?? 9251;
-const CLIENT = process.env.GAIA_CLIENT_PORT ?? 5187;
+const CDP = process.env.EYES_CDP_PORT ?? 9251;
+const CLIENT = process.env.EYES_CLIENT_PORT ?? 5187;
 
 export async function connect() {
   const list = await (await fetch(`http://localhost:${CDP}/json/list`)).json();

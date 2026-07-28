@@ -10,9 +10,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 
-export GAIA_PORT=${GAIA_PORT:-8431}          # world server (never 8420/8421)
-export GAIA_CLIENT_PORT=${GAIA_CLIENT_PORT:-5187}  # vite (never 5173/5174)
-export GAIA_WORLD=${GAIA_WORLD:-/tmp/eyes/world}   # ops persist HERE, not the repo
+# THE PORTS ARE NOT INHERITED. Measured the hard way (07-28): the GAIA harness
+# exports GAIA_PORT=8787 for its OWN daemon, so `${GAIA_PORT:-8431}` launched
+# this lane's world server ON TOP OF the daemon's port — a second listener on
+# 8787 (IPv6 vs the daemon's IPv4, so it bound silently). A lane may only ever
+# be overridden by its OWN variables.
+export GAIA_PORT=${EYES_PORT:-8431}                # world server (never 8420/8421/8787)
+export GAIA_CLIENT_PORT=${EYES_CLIENT_PORT:-5187}  # vite (never 5173/5174)
+export GAIA_WORLD=${EYES_WORLD:-/tmp/eyes/world}   # ops persist HERE, not the repo
 LANE=${LANE:-/tmp/eyes}
 LOG=$LANE/logs
 

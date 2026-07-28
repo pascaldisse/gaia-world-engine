@@ -12,6 +12,14 @@
 //         closes the scrubber WITHOUT skipping the intro (and skips once the
 //         scrubber is closed).
 //
+// ── SILENCE IS A LAW, NOT A PREFERENCE (Pascal, 2026-07-28) ──────────────────
+// A headless proof browser sang out loud on his machine. Launch it ONLY with
+// tools/film-d-browser.sh (--mute-audio is baked in), use audio:false unless a
+// run is actually verifying A/V sync, and when it is, the harness sets
+// audio.el.muted = true itself — a muted element's currentTime still advances,
+// so the lock is still measured, it is just never heard. The live pass asserts
+// its own silence before it seeks anything.
+//
 // usage:  CDP_PORT=9228 GAIA_CLIENT_PORT=5180 node tools/scrubber-proof.mjs [dry|live|both]
 import fs from 'node:fs';
 import { connectCdp } from './cdp-lib.mjs';
@@ -306,6 +314,18 @@ async function livePass() {
   await sleep(60);
   await mouse('mouseReleased', box.x, box.y, 0, 'left');
   await sleep(3000);
+  // SILENCE FIRST, MEASURE SECOND: mute the element and the graph the moment
+  // the film exists. currentTime keeps advancing, so the A/V lock below is
+  // still a real measurement.
+  const silence = await ev(`
+    const d = gaia.director.director;
+    d.audio.el.muted = true;
+    d.muted = true;
+    d.audio.music.gain.value = 0;
+    d.audio.voice.gain.value = 0;
+    return { elMuted: d.audio.el.muted, music: d.audio.music.gain.value, voice: d.audio.voice.gain.value };`);
+  check('live: the proof browser is SILENT (element muted, gains at 0)',
+    silence.elMuted && silence.music === 0 && silence.voice === 0, JSON.stringify(silence));
   const rolling = await ev('return gaia.director.status()');
   check('live: the film rolls with real audio', rolling.playing && rolling.ctx === 'running' && rolling.audioT > 0.2,
     `ctx=${rolling.ctx} audioT=${rolling.audioT} t=${rolling.t}`);
@@ -323,10 +343,10 @@ async function livePass() {
     const s = await ev(`
       const d = gaia.director.director;
       return { t:+d.t.toFixed(2), audioT:+d.audio.el.currentTime.toFixed(2), paused:d.audio.el.paused,
-               playing:d.playing, chapter:gaia.atlasScrubber.status().chapter, gain:+d.audio.music.gain.value.toFixed(2) };`);
-    check(`live: A/V lock after a seek to ${t}s`,
-      Math.abs(s.audioT - s.t) < 0.35 && Math.abs(s.t - t) < 3.5 && (!audioClock || !s.paused),
-      `t=${s.t} el.currentTime=${s.audioT} playing=${s.playing} chapter=${s.chapter} musicGain=${s.gain}`);
+               playing:d.playing, chapter:gaia.atlasScrubber.status().chapter, muted:d.audio.el.muted };`);
+    check(`live: A/V lock after a seek to ${t}s (muted — currentTime still runs)`,
+      Math.abs(s.audioT - s.t) < 0.35 && Math.abs(s.t - t) < 3.5 && (!audioClock || !s.paused) && s.muted,
+      `t=${s.t} el.currentTime=${s.audioT} playing=${s.playing} chapter=${s.chapter} elMuted=${s.muted}`);
     await shot(`12-av-${Math.round(t)}`);
   }
   // and it KEEPS following the element (not a stale virtual t)
@@ -343,7 +363,9 @@ async function livePass() {
   check('live: esc closes the scrubber and does NOT shadow the intro',
     !afterEsc.open && afterEsc.intro === stateBefore && afterEsc.playing,
     `intro ${stateBefore} → ${afterEsc.intro}`);
-  // …and with the scrubber closed, Esc is the visitor's skip again
+  // …and with the scrubber closed, Esc is the visitor's skip again (a second
+  // press a beat later, the way a hand does it)
+  await sleep(400);
   await key('Escape');
   await sleep(600);
   const skipped = await ev('return gaia.atlasIntro.status().state');
@@ -364,6 +386,7 @@ async function livePass() {
   await mouse('mouseReleased', b2.x, b2.y, 0, 'left');
   await sleep(2500);
   await key('Backquote');
+  await ev("const d=gaia.director.director; d.audio.el.muted=true; d.muted=true; d.audio.music.gain.value=0; d.audio.voice.gain.value=0; return 1;");
   await ev('return gaia.director.scrub(287.4, { resume: true })');
   for (let i = 0; i < 40; i += 1) {
     if (await ev("return gaia.atlasIntro.status().state === 'handover'")) break;
@@ -389,13 +412,17 @@ async function livePass() {
   const revived = await ev(`
     const d = gaia.director.director;
     return { t:+d.t.toFixed(2), audioT:+d.audio.el.currentTime.toFixed(2), stage:!!d.stage, released:d.released,
-             playing:d.playing, gain:+d.audio.music.gain.value.toFixed(2),
+             playing:d.playing, gain:+d.audio.music.gain.value.toFixed(2), elMuted:d.audio.el.muted,
              cinematic: document.body.classList.contains('atlas-cinematic'),
              chapter: gaia.atlasScrubber.status().chapter, entered: [...d.entered].length };`);
   check('live: scrubbing back after a completed handover re-enters film state',
     revived.stage && revived.released === false && revived.playing && Math.abs(revived.audioT - revived.t) < 0.4,
     JSON.stringify(revived));
-  check('live: resume re-arms the mix the handover had faded out', revived.gain > 0.5, `musicGain=${revived.gain}`);
+  // resume() re-arms the mix (the handover faded it to 0) — the GAIN is what is
+  // asserted; the element stays muted, so the film is audible in a real tab and
+  // silent in this one
+  check('live: resume re-arms the mix the handover had faded out', revived.gain > 0.5 && revived.elMuted,
+    `musicGain=${revived.gain} elMuted=${revived.elMuted}`);
   await shot('15-back-after-handover');
   // and closing the scrubber puts back what it changed
   const cinBefore = await ev('return document.body.classList.contains("atlas-cinematic")');

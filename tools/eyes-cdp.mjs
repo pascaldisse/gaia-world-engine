@@ -24,6 +24,14 @@ import path from 'node:path';
 const CDP = process.env.EYES_CDP_PORT ?? 9251;
 const CLIENT = process.env.EYES_CLIENT_PORT ?? 5187;
 
+// WHERE THE COSMOS ACTUALLY IS. main.js publishes `gaia.atlasStrategy` and the
+// cosmos layer hangs off it — there is no `gaia.cosmos`. Every eval here gets
+// this prelude so no probe has to guess.
+const PRELUDE = `const cosmosOf = () => { const g = window.gaia ?? {};
+  const c = g.atlasStrategy?.cosmos ?? g.cosmos?.cosmos ?? g.cosmos ?? g.director?.director?.cos ?? null;
+  return c?.ready ? c : null; };
+  const dirOf = () => window.gaia?.director?.director ?? window.gaia?.director ?? null;`;
+
 export async function connect() {
   const list = await (await fetch(`http://localhost:${CDP}/json/list`)).json();
   const page = list.find((t) => t.type === 'page' && t.url.includes(`:${CLIENT}`))
@@ -54,7 +62,7 @@ export async function connect() {
 
   async function ev(expr, { awaitPromise = true, timeout = 120000 } = {}) {
     const r = await Promise.race([
-      send('Runtime.evaluate', { expression: `(async()=>{ ${expr} })()`, awaitPromise, returnByValue: true }),
+      send('Runtime.evaluate', { expression: `(async()=>{ ${PRELUDE}\n${expr} })()`, awaitPromise, returnByValue: true }),
       new Promise((res) => setTimeout(() => res({ timedOut: true }), timeout)),
     ]);
     if (r.timedOut) throw new Error(`eval timed out after ${timeout}ms`);
@@ -78,14 +86,14 @@ export async function connect() {
 }
 
 /** the two gates + a reload, then wait for the cosmos. */
-export async function boot(c, { url = `http://localhost:${CLIENT}/?mute=1&intro=off`, waitMs = 120000 } = {}) {
+export async function boot(c, { url = `http://localhost:${CLIENT}/?static=1&mute=1&intro=off`, waitMs = 120000 } = {}) {
   await c.ev(`localStorage.setItem('atlas_gate','1'); localStorage.setItem('atlas_seen_intro','1'); return 1;`);
   await c.send('Page.navigate', { url });
   const t0 = Date.now();
   for (;;) {
     if (Date.now() - t0 > waitMs) throw new Error('cosmos never became ready');
     await new Promise((r) => setTimeout(r, 1000));
-    const ok = await c.ev(`return !!(window.gaia?.cosmos?.cosmos?.ready ?? window.gaia?.cosmos?.ready);`).catch(() => false);
+    const ok = await c.ev(`return !!cosmosOf();`).catch(() => false);
     if (ok) break;
   }
   return Date.now() - t0;

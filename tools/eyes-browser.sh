@@ -28,7 +28,7 @@ CLIENT=${EYES_CLIENT_PORT:-5187}
 PROFILE=${PROFILE:-/tmp/eyes/browser}
 LOG=${LOG:-/tmp/eyes/logs/browser.log}
 SIZE=${SIZE:-1600,900}
-URL=${1:-"http://localhost:${CLIENT}/?mute=1&intro=off"}
+URL=${1:-"http://localhost:${CLIENT}/?static=1&mute=1&intro=off"}
 
 pkill -f "remote-debugging-port=${CDP}" 2>/dev/null || true
 sleep 0.8

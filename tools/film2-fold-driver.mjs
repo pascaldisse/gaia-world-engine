@@ -140,6 +140,36 @@ if (cmd === 'roll') {
     await sleep(1500);
   }
   await sleep(1000);
+  // DISMISS THE INTRO, LIKE A USER. #atlas-intro is display:flex with an OPAQUE
+  // BLACK background at z-index 2147483000 over the whole viewport, and the
+  // deny-all sweep deliberately ALLOWS it (its mist belongs to the film). So a
+  // whitelist can never catch it: the film rolled correctly underneath while
+  // every frame photographed 'THE BEGINNING / ENTER THE DREAM'.
+  // It survived because roll() only clicks the gate when window.gaia.film2 is
+  // absent — on an already-booted page it skipped the click, and nothing else
+  // ever takes the intro down. Dismiss it the way the player does, then VERIFY.
+  for (let i = 0; i < 4; i += 1) {
+    const up = await ev(`(() => { const el = document.querySelector('#atlas-intro');
+      return !!el && getComputedStyle(el).display !== 'none' && Number(getComputedStyle(el).opacity) > 0.02; })()`);
+    if (up !== true) break;
+    const hit = await ev(`(() => {
+      const b = [...document.querySelectorAll('#atlas-intro button, #atlas-intro [data-action], #atlas-intro a')]
+        .find((x) => /enter the dream|witness|begin|skip/i.test(x.textContent || ''));
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), text: b.textContent.trim() };
+    })()`);
+    if (hit) {
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await send('Input.dispatchMouseEvent', { type, x: hit.x, y: hit.y, button: 'left', clickCount: 1 });
+      }
+    } else {
+      for (const type of ['keyDown', 'keyUp']) {
+        await send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+      }
+    }
+    await sleep(900);
+  }
   // ASSERT THE DENY-ALL SWEEP. play() runs it; scrub()/resume() — the path this
   // command actually takes — does not, so the entry gate (#overlay) stayed on
   // screen over a film that was rolling perfectly well underneath it. Every
@@ -152,8 +182,12 @@ if (cmd === 'roll') {
       const cs = getComputedStyle(el); const r = el.getBoundingClientRect();
       return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.02 && r.width > 2 && r.height > 2;
     }).map((el) => el.id || el.tagName.toLowerCase());
-    return { chrome: 'swept', visibleTopLevel: sq };
+    const intro = document.querySelector('#atlas-intro');
+    const introUp = !!intro && getComputedStyle(intro).display !== 'none' && Number(getComputedStyle(intro).opacity) > 0.02;
+    return { chrome: 'swept', visibleTopLevel: sq, introUp };
   })()`);
+  // A ROLL THAT CANNOT SEE THE FILM IS NOT A ROLL.
+  if (chrome?.introUp) { console.error('[roll] ABORT: #atlas-intro still covers the frame'); ws.close(); process.exit(2); }
   console.log(JSON.stringify({ ...(await ev(`(() => ({ t: window.gaia?.director?.director?.t, audioT: window.gaia?.director?.director?.audio?.el?.currentTime, paused: window.gaia?.director?.director?.audio?.el?.paused, seg: window.gaia?.film2?.status?.().current }))()`)), ...chrome }));
   ws.close(); process.exit(0);
 }
@@ -187,7 +221,9 @@ const filmChrome = async () => ev(`(() => {
     const cs = getComputedStyle(el); const r = el.getBoundingClientRect();
     return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.02 && r.width > 2 && r.height > 2;
   }).map((el) => el.id || el.tagName.toLowerCase());
-  return { chrome: 'swept', visibleTopLevel: sq };
+  const intro = document.querySelector('#atlas-intro');
+  const introUp = !!intro && getComputedStyle(intro).display !== 'none' && Number(getComputedStyle(intro).opacity) > 0.02;
+  return { chrome: 'swept', visibleTopLevel: sq, introUp };
 })()`);
 
 // The media state at the moment of a freeze — every field that could explain
@@ -221,6 +257,10 @@ if (cmd === 'grab') {
   const dir = path.join(OUT, process.env.STRIP_DIR ?? 'strip-fix');
   fs.mkdirSync(dir, { recursive: true });
   const chrome = await filmChrome();
+  // The intro is opaque black at max z-index and the sweep ALLOWS it; if it is
+  // still up, every frame would photograph the gate instead of the film (and
+  // being near-uniform, it would even measure as a clean, consistent result).
+  if (chrome?.introUp) { console.error('[grab] ABORT: #atlas-intro covers the frame — run `roll` first'); ws.close(); process.exit(2); }
   const stalls = [];
   const t0 = Date.now();
   let next = from;

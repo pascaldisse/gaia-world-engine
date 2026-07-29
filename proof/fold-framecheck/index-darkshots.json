@@ -1,0 +1,94 @@
+[
+  {
+    "t": 180.8,
+    "scene": "watchers",
+    "rite": "covenants",
+    "tgt": [
+      -71,
+      228,
+      -34
+    ],
+    "dist": 775,
+    "yaw": 4.97,
+    "pitch": 0.328,
+    "eye": [
+      208,
+      295,
+      321
+    ],
+    "forged": 8,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": ".scratch/plates-c/1808-180_8s.png",
+    "bytes": 115780
+  },
+  {
+    "t": 236.3,
+    "scene": "descent",
+    "rite": "dream",
+    "tgt": [
+      122,
+      -877,
+      -93
+    ],
+    "dist": 504,
+    "yaw": 7.51,
+    "pitch": 0.422,
+    "eye": [
+      -780,
+      477,
+      154
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": ".scratch/plates-c/2363-236_3s.png",
+    "bytes": 59646
+  },
+  {
+    "t": 258,
+    "scene": "altar",
+    "rite": "dream",
+    "tgt": [
+      0,
+      -1216,
+      0
+    ],
+    "dist": 282,
+    "yaw": 8.34,
+    "pitch": 0.14,
+    "eye": [
+      556,
+      -670,
+      61
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": ".scratch/plates-c/2580-258s.png",
+    "bytes": 69471
+  },
+  {
+    "t": 270,
+    "scene": "home",
+    "rite": "dream",
+    "tgt": [
+      -2,
+      -1197,
+      -1
+    ],
+    "dist": 447,
+    "yaw": 8.8,
+    "pitch": 0.435,
+    "eye": [
+      247,
+      -1177,
+      -130
+    ],
+    "forged": 9,
+    "reveal": 1,
+    "subtitleText": null,
+    "file": ".scratch/plates-c/2700-270s.png",
+    "bytes": 35230
+  }
+]

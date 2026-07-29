@@ -99,11 +99,15 @@ film shows AT that second").
 | 79.7 | `0797-79_7s.png` | candle/dream | "The old blood woke, a candle spark" | PASS — single ignited point, subtitle synced |
 | 108.9 | `1089-108_9s.png` | split/dream | "It split its blood to seed the stone" | PASS — motes scattering, reveal=0.028 |
 | 135.8 | `1358-135_8s.png` | sparks/dream | "Each one a soul, each one a flame" | PASS — sparks/motes visible, reveal=0.675 |
-| 180.8 | `1808-180_8s.png` | watchers/covenants | "The Great Ones stirred from ageless years" | **DEFECT** — spec calls for "eyes open" at this timestamp; at normal exposure the frame shows only small distant motes/dust, no legible eye geometry (dist=775) |
-| 236.3 | `2363-236_3s.png` | descent/dream | (none legible) | **DEFECT** — frame is almost pure black, effectively blank; spec requires "no blanks" |
-| 258 | `2580-258s.png` | altar/dream | "And one was left behind the door" | PASS — a translucent tentacled Presence is visible (Ebrietas's cue fires at 248.5, before this t) |
-| 270 | `2700-270s.png` | home/dream | "Left behind, and reaching still" | **DEFECT** — spec requires "Ebrietas a being" at this timestamp; frame is almost entirely black, no recognizable being at normal exposure |
+| 180.8 | `1808-180_8s.png` | watchers/covenants | "The Great Ones stirred from ageless years" | **PASS (re-shot 07-29)** — the wreath reads: eight coloured covenant clusters, ringed watcher glyphs top-right, the pale sun at centre. mean 4.40 / p99 124 (was mean 11.31 / p99 35 — a flat grey lift with no highlights in it) |
+| 236.3 | `2363-236_3s.png` | descent/dream | (none legible) | **PASS (re-shot 07-29)** — the fall: a full column of light streaks rushing up past the lens, Ebrietas small and lit at the bottom. mean 2.46 / p99 98 (was 10.01 / p99 10 = uniform haze, nothing in it) |
+| 258 | `2580-258s.png` | altar/dream | "And one was left behind the door" | **PASS — NOT REGRESSED (re-shot 07-29)**, and better: the nine veils now fall visibly onto her and her lamp is at full. mean 6.56 / p99 171 (was 11.10 / p99 27) |
+| 270 | `2700-270s.png` | home/dream | "Left behind, and reaching still" | **PASS (re-shot 07-29)** — she is a being: bell, crown-ring and every tentacle legible, still lit at the crest. mean 2.35 / p99 115 (was 10.68 / p99 12) |
 | 285 | `2850-285s.png` | home/dream | (Doll dialogue open, no subtitle line) | **PASS** — the Doll panel being open here is *scripted film content*: `atlas-director.js`'s `tickScene('home')` calls `c.openFigure('doll')` + plays `doll-welcome-home.ogg` once `t >= 278.2`, which `seek(285)` correctly replays in order |
+
+> **SUPERSEDED 2026-07-29 — the three DEFECTs below are CLEARED.** See
+> "§ THREE DARK SHOTS" at the end of this file for cause → fix → plate. The
+> paragraphs that follow are the record of the failing pass, left intact.
 
 **No-blanks check: FAIL at t=236.3 and t=270** (unchanged from prior run —
 the app fix landed in `window.gaia` plumbing, not in film exposure/lighting;
@@ -140,7 +144,112 @@ present and correct in the screenshots (confirmed by eye, see table above).
 - Plates: **7/10 PASS, 3/10 DEFECT** (180.8 eyes not visible, 236.3
   near-blank, 270 Ebrietas not recognizable at normal exposure) — unchanged
   from pre-fix run; these are film-exposure/content bugs independent of the
-  `window.gaia` fix.
+  `window.gaia` fix. **→ all three CLEARED 07-29, plates 10/10 PASS: see
+  § THREE DARK SHOTS below.**
 - Zero default-white controls: confirmed clean across every surface.
 - 3 app-code bugs found and logged (onboarding login style, intro
   self-dismiss, scrubber re-arm) — out of this fix's scope, not fixed.
+
+---
+
+# § THREE DARK SHOTS — cause → fix → plate (2026-07-29)
+
+Plates re-shot on the iso stack (world :8462, vite :5222, Brave CDP :9262
+headless muted) with `TIMES=180.8,236.3,258,270`, overwritten in place.
+Nothing in the camera track was touched — no key, no `sampleCamera`, no
+scene table — so the film-b audit's `stops:0` cannot have moved; the
+per-plate camera fields (`dist`/`tgt`/`eye`/`yaw`/`pitch`) are byte-identical
+to the failing batch, which is the check itself.
+
+## Cause 1 — THE HARNESS was photographing the wrong frame
+
+A seek renders **one** frame and stops (the film is paused; nothing
+re-renders on its own — an 8-second wait changes nothing, measured). Under
+WebGPU three.js **skips** any object whose render pipeline is not compiled
+yet and compiles it in the background — so the first frame in which an
+effect pool first becomes non-empty is photographed **without that pool**.
+
+Proof, one page, one seek target, `.scratch/statediff.mjs`: state dumps
+after seek #1 and seek #2 at t=236.3 are **identical** — same scene, same
+camera `[556,-670,61]`, same 131 live streaks, same lights, same fog, same
+mesh counts — and the pictures are not: mean luminance **0.78** vs **5.65**.
+
+Every earlier batch seeks ascending from a fresh page, so the first shot that
+needs a given material photographs black. That alone made "236.3 is an empty
+frame" and it is a *measurement* defect, not a film defect.
+
+**Fix** — `tools/fold-framecheck3-plates.mjs`: after the settle wait, re-seek
+the same `t` (a second render) and shoot then. Commit `0fd2e0c`.
+
+## Cause 2 — the streak alpha clamp killed the entire lower half of the film
+
+`streakMaterial()` faded the tail with `positionLocal.y + 0.5` clamped to
+[0,1]. On an InstancedMesh under WebGPU `positionLocal` is not the geometry's
+own y, so every streak living below the origin got alpha 0 — the fall
+(y ≈ −1000), the bell's pulse down the bloodline and the altar's nine veils
+(y ≈ −1250) were **all** invisible.
+
+Measured warm (pipeline hot, so cause 1 cannot contaminate it), one page,
+same frame t=236.3, only this node swapped — `.scratch/warmab.mjs`:
+
+| node | mean lum | p99 |
+|---|---|---|
+| `positionLocal` (old) | 0.80 | 17 |
+| `positionGeometry` (new) | 5.50 | 158 |
+
+Same A/B also restored `side: DoubleSide` (the original): the spindle is an
+**open** cylinder, so front-only throws away its far wall under additive
+light — mean 5.50 (FrontSide) vs **14.48** (DoubleSide).
+
+**Fix** — `positionGeometry.y`, `DoubleSide`. Commit `8a1f1cb`.
+
+## Cause 3 — the fall stood beside the lens, not in front of it
+
+At the climax the lens is pitched down 0.44 rad; a column centred on the eye
+put 58 of its 131 instances outside the frustum and the survivors at the
+frame edge. `IRON.descent.ahead = 0.34` centres it along the lens' own
+forward. Four-way A/B (`ahead × width`) at 236.3, all warm:
+
+| variant | bytes | by eye |
+|---|---|---|
+| ahead 0, width 1.1 (original) | 74 502 | ~10 streaks, mostly at the edges |
+| ahead 0, width 5.0 | 130 236 | a dozen fat bars, a fence not a fall |
+| **ahead 0.34, width 1.1** | **58 567** | **the fall — dense, fine, Ebrietas still legible** |
+| ahead 0.34, width 5.0 | 146 463 | blown out, buries her |
+
+So `width` was **reverted to its original 1.1** — the in-flight 5.0 was
+compensating for cause 2 and is wrong once cause 2 is fixed. Commit `8a1f1cb`.
+
+## Cause 4 — Ebrietas was never revealed (t=270 darkness)
+
+`atlas-eidos.js` documents an integration point — `setReveal(0..1)`: veils
+closed + lamp at 0.55 → veils parted + lamp full. **Nothing on this branch
+ever called it.** Measured live before the fix: `getReveal() === 0` at t=258
+*and* t=270 — she was photographed for the whole altar and the crest at 55%
+of her own lamp with her veils shut. Her graveside halo also ended at 269.0,
+i.e. it switched off 1.5 s before the film's loudest second (the crest at
+270.5, "Left behind, and reaching still").
+
+**Fix** — `atlas-fx-rites.js` drives it, on the same clock as the light that
+arrives to find her, and holds it after (a reveal that un-reveals itself when
+its effect window closes is the same bug wearing a hat); the halo now decays
+across `holdFrom 269 → holdTo 276` instead of being cut. Verified live after
+the fix: reveal 0 @240 → 0.464 @246 → **1 @258, 270, 274, 280**.
+Commit `bd5f083` (salvage) + `8a1f1cb`.
+
+## VERDICTS delta
+
+| t | was | now |
+|---|---|---|
+| 180.8 | DEFECT (no legible eyes) | **PASS** — clusters, watcher glyphs, sun |
+| 236.3 | DEFECT (near-blank) | **PASS** — the fall reads |
+| 258 | PASS | **PASS, not regressed** — veils + full lamp, better than before |
+| 270 | DEFECT (no recognizable being) | **PASS** — lit, whole, reaching |
+
+**Plates: 10/10 PASS. No-blanks check: PASS.**
+
+Note on the old numbers: the failing plates had *higher* mean luminance
+(10-11) than the passing ones (2.4-6.6) with p99 ≈ mean — they were a uniform
+grey lift with no highlights in them. Mean brightness is not legibility; p99
+(the highlights) is what carries the picture, and it went 10→98, 35→124,
+27→171, 12→115.

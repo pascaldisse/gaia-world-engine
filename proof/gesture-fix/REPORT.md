@@ -92,5 +92,5 @@ Screenshots: `a-01-screen.png`, `a-02-plus{2,5,8,12}s.png`, and the same for `b`
 ## Commits
 
 - `93b0fee2` stage 1 — the hit target is the DOCUMENT, and every wait names itself
-- `56f9a91b` stage 2 — the lane's own stack (8462/5197/4695) and the live probe
-- stage 3 — this report + the proof logs and plates
+- `bc53252f` stage 2 — the lane's own stack (8462/5197/4695) and the live probe
+- `7ca0b65a` stage 3 — this report + the proof logs and plates

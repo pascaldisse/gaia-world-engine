@@ -1,0 +1,13 @@
+{
+  "nextWanted": 294,
+  "clock": 293.018667,
+  "chrome": {
+    "chrome": "swept",
+    "visibleTopLevel": [
+      "canvas"
+    ],
+    "introUp": false
+  },
+  "stalls": [],
+  "aborted": null
+}

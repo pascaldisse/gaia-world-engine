@@ -1,0 +1,58 @@
+{
+  "t": 229.778941,
+  "audioT": 229.781333,
+  "bodyClass": "atlas-strategy-on atlas-cosmos-on director-film",
+  "subText": "",
+  "domSub": "",
+  "topLeft": [],
+  "layers": [
+    {
+      "sel": "canvas",
+      "tag": "canvas",
+      "id": null,
+      "cls": "",
+      "pos": "static",
+      "z": "auto",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": ""
+    },
+    {
+      "sel": "#atlas-cosmos-ui",
+      "tag": "aside",
+      "id": "atlas-cosmos-ui",
+      "cls": "",
+      "pos": "fixed",
+      "z": "27",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": "COMMUNION The Dream as the sidecar laid them Covenants louvain communities Choir Shells a sphere per kind Parishes gathered to their store Hunt's Passage in the"
+    },
+    {
+      "sel": "#atlas-director-ui",
+      "tag": "div",
+      "id": "atlas-director-ui",
+      "cls": "",
+      "pos": "fixed",
+      "z": "60",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": "THE BEGINNING ATLAS · PALOPTIC PALOPTIC BUILT IN GAIA WORLD ENGINE every record anonymized — the mythos is the mask"
+    }
+  ]
+}

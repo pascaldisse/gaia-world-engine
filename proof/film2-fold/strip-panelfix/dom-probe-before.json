@@ -1,0 +1,122 @@
+{
+  "t": 233.435800000001,
+  "audioT": 231.92,
+  "bodyClass": "atlas-strategy-on atlas-cosmos-on director-film",
+  "subText": "",
+  "domSub": "Something stirs — remember — come",
+  "topLeft": [],
+  "layers": [
+    {
+      "sel": "canvas",
+      "tag": "canvas",
+      "id": null,
+      "cls": "",
+      "pos": "static",
+      "z": "auto",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": ""
+    },
+    {
+      "sel": "#atlas-intro",
+      "tag": "div",
+      "id": "atlas-intro",
+      "cls": "on ready",
+      "pos": "fixed",
+      "z": "2147483000",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": "THE BEGINNING WITNESS THE BEGINNING ENTER THE DREAM Log In ESC — SKIP"
+    },
+    {
+      "sel": "#atlas-intro > div.in-mist",
+      "tag": "div",
+      "id": null,
+      "cls": "in-mist",
+      "pos": "absolute",
+      "z": "auto",
+      "opacity": 0.075,
+      "rect": {
+        "x": -224,
+        "y": -82,
+        "w": 1663,
+        "h": 830
+      },
+      "text": ""
+    },
+    {
+      "sel": "#atlas-intro > div.in-vignette",
+      "tag": "div",
+      "id": null,
+      "cls": "in-vignette",
+      "pos": "absolute",
+      "z": "auto",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": ""
+    },
+    {
+      "sel": "#atlas-intro > div.in-esc",
+      "tag": "div",
+      "id": null,
+      "cls": "in-esc",
+      "pos": "absolute",
+      "z": "auto",
+      "opacity": 0.26,
+      "rect": {
+        "x": 0,
+        "y": 595,
+        "w": 1280,
+        "h": 12
+      },
+      "text": "ESC — SKIP"
+    },
+    {
+      "sel": "#atlas-cosmos-ui",
+      "tag": "aside",
+      "id": "atlas-cosmos-ui",
+      "cls": "",
+      "pos": "fixed",
+      "z": "27",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": "COMMUNION The Dream as the sidecar laid them Covenants louvain communities Choir Shells a sphere per kind Parishes gathered to their store Hunt's Passage in the"
+    },
+    {
+      "sel": "#atlas-director-ui",
+      "tag": "div",
+      "id": "atlas-director-ui",
+      "cls": "",
+      "pos": "fixed",
+      "z": "60",
+      "opacity": 1,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1280,
+        "h": 639
+      },
+      "text": "Something stirs — remember — come THE BEGINNING ATLAS · PALOPTIC PALOPTIC BUILT IN GAIA WORLD ENGINE every record anonymized — the mythos is the mask"
+    }
+  ]
+}

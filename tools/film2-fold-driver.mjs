@@ -151,7 +151,7 @@ if (cmd === 'grab') {
   const from = Number(process.argv[3]);
   const to = Number(process.argv[4]);
   const budget = Number(process.env.BUDGET_MS ?? 55000);
-  const dir = path.join(OUT, 'strip-fix');
+  const dir = path.join(OUT, process.env.STRIP_DIR ?? 'strip-fix');
   fs.mkdirSync(dir, { recursive: true });
   const t0 = Date.now();
   let next = from;

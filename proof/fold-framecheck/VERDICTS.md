@@ -179,7 +179,7 @@ needs a given material photographs black. That alone made "236.3 is an empty
 frame" and it is a *measurement* defect, not a film defect.
 
 **Fix** — `tools/fold-framecheck3-plates.mjs`: after the settle wait, re-seek
-the same `t` (a second render) and shoot then. Commit `0fd2e0c`.
+the same `t` (a second render) and shoot then. Commit `a879fc7`.
 
 ## Cause 2 — the streak alpha clamp killed the entire lower half of the film
 
@@ -201,7 +201,7 @@ Same A/B also restored `side: DoubleSide` (the original): the spindle is an
 **open** cylinder, so front-only throws away its far wall under additive
 light — mean 5.50 (FrontSide) vs **14.48** (DoubleSide).
 
-**Fix** — `positionGeometry.y`, `DoubleSide`. Commit `8a1f1cb`.
+**Fix** — `positionGeometry.y`, `DoubleSide`. Commit `f185347`.
 
 ## Cause 3 — the fall stood beside the lens, not in front of it
 
@@ -218,7 +218,7 @@ forward. Four-way A/B (`ahead × width`) at 236.3, all warm:
 | ahead 0.34, width 5.0 | 146 463 | blown out, buries her |
 
 So `width` was **reverted to its original 1.1** — the in-flight 5.0 was
-compensating for cause 2 and is wrong once cause 2 is fixed. Commit `8a1f1cb`.
+compensating for cause 2 and is wrong once cause 2 is fixed. Commit `f185347`.
 
 ## Cause 4 — Ebrietas was never revealed (t=270 darkness)
 

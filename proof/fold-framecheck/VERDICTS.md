@@ -235,7 +235,7 @@ arrives to find her, and holds it after (a reveal that un-reveals itself when
 its effect window closes is the same bug wearing a hat); the halo now decays
 across `holdFrom 269 → holdTo 276` instead of being cut. Verified live after
 the fix: reveal 0 @240 → 0.464 @246 → **1 @258, 270, 274, 280**.
-Commit `bd5f083` (salvage) + `8a1f1cb`.
+Commits `bd5f083` (salvage) + `f185347`.
 
 ## VERDICTS delta
 

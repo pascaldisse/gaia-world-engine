@@ -140,35 +140,129 @@ if (cmd === 'roll') {
     await sleep(1500);
   }
   await sleep(1000);
-  console.log(JSON.stringify(await ev(`(() => ({ t: window.gaia?.director?.director?.t, audioT: window.gaia?.director?.director?.audio?.el?.currentTime, paused: window.gaia?.director?.director?.audio?.el?.paused, seg: window.gaia?.film2?.status?.().current }))()`)));
+  // ASSERT THE DENY-ALL SWEEP. play() runs it; scrub()/resume() — the path this
+  // command actually takes — does not, so the entry gate (#overlay) stayed on
+  // screen over a film that was rolling perfectly well underneath it. Every
+  // frame of the 2026-07-29 roll photographed the gate.
+  const chrome = await ev(`(() => {
+    const d = window.gaia?.director?.director;
+    if (!d?.setFilmChrome) return { chrome: 'no director' };
+    d.setFilmChrome(true);
+    const sq = [...document.body.children].filter((el) => {
+      const cs = getComputedStyle(el); const r = el.getBoundingClientRect();
+      return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.02 && r.width > 2 && r.height > 2;
+    }).map((el) => el.id || el.tagName.toLowerCase());
+    return { chrome: 'swept', visibleTopLevel: sq };
+  })()`);
+  console.log(JSON.stringify({ ...(await ev(`(() => ({ t: window.gaia?.director?.director?.t, audioT: window.gaia?.director?.director?.audio?.el?.currentTime, paused: window.gaia?.director?.director?.audio?.el?.paused, seg: window.gaia?.film2?.status?.().current }))()`)), ...chrome }));
   ws.close(); process.exit(0);
 }
 
 // grab <from> <to> : 1 fps captures OFF THE FILM'S OWN CLOCK while it rolls.
 // Survives being split across several short processes — the film keeps rolling
 // in the browser between them, so the strip is still one real-time take.
+//
+// TWO RIG DEFECTS THIS LOOP NOW REFUSES TO REPEAT (both cost a whole void roll
+// on 2026-07-29, and both produced files that LOOKED like a strip):
+//
+//  A · THE SQUATTER. `roll` reaches playback through scrub/resume, which never
+//      runs the director's own deny-all chrome sweep. 47 frames photographed
+//      the entry gate ("THE BEGINNING / ENTER THE DREAM") with the film running
+//      underneath — and since the gate is near-uniform, the exposure table read
+//      identical statistics for every frame and looked like a clean result.
+//      filmChrome() now asserts the sweep before a single frame is taken.
+//
+//  B · THE STALL. The audio element paused at 258.219 while the director's
+//      virtual clock ran on to 293.394 (paused true, ended FALSE, readyState 4,
+//      duration 293.44). Frames are named off the audio clock by law, so the
+//      loop wrote the same second forever. A frozen clock is now DETECTED, its
+//      cause RECORDED (the full media state, not a guess), and playback resumed;
+//      if it will not resume the take ABORTS instead of filing a strip of one
+//      repeated second.
+const filmChrome = async () => ev(`(() => {
+  const d = window.gaia?.director?.director;
+  if (!d?.setFilmChrome) return { chrome: 'no director' };
+  d.setFilmChrome(true);
+  const sq = [...document.body.children].filter((el) => {
+    const cs = getComputedStyle(el); const r = el.getBoundingClientRect();
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.02 && r.width > 2 && r.height > 2;
+  }).map((el) => el.id || el.tagName.toLowerCase());
+  return { chrome: 'swept', visibleTopLevel: sq };
+})()`);
+
+// The media state at the moment of a freeze — every field that could explain
+// it, so the cause is read off the page instead of reasoned about.
+const mediaState = async () => ev(`(() => {
+  const d = window.gaia?.director?.director; const el = d?.audio?.el;
+  return {
+    audioT: el?.currentTime ?? -1, virtualT: d?.t ?? null, paused: el?.paused ?? null,
+    ended: el?.ended ?? null, duration: el?.duration ?? null, readyState: el?.readyState ?? null,
+    networkState: el?.networkState ?? null, muted: el?.muted ?? null, volume: el?.volume ?? null,
+    playbackRate: el?.playbackRate ?? null, seeking: el?.seeking ?? null,
+    ctxState: d?.audio?.ctx?.state ?? null, playing: d?.playing ?? null,
+    visibility: document.visibilityState, hidden: document.hidden,
+    seg: window.gaia?.film2?.status?.().current ?? null,
+  };
+})()`);
+
+const resumeFilm = async (at) => ev(`(async () => {
+  const d = window.gaia?.director?.director; const el = d?.audio?.el;
+  if (!el) return { resumed: false, why: 'no audio element' };
+  try { if (d.audio?.ctx?.state === 'suspended') await d.audio.ctx.resume(); } catch {}
+  try { await el.play(); } catch (e) { return { resumed: false, why: String(e?.message ?? e) }; }
+  try { await d.resume?.(${at}); } catch {}
+  return { resumed: !el.paused, audioT: el.currentTime, ctxState: d.audio?.ctx?.state ?? null };
+})()`);
+
 if (cmd === 'grab') {
   const from = Number(process.argv[3]);
   const to = Number(process.argv[4]);
   const budget = Number(process.env.BUDGET_MS ?? 55000);
   const dir = path.join(OUT, process.env.STRIP_DIR ?? 'strip-fix');
   fs.mkdirSync(dir, { recursive: true });
+  const chrome = await filmChrome();
+  const stalls = [];
   const t0 = Date.now();
   let next = from;
+  let lastAt = -1;
+  let lastMoveAt = Date.now();
+  let aborted = null;
   while (next <= to && Date.now() - t0 < budget) {
     const at = await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`);
     if (typeof at !== 'number' || at < 0) { console.log('no clock'); break; }
     if (at >= to + 1.2) break;
+
+    // THE CLOCK MUST MOVE. Whether the element admits `paused` or simply stops
+    // advancing, a clock that has not moved in STALL_MS is a stall, and a
+    // stalled clock may not name a frame.
+    if (at > lastAt + 1e-3) { lastAt = at; lastMoveAt = Date.now(); }
+    else if (Date.now() - lastMoveAt > Number(process.env.STALL_MS ?? 2500)) {
+      const before = await mediaState();
+      const fix = await resumeFilm(at);
+      await sleep(500);
+      const after = await mediaState();
+      stalls.push({ at, before, fix, after, wall: new Date().toISOString() });
+      console.error(`[grab] STALL at audioT=${at} — ${JSON.stringify(before)} -> resume ${JSON.stringify(fix)}`);
+      lastMoveAt = Date.now();
+      if (!fix?.resumed && after.audioT <= at + 1e-3) {
+        aborted = `film would not resume at ${at} (paused=${after.paused} ended=${after.ended} readyState=${after.readyState} ctx=${after.ctxState})`;
+        break;
+      }
+      continue;
+    }
+
     if (at >= next) {
       const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
       const d = shot.result?.data;
-      const n = Math.max(next, Math.floor(at));
+      const n = Math.max(next, Math.floor(at));   // clock law: audio time names the frame
       if (d) fs.writeFileSync(path.join(dir, `f${String(n).padStart(3, '0')}.jpg`), Buffer.from(d, 'base64'));
       next = n + 1;
     } else await sleep(120);
   }
-  console.log(JSON.stringify({ nextWanted: next, clock: await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`) }));
-  ws.close(); process.exit(0);
+  const out = { nextWanted: next, clock: await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`), chrome, stalls, aborted };
+  fs.writeFileSync(path.join(dir, 'grab-log.json'), `${JSON.stringify(out, null, 2)}\n`);
+  console.log(JSON.stringify(out));
+  ws.close(); process.exit(aborted ? 2 : 0);
 }
 
 // subs <from> <to> : per-frame {t, activeSubtitle} off the film's own clock,

@@ -10,11 +10,15 @@
 // Usage: node tools/start-fix-probe.mjs [a|b|both]
 import { chromium } from 'playwright';
 import { readFileSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SHOTS = join(REPO, 'proof', 'start-fix');
+// TAG keeps a run's evidence in its own directory: `fixed` (this branch) vs
+// `base` (88827f2e on :5197) — the before/after is one rig, one stack, one
+// difference: the commits.
+const SHOTS = join(REPO, 'proof', 'start-fix', process.env.TAG ?? 'fixed');
 mkdirSync(SHOTS, { recursive: true });
 const LOG = join(SHOTS, 'stations.log');
 
@@ -155,13 +159,20 @@ async function run(path) {
   station(`${tag} clicked`, !!clicked, String(clicked));
 
   const snaps = [];
+  const shots = [];
   for (const at of [2, 5, 8, 12]) {
-    await wait(at === 2 ? 2000 : 3000 * (at === 8 ? 1 : 1) + (at === 12 ? 1000 : 0));
+    await wait(at === 2 ? 2000 : at === 12 ? 4000 : 3000);
     const s = await page.evaluate(SNAP);
     snaps.push({ at, s });
     appendFileSync(LOG, `${tag} t+${at}s ${JSON.stringify(s)}\n`);
-    await page.screenshot({ path: `${SHOTS}/${tag}-03-plus${at}s.png` });
+    const buf = await page.screenshot({ path: `${SHOTS}/${tag}-03-plus${at}s.png` });
+    shots.push({ at, sha: createHash('sha256').update(buf).digest('hex').slice(0, 16), bytes: buf.length });
   }
+  // THE PICTURE MOVES — judged on the PIXELS, by a path that shares no code
+  // with status() (a frozen film would report the same t forever and the same
+  // frame forever; three different frames cannot come from a held frame).
+  const uniq = new Set(shots.map((x) => x.sha)).size;
+  station(`${tag} the picture changes across +2/5/8/12s`, uniq >= 3, JSON.stringify(shots));
 
   const five = snaps.find((x) => x.at === 5).s;
   // ROLLING = the film's own clock has MOVED. On a browser that can decode the

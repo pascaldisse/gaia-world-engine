@@ -1,0 +1,173 @@
+{
+  "census": 3061,
+  "steps": [],
+  "witness": null,
+  "clock": {
+    "at6s": {
+      "t": 6.010096,
+      "audioT": 6.010667,
+      "paused": false,
+      "muted": false,
+      "playing": true,
+      "waiting": false
+    },
+    "at11s": {
+      "t": 11.018667,
+      "audioT": 11.018667,
+      "paused": false
+    },
+    "advanced": true
+  },
+  "film2": {
+    "prewarmed": true,
+    "report": [
+      {
+        "id": "seg1",
+        "ok": true,
+        "ms": 132
+      },
+      {
+        "id": "seg2",
+        "ok": true,
+        "ms": 120
+      },
+      {
+        "id": "seg3",
+        "ok": true,
+        "ms": 2
+      },
+      {
+        "id": "seg4",
+        "ok": true,
+        "ms": 21
+      },
+      {
+        "id": "seg5",
+        "ok": true,
+        "ms": 269
+      },
+      {
+        "id": "seg6",
+        "ok": true,
+        "ms": 73
+      },
+      {
+        "id": "seg7",
+        "ok": true,
+        "ms": 40
+      },
+      {
+        "id": "seg8",
+        "ok": true,
+        "ms": 76
+      }
+    ],
+    "current": "seg1",
+    "t": 11.027689,
+    "baton": null,
+    "segs": [
+      {
+        "id": "seg1",
+        "win": [
+          0,
+          73.64
+        ],
+        "ready": true,
+        "active": true,
+        "error": null
+      },
+      {
+        "id": "seg2",
+        "win": [
+          73.64,
+          103.32
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      },
+      {
+        "id": "seg3",
+        "win": [
+          103.32,
+          123.6
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      },
+      {
+        "id": "seg4",
+        "win": [
+          123.6,
+          144.08
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      },
+      {
+        "id": "seg5",
+        "win": [
+          144.08,
+          176.32
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      },
+      {
+        "id": "seg6",
+        "win": [
+          176.32,
+          228.4
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      },
+      {
+        "id": "seg7",
+        "win": [
+          228.4,
+          276.44
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      },
+      {
+        "id": "seg8",
+        "win": [
+          276.44,
+          293.44
+        ],
+        "ready": true,
+        "active": false,
+        "error": null
+      }
+    ]
+  },
+  "scrub": {
+    "result": {
+      "t": 160,
+      "scene": "seg5",
+      "playing": true,
+      "audioT": 160
+    },
+    "after": {
+      "t": 162.506079,
+      "seg": "seg5"
+    }
+  },
+  "console": [
+    {
+      "kind": "warning",
+      "text": "THREE.BufferGeometry.toNonIndexed(): BufferGeometry is already non-indexed."
+    },
+    {
+      "kind": "warning",
+      "text": "THREE.BufferGeometry.toNonIndexed(): BufferGeometry is already non-indexed."
+    }
+  ]
+}

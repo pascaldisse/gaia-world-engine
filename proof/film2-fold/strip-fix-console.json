@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "warning",
+    "text": "THREE.BufferGeometry.toNonIndexed(): BufferGeometry is already non-indexed."
+  },
+  {
+    "kind": "exception",
+    "text": "Error: director: atlas cosmos not ready\n    at Director.prepare (http://localhost:5196/plugins/atlas-director.js?t=1785297709320:1078:44)\n    at Director.seek (http://localhost:5196/plugins/atlas-director.js?t=1785297709320:1100:10)\n    at Director.resume (http://localhost:5196/plugins/atlas-director.js?t=1785297709320:1238:33)\n    at <anonymous>:1:55\n    at <anonymous>:1:80"
+  },
+  {
+    "kind": "exception",
+    "text": "Error: director: atlas cosmos not ready\n    at Director.prepare (http://localhost:5196/plugins/atlas-director.js?t=1785297709320:1078:44)\n    at Director.seek (http://localhost:5196/plugins/atlas-director.js?t=1785297709320:1100:10)\n    at Director.resume (http://localhost:5196/plugins/atlas-director.js?t=1785297709320:1238:33)\n    at <anonymous>:1:55\n    at <anonymous>:1:80"
+  }
+]

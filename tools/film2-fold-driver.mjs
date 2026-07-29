@@ -46,12 +46,17 @@ await send('Page.enable');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // gates, then a reload so the page boots past them
-await ev(`localStorage.setItem('atlas_gate','8fc666825e1a4b06'); localStorage.setItem('atlas_seen_intro','1'); 1`);
-await send('Page.navigate', { url: `http://localhost:${PORT}/?mute=1&intro=off` });
-for (let i = 0; i < 90; i += 1) {
-  await sleep(1000);
-  const ready = await ev('!!(window.gaia?.atlasStrategy?.cosmos?.ready)');
-  if (ready === true) break;
+// A RELOAD WOULD KILL A ROLLING FILM: `grab` runs in short processes while the
+// take continues in the browser, so never navigate a page that is already up.
+const booted = await ev('!!(window.gaia?.atlasStrategy?.cosmos?.ready)');
+if (booted !== true) {
+  await ev(`localStorage.setItem('atlas_gate','8fc666825e1a4b06'); localStorage.setItem('atlas_seen_intro','1'); 1`);
+  await send('Page.navigate', { url: `http://localhost:${PORT}/?static=1&mute=1&intro=off` });
+  for (let i = 0; i < 90; i += 1) {
+    await sleep(1000);
+    const ready = await ev('!!(window.gaia?.atlasStrategy?.cosmos?.ready)');
+    if (ready === true) break;
+  }
 }
 const census = await ev('window.gaia?.atlasStrategy?.cosmos?.nodes?.length ?? -1');
 
@@ -88,6 +93,128 @@ if (cmd === 'smoke') {
   fs.mkdirSync(OUT, { recursive: true });
   fs.writeFileSync(path.join(OUT, 'boot-smoke.json'), JSON.stringify(out, null, 2));
   console.log(JSON.stringify(out, null, 2));
+  ws.close();
+  process.exit(0);
+}
+
+// strip-fix: re-shoot ONLY the fixed windows, in REAL TIME (same rig, 1 fps).
+// Each range is played from a lead-in before its first frame so the segments
+// are entered by the clock, never by a bare seek at the frame itself.
+// roll <t> : put the rolling film at t (real playback, audio clock authoritative)
+if (cmd === 'roll') {
+  const at = Number(process.argv[3] ?? 0);
+  if (!(await ev('!!window.gaia?.film2'))) {
+    const btn = await ev(`(() => {
+      const b = [...document.querySelectorAll('button, .atlas-gate-btn, #atlas-intro button, [data-action]')]
+        .find((x) => /witness|begin|enter/i.test(x.textContent || ''));
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    })()`);
+    if (btn) for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: btn.x, y: btn.y, button: 'left', clickCount: 1 });
+    else await ev(`window.gaia?.director?.play?.({ audio: true, mode: 'live' })`);
+    await sleep(9000);
+  }
+  // THE AUDIO ELEMENT ONLY EXISTS ONCE play() HAS BUILT IT — scrub() alone
+  // leaves the film on a virtual clock, i.e. frozen. Spend the gesture, then
+  // play FROM the lead-in: this is the real-time take.
+  const hasAudio = await ev(`!!window.gaia?.director?.director?.audio?.el`);
+  if (!hasAudio) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: 640, y: 690, button: 'left', clickCount: 1 });
+    }
+    await ev(`window.gaia.director.play({ from: ${at}, audio: true, gesture: true, mode: 'live' })`);
+    await sleep(4000);
+  }
+  await ev(`window.gaia?.director?.scrub?.(${at}, { resume: true })`);
+  await sleep(1500);
+  // THE CLOCK IS THE AUDIO ELEMENT: if it is still paused the film is frozen,
+  // whatever the transport thinks. Spend a real gesture, then press play.
+  for (let i = 0; i < 3; i += 1) {
+    const paused = await ev(`window.gaia?.director?.director?.audio?.el?.paused ?? true`);
+    if (paused !== true) break;
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: 640, y: 700, button: 'left', clickCount: 1 });
+    }
+    await ev(`(async () => { const d = window.gaia?.director?.director; try { await d.audio.ctx.resume(); } catch {} ; d.audio.el.currentTime = ${at}; await d.audio.el.play().catch(() => {}); await d.resume(${at}); return 1; })()`);
+    await sleep(1500);
+  }
+  await sleep(1000);
+  console.log(JSON.stringify(await ev(`(() => ({ t: window.gaia?.director?.director?.t, audioT: window.gaia?.director?.director?.audio?.el?.currentTime, paused: window.gaia?.director?.director?.audio?.el?.paused, seg: window.gaia?.film2?.status?.().current }))()`)));
+  ws.close(); process.exit(0);
+}
+
+// grab <from> <to> : 1 fps captures OFF THE FILM'S OWN CLOCK while it rolls.
+// Survives being split across several short processes — the film keeps rolling
+// in the browser between them, so the strip is still one real-time take.
+if (cmd === 'grab') {
+  const from = Number(process.argv[3]);
+  const to = Number(process.argv[4]);
+  const budget = Number(process.env.BUDGET_MS ?? 55000);
+  const dir = path.join(OUT, 'strip-fix');
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = Date.now();
+  let next = from;
+  while (next <= to && Date.now() - t0 < budget) {
+    const at = await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`);
+    if (typeof at !== 'number' || at < 0) { console.log('no clock'); break; }
+    if (at >= to + 1.2) break;
+    if (at >= next) {
+      const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
+      const d = shot.result?.data;
+      const n = Math.max(next, Math.floor(at));
+      if (d) fs.writeFileSync(path.join(dir, `f${String(n).padStart(3, '0')}.jpg`), Buffer.from(d, 'base64'));
+      next = n + 1;
+    } else await sleep(120);
+  }
+  console.log(JSON.stringify({ nextWanted: next, clock: await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`) }));
+  ws.close(); process.exit(0);
+}
+
+if (cmd === 'strip-fix') {
+  const dir = path.join(OUT, 'strip-fix');
+  fs.mkdirSync(dir, { recursive: true });
+  const RANGES = JSON.parse(process.env.RANGES ?? '[[110,130,105],[225,293,220]]');   // [from, to, leadIn]
+  // THE FILM MUST BE ROLLING BEFORE A SCRUB MEANS ANYTHING: window.gaia.film2
+  // only exists once play() has run, and the audio clock only advances after a
+  // real gesture. Same witness click as `smoke`.
+  const btn = await ev(`(() => {
+    const b = [...document.querySelectorAll('button, .atlas-gate-btn, #atlas-intro button, [data-action]')]
+      .find((x) => /witness|begin|enter/i.test(x.textContent || ''));
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  })()`);
+  if (btn) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: btn.x, y: btn.y, button: 'left', clickCount: 1 });
+    }
+  } else {
+    await ev(`window.gaia?.director?.play?.({ audio: true, mode: 'live' })`);
+  }
+  await sleep(8000);
+  console.log('rolling:', JSON.stringify(await ev(`(() => ({ t: window.gaia?.director?.director?.t, audioT: window.gaia?.director?.director?.audio?.el?.currentTime, seg: window.gaia?.film2?.status?.().current }))()`)));
+  for (const [from, to, lead] of RANGES) {
+    await ev(`window.gaia?.director?.scrub?.(${lead})`);
+    await sleep(3000);
+    await ev(`(() => { const d = window.gaia?.director?.director; d.resume(${lead}); return 1; })()`);
+    const t0 = Date.now();
+    for (let n = lead; n <= to; n += 1) {
+      const want = t0 + (n - lead) * 1000;
+      const wait = want - Date.now();
+      if (wait > 0) await sleep(wait);
+      if (n < from) continue;
+      const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
+      const data = shot.result?.data;
+      if (data) fs.writeFileSync(path.join(dir, `f${String(n).padStart(3, '0')}.jpg`), Buffer.from(data, 'base64'));
+      if (n % 10 === 0) {
+        const st = await ev(`(() => ({ t: window.gaia?.director?.director?.t, seg: window.gaia?.film2?.status?.().current }))()`);
+        console.log(n, JSON.stringify(st));
+      }
+    }
+  }
+  fs.writeFileSync(path.join(OUT, 'strip-fix-console.json'), JSON.stringify(logs, null, 2));
+  console.log('strip-fix done', dir);
   ws.close();
   process.exit(0);
 }

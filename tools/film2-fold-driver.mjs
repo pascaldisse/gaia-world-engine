@@ -171,6 +171,43 @@ if (cmd === 'grab') {
   ws.close(); process.exit(0);
 }
 
+// subs <from> <to> : per-frame {t, activeSubtitle} off the film's own clock,
+// plus the cue table the director built from lyrics.json, so a line seen on
+// screen can be checked against the WORD TIMES it came from.
+if (cmd === 'subs') {
+  const from = Number(process.argv[3]);
+  const to = Number(process.argv[4]);
+  const dir = path.join(OUT, process.env.STRIP_DIR ?? 'subtitle-check');
+  fs.mkdirSync(dir, { recursive: true });
+  const cues = await ev(`JSON.parse(JSON.stringify(window.gaia?.director?.director?.cues ?? []))`);
+  const shots = process.env.SHOTS === '1';
+  const rows = [];
+  let next = from;
+  const t0 = Date.now();
+  while (next <= to && Date.now() - t0 < Number(process.env.BUDGET_MS ?? 120000)) {
+    const st = await ev(`(() => { const d = window.gaia?.director?.director;
+      return { t: d?.t ?? null, audioT: d?.audio?.el?.currentTime ?? -1, cueIndex: d?.cueIndex ?? null,
+               subText: d?.subText ?? '', domSub: document.querySelector('#atlas-director-ui .dir-sub')?.textContent ?? '',
+               subOn: document.querySelector('#atlas-director-ui .dir-sub')?.classList.contains('on') ?? false,
+               seg: window.gaia?.film2?.status?.().current ?? null }; })()`);
+    const at = st?.audioT ?? -1;
+    if (!(at >= 0)) { console.log('no clock'); break; }
+    if (at >= to + 1.2) break;
+    if (at >= next) {
+      const n = Math.max(next, Math.floor(at));
+      if (shots) {
+        const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
+        if (shot.result?.data) fs.writeFileSync(path.join(dir, `f${String(n).padStart(3, '0')}.jpg`), Buffer.from(shot.result.data, 'base64'));
+      }
+      rows.push({ frame: n, ...st });
+      next = n + 1;
+    } else await sleep(100);
+  }
+  fs.writeFileSync(path.join(dir, `subs-${from}-${to}.json`), JSON.stringify({ cues, rows }, null, 2));
+  console.log(JSON.stringify({ rows: rows.length, cues: cues.length, last: rows.at(-1) }));
+  ws.close(); process.exit(0);
+}
+
 if (cmd === 'strip-fix') {
   const dir = path.join(OUT, 'strip-fix');
   fs.mkdirSync(dir, { recursive: true });
@@ -198,15 +235,25 @@ if (cmd === 'strip-fix') {
     await ev(`window.gaia?.director?.scrub?.(${lead})`);
     await sleep(3000);
     await ev(`(() => { const d = window.gaia?.director?.director; d.resume(${lead}); return 1; })()`);
-    const t0 = Date.now();
+    // A FRAME IS NAMED BY THE FILM'S CLOCK, NEVER BY THE WALL CLOCK.
+    // (07-29) The old wall-clock loop below is what put the 220.56s line
+    // "Whispers to the sleeping one" into a frame called f279: whenever the
+    // audio clock lagged the wall (a seek settle, a shader compile), every
+    // later frame carried a name the picture did not belong to. The subtitle
+    // "drift" was this, and only this — see proof/film2-fold/subtitle-check.
     for (let n = lead; n <= to; n += 1) {
-      const want = t0 + (n - lead) * 1000;
-      const wait = want - Date.now();
-      if (wait > 0) await sleep(wait);
+      for (;;) {
+        const at = await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`);
+        if (typeof at !== 'number' || at < 0) break;
+        if (at >= n) break;
+        await sleep(80);
+      }
       if (n < from) continue;
       const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 72 });
       const data = shot.result?.data;
-      if (data) fs.writeFileSync(path.join(dir, `f${String(n).padStart(3, '0')}.jpg`), Buffer.from(data, 'base64'));
+      const at = await ev(`window.gaia?.director?.director?.audio?.el?.currentTime ?? -1`);
+      const name = typeof at === 'number' && at >= 0 ? Math.floor(at) : n;
+      if (data) fs.writeFileSync(path.join(dir, `f${String(name).padStart(3, '0')}.jpg`), Buffer.from(data, 'base64'));
       if (n % 10 === 0) {
         const st = await ev(`(() => ({ t: window.gaia?.director?.director?.t, seg: window.gaia?.film2?.status?.().current }))()`);
         console.log(n, JSON.stringify(st));

@@ -64,6 +64,18 @@ try {
     // two settled frames: the strategy camera lerps target/distance toward the
     // goal, and a plate caught mid-lerp is not the shot the film holds
     await new Promise((r) => setTimeout(r, 900));
+    // …AND A SECOND RENDER, ALWAYS. A seek renders ONE frame and stops (the
+    // film is paused: nothing re-renders on its own, waiting 8s changes
+    // nothing). Under WebGPU a material whose render pipeline is not compiled
+    // yet is SKIPPED for that frame and compiled in the background — so the
+    // first frame in which any effect pool first becomes non-empty photographs
+    // WITHOUT it. That is what made the fall at 236.3 an empty frame in every
+    // earlier batch: same t, same camera, same 131 live streaks, mean
+    // luminance 0.78 on the first render and 5.65 on the second (proof:
+    // .scratch/statediff.mjs — identical state dumps, different pictures).
+    // Re-seeking the same t draws the frame again, now with the pipeline hot.
+    await c.evaluate(`(async () => { await window.D.seek(${t}); return 1; })()`, { ms: 15000 });
+    await new Promise((r) => setTimeout(r, 450));
     const file = `${OUT}/${String(Math.round(t * 10)).padStart(4, '0')}-${String(t).replace('.', '_')}s.png`;
     const bytes = await c.shot(file, 15000);
     rows.push({ ...info, file, bytes });

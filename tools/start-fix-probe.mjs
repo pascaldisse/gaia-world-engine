@@ -164,8 +164,13 @@ async function run(path) {
   }
 
   const five = snaps.find((x) => x.at === 5).s;
-  const rolling = !!(five.director && five.director.playing && five.audio.some((a) => !a.paused && a.t > 0.2));
-  station(`${tag} film rolling by +5s`, rolling, JSON.stringify({ director: five.director, audio: five.audio }));
+  // ROLLING = the film's own clock has MOVED. On a browser that can decode the
+  // AAC mix that clock is the audio element; on one that cannot (playwright's
+  // chromium) the director says so loudly and rolls the picture on the wall
+  // clock — both are "rolling", a held frame at t=0 is not.
+  const d5 = five.director ?? {};
+  const rolling = !!(d5.playing && (d5.t > 0.2) && (d5.audioT > 0.2 || d5.clock === 'wall'));
+  station(`${tag} film rolling by +5s`, rolling, JSON.stringify({ director: d5, audio: five.audio }));
   station(`${tag} title gone by +5s`, !five.introVisible, `introVisible=${five.introVisible} sub=${five.introSub}`);
   station(`${tag} zero console errors`, errs.length === 0, errs.slice(0, 5).join(' | '));
   await b.close();

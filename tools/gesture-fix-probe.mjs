@@ -199,7 +199,11 @@ async function run(browser, tag) {
   // ── ONE gesture. Path a: the anywhere-click on the eaten pixel. Path b:
   // the menu's own button (a real control, which must still work).
   let what;
-  if (tag === 'a') {
+  if (tag === 'a' && process.env.KEY) {
+    // 'press any button': the same wait, spent with a keystroke and no pointer
+    await page.keyboard.press(process.env.KEY === '1' ? 'k' : process.env.KEY);
+    what = `ONE keystroke (${process.env.KEY === '1' ? 'k' : process.env.KEY}), no pointer at all`;
+  } else if (tag === 'a') {
     await page.mouse.click(HIT.x, HIT.y);
     what = `anywhere-click at (${HIT.x},${HIT.y}) — the pixel .in-sub used to eat`;
   } else {
@@ -240,7 +244,7 @@ async function run(browser, tag) {
 }
 
 const which = process.argv[2] ?? 'both';
-writeFileSync(LOG, `gesture-fix probe ${new Date().toISOString()} — ${URL_} — path ${which}\n`);
+writeFileSync(LOG, `gesture-fix probe ${new Date().toISOString()} — ${URL_} — path ${which}${process.env.KEY ? ` — KEYSTROKE gesture (${process.env.KEY})` : ''}\n`);
 launchBrave();
 const browser = await connect();
 if (which === 'a' || which === 'both') await run(browser, 'a');

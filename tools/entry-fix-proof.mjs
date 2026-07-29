@@ -124,6 +124,9 @@ async function main() {
   const errors = { A: [], B: [] };
   let bucket = 'A';
   const ctx = await chromium.launchPersistentContext(PROFILE, {
+    // this machine's playwright package is newer than its downloaded browsers:
+    // the pinned build is named explicitly rather than re-downloading one
+    executablePath: '/Users/pascaldisse/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
     headless: true,
     args: ['--headless=new', '--mute-audio', '--no-sandbox', '--autoplay-policy=no-user-gesture-required',
       '--use-gl=angle', '--enable-unsafe-swiftshader'],
@@ -173,13 +176,25 @@ async function main() {
   await page.click('#atlas-intro', { timeout: 15000 });
   await poll(page, () => window.gaia?.atlasIntro?.status?.().state === 'playing', { timeout: 60000, label: 'film rolling' });
 
-  // t = 5: THE DEEP ALONE
+  // t = 5: THE DEEP ALONE.
+  // TWO measurements, because the door and the film are two different proofs:
+  //   A4a the door is STILL UP while the film has not painted — in headless
+  //       the audio clock never rolls, so onFirstFrame has not fired and the
+  //       black title card is exactly what a visitor must see (never the
+  //       live universe showing through, which was the defect).
+  //   A4b the film's own frame, once the card is taken away by hand: the deep
+  //       and nothing else — zero lit pixels.
   await page.evaluate(() => window.gaia.director.scrub(5, { resume: null }));
   await wait(1500);
+  const a4a = await shoot(page, 'A04a-film-t5-door-still-up.png');
+  const covered = await page.evaluate(() => !!document.querySelector('#atlas-intro'));
+  station('A4a the door holds the frame until the film paints', covered, a4a);
+  await page.evaluate(() => window.gaia.atlasIntro.intro.dismiss(0));
+  await wait(900);
   const a4 = await shoot(page, 'A04-film-t5-pure-deep.png');
   const m5 = measure(a4);
   station('A4 film t=5 is pure deep — zero stars/galaxies/systems',
-    m5.lit === 0, `lit>${70}px=${m5.lit} mean=${m5.mean} max=${m5.max} · ${a4}`);
+    m5.lit === 0, `lit>70px=${m5.lit} mean=${m5.mean} max=${m5.max} · ${a4}`);
 
   // t = 80: THE RED DROP
   await page.evaluate(() => window.gaia.director.scrub(80, { resume: null }));

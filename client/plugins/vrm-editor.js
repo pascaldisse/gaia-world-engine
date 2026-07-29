@@ -11,6 +11,8 @@
 import { isTyping } from '../kernel/dom.js';
 import { r2 } from '../../shared/num.js';
 import { loadVRM, slotMapOf, applyVrmEdits, exportVRM, PROPORTION_BONES } from '../kernel/vrm.js';
+import { parseTree, serializeTree, readValues, setValue } from '../../shared/vroid.js';
+import { readZip, writeZip } from '../../shared/zip.js';
 
 const TEMPLATES = {
   'nyari-final': '/assets/vrm/nyari-final.vrm',
@@ -60,6 +62,7 @@ export class VrmEditor {
     this.entityId = 'vrm-avatar';
     this.edits = { colors: {}, expressions: {}, bones: {}, meta: {} };
     this.probe = null; // { src, slots: Map, expressions: [], vrm }
+    this.vroid = null; // { fileName, entries: Map, top, values: {key: number} }
     this.mount = document.createElement('div');
     this.mount.id = 'vrm-editor';
     this.injectStyle();
@@ -82,7 +85,8 @@ export class VrmEditor {
       #vrm-editor{position:fixed;right:12px;bottom:70px;width:330px;max-height:76vh;display:none;flex-direction:column;gap:8px;padding:10px;background:rgba(14,8,24,.94);border:1px solid rgba(190,125,255,.30);border-radius:10px;color:#e6dbff;font:11px ui-monospace,'SF Mono',Menlo,monospace;z-index:34;box-shadow:0 12px 40px rgba(0,0,0,.38);overflow:auto}
       #vrm-editor .ve-head{display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(190,125,255,.18);padding-bottom:7px}.ve-title{flex:1;color:#c99aff;font-weight:700;letter-spacing:.08em}.ve-doc{color:#b3a4d8;line-height:1.35}.ve-sect{color:#c99aff;letter-spacing:.06em;margin-top:4px;border-bottom:1px dashed rgba(190,125,255,.15);padding-bottom:2px}
       #vrm-editor .ve-row{display:grid;grid-template-columns:92px 1fr 46px;align-items:center;gap:8px}.ve-row input[type='range']{width:100%}.ve-row input[type='color']{width:42px;height:24px;padding:0;border:0;background:transparent}.ve-row input[type='text'],#vrm-editor select{background:rgba(0,0,0,.22);border:1px solid rgba(190,125,255,.20);border-radius:6px;color:#e6dbff;font:inherit;padding:5px}
-      #vrm-editor .ve-buttons{display:flex;gap:6px;flex-wrap:wrap}.ve-buttons button,#vrm-editor .ve-head button{background:rgba(190,125,255,.10);border:1px solid rgba(190,125,255,.28);border-radius:8px;color:#e6dbff;font:inherit;padding:5px 8px;cursor:pointer}.ve-buttons button:hover,#vrm-editor .ve-head button:hover{background:rgba(190,125,255,.22)}.ve-note{color:#ffd9a0;min-height:1.2em}.ve-chip{color:#b3a4d8;overflow:hidden;text-overflow:ellipsis}`;
+      #vrm-editor .ve-buttons{display:flex;gap:6px;flex-wrap:wrap}.ve-buttons button,#vrm-editor .ve-head button{background:rgba(190,125,255,.10);border:1px solid rgba(190,125,255,.28);border-radius:8px;color:#e6dbff;font:inherit;padding:5px 8px;cursor:pointer}.ve-buttons button:hover,#vrm-editor .ve-head button:hover{background:rgba(190,125,255,.22)}.ve-note{color:#ffd9a0;min-height:1.2em}.ve-chip{color:#b3a4d8;overflow:hidden;text-overflow:ellipsis}
+      #vrm-editor details.ve-group summary{cursor:pointer;color:#c99aff;margin-top:2px}`;
     document.head.append(style);
   }
 
@@ -205,6 +209,44 @@ export class VrmEditor {
     this.setTemplate(this.template); // fresh probe instance = pristine colors
   }
 
+  async loadVroid(file) {
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const entries = await readZip(bytes);
+      const bin = entries.get('v1model/data.bin');
+      if (!bin) {
+        this.note('not a .vroid: v1model/data.bin missing');
+        return;
+      }
+      const top = parseTree(bin);
+      const values = readValues(top);
+      this.vroid = { fileName: file.name, entries, top, values };
+      this.note(`${file.name}: ${Object.keys(values).length} params`);
+      this.render();
+    } catch (err) {
+      this.note(`load failed: ${err.message}`);
+    }
+  }
+
+  setVroid(key, v) {
+    v = Number(v);
+    setValue(this.vroid.top, key, v);
+    this.vroid.values[key] = v;
+    this.mount.querySelector(`[data-vroid-value="${key}"]`).textContent = v.toFixed(2);
+  }
+
+  saveVroid() {
+    this.vroid.entries.set('v1model/data.bin', serializeTree(this.vroid.top));
+    const out = writeZip(this.vroid.entries);
+    const blob = new Blob([out], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = this.vroid.fileName.replace('.vroid', '-edited.vroid');
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    this.note('.vroid saved ✓ (open in VRoid Studio to bake a .vrm)');
+  }
+
   note(text) {
     const el = this.mount.querySelector('.ve-note');
     if (el) el.textContent = text;
@@ -248,6 +290,28 @@ export class VrmEditor {
       (bone) =>
         `<label class="ve-row"><span>${bone}</span><input data-edit="bones.${bone}" type="range" min="0.6" max="1.6" step="0.01" value="${this.edits.bones[bone] ?? 1}"><span data-value-for="bones.${bone}">${Number(this.edits.bones[bone] ?? 1).toFixed(2)}</span></label>`,
     ).join('');
+    const vroidGroups = this.vroid
+      ? Object.entries(this.vroid.values).reduce((groups, [key, value]) => {
+          const prefix = key.slice(0, key.indexOf('_'));
+          (groups[prefix] ??= []).push([key, value]);
+          return groups;
+        }, {})
+      : {};
+    const vroidSections = this.vroid
+      ? Object.keys(vroidGroups)
+          .sort()
+          .map((prefix) => {
+            const rows = vroidGroups[prefix]
+              .map(([key, value]) => {
+                const label = key.slice(key.indexOf('_') + 1);
+                return `<label class="ve-row"><span>${label}</span><input type="range" min="-2" max="2" step="0.01" value="${value}" data-vroid="${key}"><span data-vroid-value="${key}">${Number(value).toFixed(2)}</span></label>`;
+              })
+              .join('');
+            const open = prefix.includes('Breast') ? ' open' : '';
+            return `<details class="ve-group"${open}><summary>${prefix} (${vroidGroups[prefix].length})</summary>${rows}</details>`;
+          })
+          .join('')
+      : '';
     this.mount.innerHTML = `
       <div class="ve-head"><div class="ve-title">VRM AVATAR EDITOR</div><button data-act="close">×</button></div>
       <div class="ve-doc">VRoid-compatible avatars as live world data. Edits are patches; export bakes them into a portable .vrm. Press V in creator mode.</div>
@@ -261,6 +325,14 @@ export class VrmEditor {
       <label class="ve-row"><span>title</span><input data-meta="title" type="text" value="${this.edits.meta.title ?? ''}"><span></span></label>
       <label class="ve-row"><span>author</span><input data-meta="author" type="text" value="${this.edits.meta.author ?? ''}"><span></span></label>
       ` : '<div class="ve-doc">loading template…</div>'}
+      <div class="ve-sect">VROID MASTER (.vroid parametric)</div>
+      <div class="ve-doc">Parametric source-of-truth sliders. Engine cannot bake these to mesh yet — save and re-export from VRoid Studio.</div>
+      <div class="ve-buttons">
+        <button data-act="vroid-load">load .vroid</button>
+        <input data-act="vroid-file" type="file" accept=".vroid" style="display:none">
+        ${this.vroid ? `<button data-act="vroid-save">save .vroid</button><span class="ve-chip">${this.vroid.fileName}</span>` : ''}
+      </div>
+      ${vroidSections}
       <div class="ve-buttons"><button data-act="apply">spawn/update</button><button data-act="selection">load selected</button><button data-act="export">export .vrm</button><button data-act="reset">reset</button></div>
       <div class="ve-note"></div>`;
     for (const input of this.mount.querySelectorAll('[data-edit]')) {
@@ -280,5 +352,11 @@ export class VrmEditor {
     this.mount.querySelector('[data-act="selection"]')?.addEventListener('click', () => this.loadFromSelection());
     this.mount.querySelector('[data-act="export"]')?.addEventListener('click', () => this.download());
     this.mount.querySelector('[data-act="reset"]')?.addEventListener('click', () => this.reset());
+    this.mount.querySelector('[data-act="vroid-load"]')?.addEventListener('click', () => this.mount.querySelector('[data-act="vroid-file"]')?.click());
+    this.mount.querySelector('[data-act="vroid-file"]')?.addEventListener('change', (e) => this.loadVroid(e.target.files[0]));
+    this.mount.querySelector('[data-act="vroid-save"]')?.addEventListener('click', () => this.saveVroid());
+    for (const input of this.mount.querySelectorAll('[data-vroid]')) {
+      input.addEventListener('input', () => this.setVroid(input.dataset.vroid, input.value));
+    }
   }
 }

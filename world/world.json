@@ -1,0 +1,10 @@
+{
+  "scenes": {
+    "main": {
+      "always": true
+    },
+    "naruko": {
+      "always": true
+    }
+  }
+}

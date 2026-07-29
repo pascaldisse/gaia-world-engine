@@ -1,0 +1,60 @@
+{
+  "song": "The Beginning",
+  "durationSec": 289.1,
+  "sections": [
+    {
+      "start": 0,
+      "end": 16,
+      "label": "verse",
+      "energy": "low"
+    },
+    {
+      "start": 16,
+      "end": 36,
+      "label": "verse",
+      "energy": "mid"
+    },
+    {
+      "start": 36,
+      "end": 48,
+      "label": "bridge",
+      "energy": "low"
+    },
+    {
+      "start": 48,
+      "end": 100,
+      "label": "verse",
+      "energy": "mid"
+    },
+    {
+      "start": 100,
+      "end": 152,
+      "label": "chorus",
+      "energy": "high"
+    },
+    {
+      "start": 152,
+      "end": 220,
+      "label": "verse",
+      "energy": "mid"
+    },
+    {
+      "start": 220,
+      "end": 260,
+      "label": "verse",
+      "energy": "mid"
+    },
+    {
+      "start": 260,
+      "end": 272,
+      "label": "verse",
+      "energy": "low"
+    },
+    {
+      "start": 272,
+      "end": 289.1,
+      "label": "verse",
+      "energy": "mid"
+    }
+  ]
+}

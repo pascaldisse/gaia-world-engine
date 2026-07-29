@@ -1,0 +1,23 @@
+// live-rewatch-probe.mjs — Pascal's exact path on the LIVE app: account → start screen → 'Witness the Beginning again'
+import { chromium } from 'playwright';
+import { readFileSync, mkdirSync } from 'node:fs';
+const CLIENT = process.env.CLIENT ?? 'http://localhost:5174';
+const OUT='proof/live-click'; mkdirSync(OUT,{recursive:true});
+const PW = readFileSync('/Users/pascaldisse/projects/paloptic/gate/PASSWORD.txt','utf8').replace(/\n$/,'');
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const b=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN,args:['--mute-audio','--headless=new']});
+const page=await (await b.newContext({viewport:{width:1280,height:800}})).newPage();
+const errs=[];page.on('console',m=>m.type()==='error'&&errs.push(m.text().slice(0,150)));
+await page.goto(CLIENT,{waitUntil:'domcontentloaded',timeout:45000});await wait(4000);
+await page.evaluate(pw=>{const i=[...document.querySelectorAll('input')].find(x=>x.offsetParent);if(i){i.focus();i.value=pw;i.dispatchEvent(new Event('input',{bubbles:true}));}},PW);
+await page.keyboard.press('Enter');await wait(3000);
+const u='probe'+Date.now(), reg=await page.evaluate(async(u)=>{for(const ep of['/auth/register','/api/auth/register']){try{const r=await fetch(ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:u,username:u,password:'ProbePass1234'})});if(r.ok)return ep+':'+r.status;}catch(e){}}return null;},u);
+console.log('register:',reg);
+await page.reload({waitUntil:'domcontentloaded'});await wait(4000);
+await page.screenshot({path:`${OUT}/R1-after-reload.png`});
+const clicked=await page.evaluate(()=>{const e=[...document.querySelectorAll('button,div,span,a')].filter(x=>x.offsetParent&&/witness the beginning/i.test(x.textContent||''));if(!e.length)return null;e[0].click();return e[0].textContent.trim().slice(0,50);});
+console.log('clicked:',clicked);
+await wait(6000);await page.screenshot({path:`${OUT}/R2-plus6s.png`});
+const st=await page.evaluate(()=>{const d=window.gaia?.director||window.gaia?.atlasDirector;let s=null;try{s=d&&d.status&&d.status();}catch(e){s={err:e.message}}return s&&JSON.stringify(s).slice(0,300);});
+console.log('status:',st);console.log('errors:',errs.length,errs.slice(0,3));
+await b.close();

@@ -4,7 +4,8 @@
 //   node tools/rain.mjs proprio <entityId> [--ticks N] [--hz N]
 //   node tools/rain.mjs fov <entityId> [--fov DEG] [--range M]
 //
-// Requires the client running in a CDP browser (--remote-debugging-port=9222).
+// Requires the client running in a CDP browser (--remote-debugging-port=9222;
+// override with CDP_PORT).
 import { connectCdp } from './cdp-lib.mjs';
 
 const [, , mode, id, ...rest] = process.argv;

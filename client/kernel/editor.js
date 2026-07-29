@@ -214,6 +214,7 @@ export class Editor {
 
   enterCreate() {
     this.mode = 'create';
+    this.view.snapTransforms = true;
     this.player.editorMode = true;
     this.tc.enabled = true;
     document.exitPointerLock();
@@ -226,6 +227,7 @@ export class Editor {
 
   enterPlay() {
     this.mode = 'play';
+    this.view.snapTransforms = false;
     this.player.editorMode = false;
     this.player.flyActive = false;
     this.orbiting = false;

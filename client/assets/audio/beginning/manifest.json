@@ -1,0 +1,20 @@
+{
+  "song": "The Beginning",
+  "artist": "Pascal Disse",
+  "note": "8 synced stems, identical length, loop as one. Cosmos-mix design (Nyari 2026-07-28): camera = mixing desk. All gains ramp ~1.5s, all stems started sample-synced on one AudioContext clock, gesture-unlocked, respect atlas mute (M).",
+  "stems": [
+    { "file": "synth.m4a",          "layer": "void",      "rule": "base pad at universe framing; gain 0.35 wide, 0.2 close" },
+    { "file": "keyboard.m4a",       "layer": "void",      "rule": "with synth; slight boost when a panel is open (reading music)" },
+    { "file": "other.m4a",          "layer": "void",      "rule": "texture; constant low 0.15" },
+    { "file": "bass.m4a",           "layer": "galaxy",    "rule": "fade in with proximity to any galaxy core (inverse distance, max 0.5)" },
+    { "file": "drums.m4a",          "layer": "galaxy",    "rule": "with bass but steeper curve; DUCK to 0.1 while force-sim is running" },
+    { "file": "percussion.m4a",     "layer": "stars",     "rule": "scale with on-screen mote density (visible instanced count)" },
+    { "file": "backing-vocals.m4a", "layer": "covenant",  "rule": "audible only inside covenant/cluster proximity in any Rite view, max 0.4" },
+    { "file": "lead-vocals.m4a",    "layer": "ebrietas",  "rule": "ONLY near the Altar of Despair: inverse distance to Ebrietas, 0 elsewhere; full 1.0 at her side. Her wail (bloodborne/ebrietas-cry-2.ogg) sits under it" }
+  ],
+  "interaction": {
+    "bloodline_traced": "brief backing-vocals swell",
+    "doll_panel_open": "all stems duck 0.5, her hum/voice on top",
+    "insight_toast_voice": "duck stems 0.4 for clip duration"
+  }
+}

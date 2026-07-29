@@ -254,3 +254,16 @@ Screenshot discipline:
 - Components have NO remove-×: click a section head to select it, ⌘⌫
   removes the component (one op, undoable). Programmatic removal stays
   `{op:'set', id, component, value: null}`.
+
+## ⚠ PLAY IT BEFORE YOU CLAIM IT (Pascal, 2026-07-12 — non-negotiable)
+
+Never tell Pascal a feature works because logs, unit checks, or injected
+commands say so. Before claiming ANY in-world feature is implemented or
+fixed, PLAY it through the real player path — the exact path a player
+uses: real chat (POST /act say), real movement (player controller /
+gaia.player.keys), real senses (/sense/*, rain proprio/fov, screenshots
+for pixels). The engine was built with eyes, ears, senses, and player
+controllers FOR agents — use them. Injecting into a daemon's command
+file, reading its log, or poking internal state is NOT verification; it
+bypasses the path the player actually uses. If you did not play it, the
+claim is UNVERIFIED and must be labeled so.

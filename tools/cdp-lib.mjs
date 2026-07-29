@@ -3,9 +3,11 @@
 // The browser must run with --remote-debugging-port=9222.
 import WebSocket from 'ws';
 
+const CDP_HOST = process.env.CDP_HOST || '127.0.0.1';
+
 export async function connectCdp() {
   const port = process.env.CDP_PORT ?? 9222;
-  const targets = await (await fetch(`http://localhost:${port}/json`)).json();
+  const targets = await (await fetch(`http://${CDP_HOST}:${port}/json`)).json();
   // match localhost AND [::1] — when another project squats the IPv4 port,
   // the engine's vite still binds IPv6 and the tab runs on http://[::1]:5173
   // (set GAIA_CLIENT_PORT when the stack runs on alternate ports)
@@ -15,7 +17,11 @@ export async function connectCdp() {
     console.error(`no localhost:${clientPort} page — launch the browser with --remote-debugging-port`);
     process.exit(1);
   }
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  const wsUrl = page.webSocketDebuggerUrl.replace(
+    /^(ws:\/\/)(?:localhost|127\.0\.0\.1|\[::1\])(:)/,
+    `$1${CDP_HOST}$2`,
+  );
+  const ws = new WebSocket(wsUrl);
   await new Promise((resolve) => ws.on('open', resolve));
   let seq = 0;
   const pending = new Map();

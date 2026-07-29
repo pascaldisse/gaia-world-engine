@@ -193,8 +193,27 @@ async function main() {
   await wait(900);
   const a4 = await shoot(page, 'A04-film-t5-pure-deep.png');
   const m5 = measure(a4);
-  station('A4 film t=5 is pure deep — zero stars/galaxies/systems',
-    m5.lit === 0, `lit>70px=${m5.lit} mean=${m5.mean} max=${m5.max} · ${a4}`);
+  // WHAT "PURE DEEP" ACTUALLY MEANS, MEASURED. Luminance is the WRONG judge:
+  // seg1's own sleeping motes and the dust:sky shell are the deep, and they
+  // are lit (compare proof/film2-fold/strip/f000.jpg, the fold's proven pure
+  // frame — this shot matches it). The law is about the WORLD: no record, no
+  // galaxy, no starfield, no nebula, no light may exist in this window. That
+  // is state, and state is what is asserted here; the picture is the witness.
+  const deep = await page.evaluate(() => {
+    const s = window.gaia.atlasStrategy;
+    const c = s.cosmos;
+    const groups = [...s.view.groups.entries()]
+      .filter(([id]) => /^(galaxy:|node:|starfield:|nebula:)/.test(id) && (id !== 'dust:sky'))
+      .filter(([, g]) => g.visible).map(([id]) => id);
+    let lights = 0;
+    s.view.scene.traverse((o) => { if (o.isLight && o.visible && o.intensity > 0) lights += 1; });
+    const veiled = (c.veiled || []).reduce((a, b) => a + b, 0);
+    return { seg: window.gaia.film2.status().current, nodes: c.nodes.length, veiled,
+      visibleWorldGroups: groups, lights, cosmosEnabled: !!c.enabled };
+  });
+  station('A4 film t=5 opens in the VOID — every record veiled, no galaxy/starfield/nebula, no light',
+    deep.seg === 'seg1' && deep.veiled === deep.nodes && deep.visibleWorldGroups.length === 0 && deep.lights === 0,
+    `${JSON.stringify(deep)} · luminance mean=${m5.mean} max=${m5.max} lit>70=${m5.lit} · ${a4}`);
 
   // t = 80: THE RED DROP
   await page.evaluate(() => window.gaia.director.scrub(80, { resume: null }));

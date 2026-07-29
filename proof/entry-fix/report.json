@@ -1,6 +1,6 @@
 {
-  "at": "2026-07-29T07:01:26.287Z",
-  "user": "entryfix-1785308449725",
+  "at": "2026-07-29T07:04:47.219Z",
+  "user": "entryfix-1785308654162",
   "shots": "/Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix",
   "stations": [
     {
@@ -24,14 +24,19 @@
       "detail": "cosmos nodes = 3061"
     },
     {
+      "name": "A4a the door holds the frame until the film paints",
+      "ok": true,
+      "detail": "/Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A04a-film-t5-door-still-up.png"
+    },
+    {
       "name": "A4 film t=5 is pure deep — zero stars/galaxies/systems",
       "ok": false,
-      "detail": "lit>70px=14131 mean=5.12 max=255 · /Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A04-film-t5-pure-deep.png"
+      "detail": "lit>70px=185461 mean=41.7 max=185 · /Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A04-film-t5-pure-deep.png"
     },
     {
       "name": "A5 film t=80 carries the red drop's light",
       "ok": true,
-      "detail": "red=0 max=255 mean=5.07 · /Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A05-film-t80-red-drop.png"
+      "detail": "red=6923 max=255 mean=54.89 · /Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A05-film-t80-red-drop.png"
     },
     {
       "name": "A6 Esc does NOT skip on a first visit",
@@ -46,7 +51,7 @@
     {
       "name": "A8 register → WORLD",
       "ok": true,
-      "detail": "{\"id\":\"6f187284-9d74-41e2-9b7d-cf9cb044a264\",\"username\":\"entryfix-1785308449725\",\"avatar\":{\"lineage\":\"cainhurst\",\"iris\":\"#7a1128\",\"id\":\"entryfix-1785308449725\",\"skin\":\"#f3d9c4\",\"hair\":\"#160b22\",\"outfit\":\"#2c1742\",\"height\":1,\"head\":1,\"eye\":1,\"hairLength\":0.65,\"shoulders\":1,\"hips\":1,\"mesh\":{\"parts\":[{\"shape\":\"cylinder\",\"radius\":0.075,\"height\":0.9,\"position\":[-0.12,0.48,0],\"color\":\"#2c1742\",\"roughness\":0.72},{\"shape\":\"cylinder\",\"radius\":0.075,\"height\":0.9,\"position\":[0.12,0.48,0],\"color\":\"#2c1742\",\"roughness\":0.72},{\"shape\":\"box\",\"size\":[0.22,0.07,0.32],\"position\":[-0.12,0.05,-0.055],\"color\":\"#151821\",\"roughness\":0.8},{\"shape\":\"box\",\"size\":[0.22,0.07,0.32],\"position\":[0.12,0.05,-0.055],\"color\":\"#151821\",\"roughness\":0.8},{\"shape\":\"box\",\"size\":[0.48,0.22,0.31],\"position\":[0,0.94,0],\"color\":\"#2c1742\",\"roughness\":0.62},{\"shape\":\"box\",\"size\":[0.58,0.62,0.34],\"position\":[0,1.18,0],\"color\":\"#2c1742\",\"roughness\":0.58},{\"shape\":\"sphere\",\"radius\":0.095,\"scale\":[1,0.82,0.75],\"position\":[-0.35,1.43,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.095,\"scale\":[1,0.82,0.75],\"position\":[0.35,1.43,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"cylinder\",\"radius\":0.055,\"height\":0.72,\"position\":[-0.43,1.08,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"cylinder\",\"radius\":0.055,\"height\":0.72,\"position\":[0.43,1.08,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.07,\"position\":[-0.43,0.68,-0.01],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.07,\"position\":[0.43,0.68,-0.01],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"cylinder\",\"radius\":0.09,\"height\":0.18,\"position\":[0,1.75,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.28,\"scale\":[0.9,1.06,0.82],\"position\":[0,2.08,0],\"color\":\"#f3d9c4\",\"roughness\":0.5},{\"shape\":\"sphere\",\"radius\":0.034,\"scale\":[1.55,0.78,0.18],\"position\":[-0.105,2.115,-0.24],\"color\":\"#fff7f3\",\"roughness\":0.35},{\"shape\":\"sphere\",\"radius\":0.034,\"scale\":[1.55,0.78,0.18],\"position\":[0.105,2.115,-0.24],\"color\":\"#fff7f3\",\"roughness\":0.35},{\"shape\":\"sphere\",\"radius\":0.01632,\"scale\":[1,1,0.2],\"position\":[-0.105,2.115,-0.258],\"color\":\"#7a1128\",\"emissive\":\"#7a1128\",\"emissiveIntensity\":0.35,\"roughness\":0.2},{\"shape\":\"sphere\",\"radius\":0.01632,\"scale\":[1,1,0.2],\"position\":[0.105,2.115,-0.258],\"color\":\"#7a1128\",\"emissive\":\"#7a1128\",\"emissiveIntensity\":0.35,\"roughness\":0.2},{\"shape\":\"sphere\",\"radius\":0.025,\"scale\":[0.8,0.6,0.35],\"position\":[0,2.035,-0.27],\"color\":\"#d39b8a\",\"roughness\":0.55},{\"shape\":\"box\",\"size\":[0.13,0.018,0.012],\"position\":[0,1.935,-0.275],\"color\":\"#8d4a56\",\"roughness\":0.6},{\"shape\":\"sphere\",\"radius\":0.2898,\"scale\":[0.95,0.62,0.9],\"position\":[0,2.2,-0.005],\"color\":\"#160b22\",\"roughness\":0.82},{\"shape\":\"sphere\",\"radius\":0.25200000000000006,\"scale\":[0.88,1.485,0.55],\"position\":[0,1.9955,0.16],\"color\":\"#160b22\",\"roughness\":0.86},{\"shape\":\"sphere\",\"radius\":0.10640000000000001,\"scale\":[0.55,1.25,0.35],\"position\":[-0.24,2.02,-0.03],\"color\":\"#160b22\",\"roughness\":0.82},{\"shape\":\"sphere\",\"radius\":0.10640000000000001,\"scale\":[0.55,1.25,0.35],\"position\":[0.24,2.02,-0.03],\"color\":\"#160b22\",\"roughness\":0.82}]}},\"mythosName\":\"Master Casimir\",\"createdAt\":\"2026-07-29T07:01:15.856Z\"} · /Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A08-world-after-register.png"
+      "detail": "{\"id\":\"77af3de4-07b7-41b1-b780-2cc2614bf6d1\",\"username\":\"entryfix-1785308654162\",\"avatar\":{\"lineage\":\"cainhurst\",\"iris\":\"#7a1128\",\"id\":\"entryfix-1785308654162\",\"skin\":\"#f3d9c4\",\"hair\":\"#160b22\",\"outfit\":\"#2c1742\",\"height\":1,\"head\":1,\"eye\":1,\"hairLength\":0.65,\"shoulders\":1,\"hips\":1,\"mesh\":{\"parts\":[{\"shape\":\"cylinder\",\"radius\":0.075,\"height\":0.9,\"position\":[-0.12,0.48,0],\"color\":\"#2c1742\",\"roughness\":0.72},{\"shape\":\"cylinder\",\"radius\":0.075,\"height\":0.9,\"position\":[0.12,0.48,0],\"color\":\"#2c1742\",\"roughness\":0.72},{\"shape\":\"box\",\"size\":[0.22,0.07,0.32],\"position\":[-0.12,0.05,-0.055],\"color\":\"#151821\",\"roughness\":0.8},{\"shape\":\"box\",\"size\":[0.22,0.07,0.32],\"position\":[0.12,0.05,-0.055],\"color\":\"#151821\",\"roughness\":0.8},{\"shape\":\"box\",\"size\":[0.48,0.22,0.31],\"position\":[0,0.94,0],\"color\":\"#2c1742\",\"roughness\":0.62},{\"shape\":\"box\",\"size\":[0.58,0.62,0.34],\"position\":[0,1.18,0],\"color\":\"#2c1742\",\"roughness\":0.58},{\"shape\":\"sphere\",\"radius\":0.095,\"scale\":[1,0.82,0.75],\"position\":[-0.35,1.43,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.095,\"scale\":[1,0.82,0.75],\"position\":[0.35,1.43,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"cylinder\",\"radius\":0.055,\"height\":0.72,\"position\":[-0.43,1.08,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"cylinder\",\"radius\":0.055,\"height\":0.72,\"position\":[0.43,1.08,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.07,\"position\":[-0.43,0.68,-0.01],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.07,\"position\":[0.43,0.68,-0.01],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"cylinder\",\"radius\":0.09,\"height\":0.18,\"position\":[0,1.75,0],\"color\":\"#f3d9c4\",\"roughness\":0.55},{\"shape\":\"sphere\",\"radius\":0.28,\"scale\":[0.9,1.06,0.82],\"position\":[0,2.08,0],\"color\":\"#f3d9c4\",\"roughness\":0.5},{\"shape\":\"sphere\",\"radius\":0.034,\"scale\":[1.55,0.78,0.18],\"position\":[-0.105,2.115,-0.24],\"color\":\"#fff7f3\",\"roughness\":0.35},{\"shape\":\"sphere\",\"radius\":0.034,\"scale\":[1.55,0.78,0.18],\"position\":[0.105,2.115,-0.24],\"color\":\"#fff7f3\",\"roughness\":0.35},{\"shape\":\"sphere\",\"radius\":0.01632,\"scale\":[1,1,0.2],\"position\":[-0.105,2.115,-0.258],\"color\":\"#7a1128\",\"emissive\":\"#7a1128\",\"emissiveIntensity\":0.35,\"roughness\":0.2},{\"shape\":\"sphere\",\"radius\":0.01632,\"scale\":[1,1,0.2],\"position\":[0.105,2.115,-0.258],\"color\":\"#7a1128\",\"emissive\":\"#7a1128\",\"emissiveIntensity\":0.35,\"roughness\":0.2},{\"shape\":\"sphere\",\"radius\":0.025,\"scale\":[0.8,0.6,0.35],\"position\":[0,2.035,-0.27],\"color\":\"#d39b8a\",\"roughness\":0.55},{\"shape\":\"box\",\"size\":[0.13,0.018,0.012],\"position\":[0,1.935,-0.275],\"color\":\"#8d4a56\",\"roughness\":0.6},{\"shape\":\"sphere\",\"radius\":0.2898,\"scale\":[0.95,0.62,0.9],\"position\":[0,2.2,-0.005],\"color\":\"#160b22\",\"roughness\":0.82},{\"shape\":\"sphere\",\"radius\":0.25200000000000006,\"scale\":[0.88,1.485,0.55],\"position\":[0,1.9955,0.16],\"color\":\"#160b22\",\"roughness\":0.86},{\"shape\":\"sphere\",\"radius\":0.10640000000000001,\"scale\":[0.55,1.25,0.35],\"position\":[-0.24,2.02,-0.03],\"color\":\"#160b22\",\"roughness\":0.82},{\"shape\":\"sphere\",\"radius\":0.10640000000000001,\"scale\":[0.55,1.25,0.35],\"position\":[0.24,2.02,-0.03],\"color\":\"#160b22\",\"roughness\":0.82}]}},\"mythosName\":\"Casimir the Unseen\",\"createdAt\":\"2026-07-29T07:04:36.733Z\"} · /Users/pascaldisse/projects/GAIA-World-Engine-entryfix/proof/entry-fix/A08-world-after-register.png"
     },
     {
       "name": "B0 gate already open (token in localStorage — by design)",
@@ -71,7 +76,7 @@
   "counts": {
     "A": 0,
     "B": 0,
-    "passed": 11,
-    "total": 12
+    "passed": 12,
+    "total": 13
   }
 }

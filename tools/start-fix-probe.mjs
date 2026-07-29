@@ -49,13 +49,20 @@ const SNAP = () => {
   const d = g.director;
   let st = null; try { st = d?.status?.() ?? null; } catch (e) { st = 'err:' + e.message; }
   let ist = null; try { ist = intro?.status?.() ?? { state: intro?.state ?? null }; } catch (e) { ist = 'err:' + e.message; }
-  const audio = [...document.querySelectorAll('audio')].map((x) => ({ t: +x.currentTime.toFixed(2), paused: x.paused, rs: x.readyState, src: (x.currentSrc || '').split('/').pop() }));
+  // THE MIX IS `new Audio()` — never appended to the DOM, so a
+  // querySelectorAll('audio') count of 0 proves NOTHING. The element the film
+  // uses as its clock is director.audio.el; that is the one measured here.
+  const el = d?.director?.audio?.el ?? null;
+  const audio = el ? [{ t: +el.currentTime.toFixed(2), paused: el.paused, rs: el.readyState, ns: el.networkState, err: el.error ? { code: el.error.code, msg: el.error.message } : null, canAAC: document.createElement('audio').canPlayType('audio/mp4; codecs="mp4a.40.2"') || 'no', src: (el.currentSrc || '').split('/').pop() }] : [];
   const introEl = document.getElementById('atlas-intro');
+  // #atlas-intro is position:fixed — offsetParent is ALWAYS null on a fixed
+  // element, so visibility is judged by client rects + opacity, never offsetParent
+  const vis = (e) => !!e && e.getClientRects().length > 0 && Number(getComputedStyle(e).opacity) > 0.02;
   return {
     intro: ist,
     director: st,
     audio,
-    introVisible: !!introEl && !!introEl.offsetParent,
+    introVisible: vis(introEl),
     introSub: introEl?.querySelector('.in-sub')?.textContent ?? null,
     watchText: introEl?.querySelector('[data-act="watch"]')?.textContent ?? null,
     filmChrome: document.body.classList.contains('director-film'),
@@ -82,7 +89,7 @@ async function passGate(page) {
 async function trustedClick(page, re) {
   const box = await page.evaluate((src) => {
     const rx = new RegExp(src, 'i');
-    const el = [...document.querySelectorAll('button,div,span,a')].filter((e) => e.offsetParent && rx.test(e.textContent || '') && e.children.length === 0)[0];
+    const el = [...document.querySelectorAll('button,div,span,a')].filter((e) => e.getClientRects().length && rx.test(e.textContent || '') && e.children.length === 0)[0];
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: el.textContent.trim().slice(0, 60) };
@@ -107,19 +114,24 @@ async function run(path) {
   await page.screenshot({ path: `${SHOTS}/${tag}-01-gate.png` });
 
   if (path === 'b') {
-    // register a hunter through the creator on the FIRST visit, then reload
-    await poll(page, () => document.querySelector('#atlas-intro.ready') ? 1 : 0, { label: 'title ready', timeout: 90000 });
+    // an account is what makes this a RETURN visit (the intro asks the quest
+    // service, not a flag): register from the page itself so the session +
+    // flag cookies land exactly as the creator's own form would leave them
     const user = `startfix-${Date.now()}`;
     const reg = await page.evaluate(async ([u, p, q]) => {
-      const r = await fetch(`${q}/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+      const r = await fetch(`${q}/auth/register`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: u, password: p, avatar: { lineage: 'probe' } }) });
       const j = await r.json().catch(() => ({}));
-      if (j?.token) { document.cookie = `quest_token=${j.token}; path=/; max-age=86400`; try { localStorage.setItem('quest_token', j.token); } catch {} }
-      return { ok: r.ok, keys: Object.keys(j || {}), status: r.status };
+      return { ok: r.ok, status: r.status, user: j?.user?.username ?? null, err: j?.error ?? null };
     }, [user, PASS, QUEST]);
     station(`${tag} register ${user}`, reg.ok, JSON.stringify(reg));
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await wait(3000);
+    await wait(4000);
     await passGate(page);
+    const me = await page.evaluate(async (q) => {
+      const r = await fetch(`${q}/auth/me`, { credentials: 'include' });
+      return { ok: r.ok, body: (await r.json().catch(() => ({})))?.user?.username ?? null };
+    }, QUEST);
+    station(`${tag} session survives the reload`, !!me.body, JSON.stringify(me));
   }
 
   // wait for the intro screen to be ready to take a click
@@ -128,10 +140,10 @@ async function run(path) {
     ready = await poll(page, () => {
       const el = document.getElementById('atlas-intro');
       if (!el) return 0;
-      const has = [...el.querySelectorAll('button,div')].some((e) => e.offsetParent && /witness the beginning/i.test(e.textContent || ''));
+      const seen = (e) => e.getClientRects().length > 0;
+      const btn = [...el.querySelectorAll('button')].find((e) => seen(e) && /witness the beginning/i.test(e.textContent || ''));
       const sub = el.querySelector('.in-sub');
-      const clickable = has || (sub && !sub.hidden && /click to begin/i.test(sub.textContent || ''));
-      return clickable ? JSON.stringify({ has, sub: sub?.textContent }) : 0;
+      return (btn || el.classList.contains('ready')) ? JSON.stringify({ btn: btn?.textContent ?? null, sub: sub?.textContent ?? null, cls: el.className }) : 0;
     }, { label: 'a clickable witness', timeout: 120000 });
   } catch (e) { station(`${tag} screen ready`, false, e.message); }
   station(`${tag} screen ready`, !!ready, String(ready));

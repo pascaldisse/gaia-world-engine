@@ -16,7 +16,7 @@ const reg=await page.evaluate(async({q,u})=>{try{const r=await fetch(q+'/auth/re
 console.log('register:',reg);
 await page.reload({waitUntil:'domcontentloaded'});await wait(4500);
 await page.screenshot({path:`${OUT}/P1-start-screen.png`});
-const tgt=await page.evaluate(()=>{const e=[...document.querySelectorAll('button')].filter(x=>x.offsetParent&&new RegExp(process.env.BTN||'witness','i').test(x.textContent||''));if(!e.length)return null;const r=e[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,text:e[0].textContent.trim().slice(0,40)};});
+const tgt=await page.evaluate((btn)=>{const e=[...document.querySelectorAll('button')].filter(x=>x.offsetParent&&new RegExp(btn,'i').test(x.textContent||''));if(!e.length)return null;const r=e[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,text:e[0].textContent.trim().slice(0,40)};}, process.env.BTN||'witness');
 console.log('clicked:',tgt&&tgt.text);
 if(tgt) await page.mouse.click(tgt.x,tgt.y);
 await wait(2500); await page.mouse.click(640,477); await page.keyboard.press('Enter'); // begin gesture if asked

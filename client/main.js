@@ -90,7 +90,9 @@ async function waitForGate() {
   try {
     const mod = gateModule();
     if (!mod) return;                       // explicitly no gate: boot straight in
-    await import(/* @vite-ignore */ mod);
+    // a string is a URL to fetch; anything else the host page already imported
+    // (the only form a bundler can see — see kernel/extensions.js)
+    if (typeof mod === 'string') await import(/* @vite-ignore */ mod);
     const gate = window.gaia?.atlasGate?.gate;
     if (gate && (await gate.passedAlready())) return;
   } catch (err) {

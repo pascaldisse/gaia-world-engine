@@ -12,9 +12,17 @@
 // someone deliberately passes a different list.
 //
 // Parameter, first one that answers wins:
-//   window.__GAIA_EXTENSIONS__ = ['/game/atlas-strategy.js', …]   host page decides
+//   window.__GAIA_EXTENSIONS__ = [mod | register | '/url.js', …]   host page decides
 //   ?ext=/game/atlas-strategy.js,/game/other.js                   URL, for probes
 //   DEFAULT_EXTENSIONS                                            this engine's own
+//
+// An entry may be a URL STRING, a register FUNCTION, or an ALREADY-IMPORTED
+// MODULE. That is not convenience — it is the difference between a dev server and
+// a production bundle: a URL like '/game/atlas-strategy.js' exists only while a
+// dev server is serving files by path, and 404s inside a built artifact where the
+// same code lives in /assets/index-<hash>.js (measured 2026-07-30: static build
+// booted with no strategy, no cosmos and an empty museum). A host page that wants
+// its extensions BUNDLED must `import` them itself and pass the module.
 //
 // CONTRACT — an extension module exports `register(ctx)` (or a default export of
 // the same shape) and may return a descriptor:
@@ -45,22 +53,25 @@ function fromQuery(key) {
 export function extensionList() {
   const w = typeof window !== 'undefined' ? window.__GAIA_EXTENSIONS__ : null;
   const list = (Array.isArray(w) && w.length ? w : null) ?? fromQuery('ext') ?? DEFAULT_EXTENSIONS;
-  return list.map(resolve);
+  // only strings are URLs to resolve; modules and functions pass through as-is
+  return list.map((e) => (typeof e === 'string' ? resolve(e) : e));
 }
 
 export function gateModule() {
   const w = typeof window !== 'undefined' ? window.__GAIA_GATE__ : null;
   if (w === false || w === null) return null;          // an explicit "no gate"
+  if (w && typeof w !== 'string') return w;            // already imported by the host
   const q = fromQuery('gate');
   return resolve(w || (q && q[0]) || DEFAULT_GATE);
 }
 
 export async function loadExtensions(ctx) {
   const loaded = [];
-  for (const url of extensionList()) {
+  for (const entry of extensionList()) {
+    const url = typeof entry === 'string' ? entry : (entry?.url ?? entry?.name ?? '[module]');
     try {
-      const mod = await import(/* @vite-ignore */ url);
-      const register = mod.register ?? mod.default;
+      const mod = typeof entry === 'string' ? await import(/* @vite-ignore */ entry) : entry;
+      const register = typeof mod === 'function' ? mod : (mod.register ?? mod.default);
       if (typeof register !== 'function') {
         console.warn('[gaia] extension has no register(ctx) export — skipped:', url);
         continue;

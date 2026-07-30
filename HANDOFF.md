@@ -44,7 +44,9 @@ gesture-fix f65ab49a → b22bbca3 (never naked world; setVisible choke) → 9c4a
 - Contact sheets: PIL script in room history (6-col, t-labels, 4 sheets).
 
 ## Open threads (priority order)
-1. **II Teardrop frame-walk** — FIRST ATTEMPT DIED: `page.evaluate: Execution context was destroyed... navigation` after 22 frames (~t44) — THE PAGE NAVIGATES MID-FILM (era code triggering reload? WebGPU device loss? recorder?). Pascal's real watch would die the same way ⇒ TOP DEFECT. Re-run with `page.on('framenavigated')` + console/pageerror capture to catch the trigger. Then walk sheets: drop@74-80, split@110, eyes@188, fall/Ebrietas@245-270, ORDERINGS FINALE@~277-293 with real records. Missing bodies ⇒ diagnose era-API drift (era rites vs today's forge/cosmos), not "prettify".
+1. ~~II Teardrop t44 navigation~~ **STRUCK 07-30 (opus5)**: NOT a product bug — one-off renderer death; Playwright mis-reports context-destroy as "navigation". Instrumented full walk t=0→293: ZERO navigations; client structurally cannot navigate (no `location.*` in client/). Pascal's watch was never at risk.
+   **REAL DEFECT → EYES BEAT t≈188**: p99=8 vs neighbors 53–92; nyari eyeballed r188 — NO eyes in frame at the lyric "eyes" (atlas-eyes should open on word-beats). Missing body, not intended dark. Frames: `proof/teardrop-nav/realtime/`. Remaining beats unwalked realtime: drop@74-80, split@110, fall/Ebrietas@245-270, ORDERINGS FINALE@277-293. Missing bodies ⇒ diagnose era-API drift, not "prettify".
+   § PHOTOMETRY LAW (opus5 07-30): headless = SwiftShader = blind — photograph on headful Brave Metal-3 ONLY · seek ≠ playback for INTEGRATED-FX films (intro-v2: seek understates p99 up to 6.6×) — seek-photometry valid only for analytic-FX eras (film2/lane-C) · "seek don't watch" still stands for WEDGING; darkness measurement needs realtime.
 2. I First Cut frame-walk (same standard).
 3. III Eight Seals: known-good from fold era but re-verify post-museum (its darkness/veil lives in ITS director copy).
 4. Handover from each era film → world must land (poll adapter in beginIntro: veil-drop on t>0.2, handover on t≥292.9/state done).

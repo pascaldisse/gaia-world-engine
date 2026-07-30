@@ -20,3 +20,5 @@ dist/
 node_modules
 
 .scratch/
+
+.gaia/memory/

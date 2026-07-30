@@ -185,6 +185,25 @@ path still exists: `node tools/agent.mjs shot out.png` captures a real
 screenshot through a connected browser tab (the tab must be visible) — for
 judging beauty, not correctness.
 
+### Rain: embodied measurements
+
+`rain` is the machine-native sense for spatial measurements. `fov` reports a
+compact geometry grid in any rendered entity's view cone; `proprio` reports
+bone/terrain measurements for an entity with a mounted VRM body. Use it for
+grounding, motion, facing, and nearby spatial relationships — not for judging
+pixels.
+
+```sh
+node tools/rain.mjs fov <entity-id>
+node tools/rain.mjs proprio <vrm-avatar-id>  # !NOBODY if the entity has no VRM
+```
+
+For a VRM motion regression, the `proprio` header must say `OK`; flags such
+as `!BACK`, `!FLOAT`, `!SINK`, `!SKEW`, or `!STIFF` convict a regression. See
+[docs/RAIN.md](docs/RAIN.md) for the wire format, channel codebook, and
+operator workflow. Use screenshots for visual claims such as material,
+lighting, fog, transparency, bloom, and particle visibility.
+
 ## Worlds are projects
 
 A world is a directory, not a fork of the engine:

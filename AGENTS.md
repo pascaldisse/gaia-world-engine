@@ -8,6 +8,24 @@ visibility — none of that is confirmable through senses. **Any change that
 affects how the world LOOKS must be confirmed with a screenshot before
 calling it done:**
 
+### Rain: machine-native body and field-of-view measurements
+
+`rain` is deliberately different from the ordinary data senses above. Its
+`fov` grid measures geometry around any rendered entity; `proprio` samples a
+mounted VRM body's world-space bones against terrain. Use it for locomotion,
+grounding, facing, and nearby spatial verification — not for judging
+appearance. Read `docs/RAIN.md` before using it:
+
+```sh
+node tools/rain.mjs fov <entity-id>
+node tools/rain.mjs proprio <vrm-avatar-id>   # !NOBODY if no mounted VRM
+```
+
+For a VRM avatar-motion regression, `proprio` must not report `!BACK`,
+`!FLOAT`, `!SINK`, `!SKEW`, or `!STIFF`. Rain is not a screenshot
+replacement: still use a real screenshot for materials, lighting, fog,
+transparency, and other pixel-visible claims.
+
 ```sh
 node tools/agent.mjs shot out.png     # or GET /screenshot
 ```

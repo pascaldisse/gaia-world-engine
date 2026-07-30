@@ -19,7 +19,7 @@ import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
 import { CharacterCreator } from './plugins/character-creator.js';
 import { VrmEditor } from './plugins/vrm-editor.js';
-import { AtlasStrategy } from './plugins/atlas-strategy.js';
+import { loadExtensions, gateModule } from './kernel/extensions.js';
 import { updateVrms } from './kernel/vrm.js';
 import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
@@ -44,7 +44,11 @@ const environment = new Environment({ renderer, scene, hemi, sun, post, audio })
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 view.player = player;
-const atlasStrategy = new AtlasStrategy({ store, view, camera, player, dom: renderer.domElement });
+// EXTENSIONS ARE A PARAMETER (kernel/extensions.js). The default list is this
+// engine's own historical wiring, so nothing here changes unless a host page
+// passes `window.__GAIA_EXTENSIONS__` — which is how the Paleblood Atlas boots
+// its OWN copies from paloptic instead of these.
+const extensions = await loadExtensions({ store, view, camera, player, dom: renderer.domElement, renderer, scene, audio, effects, environment });
 // a scene's `camera` component drives the rig: side mode fixes the frame,
 // shows the body, and retires the crosshair (E picks by the body instead)
 const scenes = new Scenes({
@@ -84,7 +88,9 @@ let pendingShot = null;
 // an unreachable gate config never becomes a second, silent lock.
 async function waitForGate() {
   try {
-    await import('./plugins/atlas-gate.js');
+    const mod = gateModule();
+    if (!mod) return;                       // explicitly no gate: boot straight in
+    await import(/* @vite-ignore */ mod);
     const gate = window.gaia?.atlasGate?.gate;
     if (gate && (await gate.passedAlready())) return;
   } catch (err) {
@@ -176,7 +182,7 @@ const netConfig = {
     scenes.setWorld(world);
     scenes.update(player.position);
     store.applySnapshot(entities);
-    atlasStrategy.sync();
+    extensions.sync();
     // the scene was current before its entities existed (setWorld precedes
     // the snapshot apply) — now that they do, derive its camera rig
     scenes.applyCamera();
@@ -206,7 +212,7 @@ const netConfig = {
       }
     }
     store.applyOps(ops);
-    atlasStrategy.sync();
+    extensions.sync();
     countEl.textContent = store.entities.size;
     for (const op of ops) {
       // a warp landed on OUR presence: world logic moved the body
@@ -851,7 +857,7 @@ window.gaia = Object.assign(window.gaia ?? {}, {
   sim,
   characterCreator,
   vrmEditor,
-  atlasStrategy,
+  ...extensions.published,          // e.g. atlasStrategy, when that extension is loaded
   setDrawMode,
   setStopped,
 });
@@ -905,7 +911,7 @@ renderer.setAnimationLoop(() => {
     }
   }
   player.update(dt);
-  atlasStrategy.update(dt);
+  extensions.update(dt);
   scenes.update(player.position);
   player.voidY = scenes.currentVoidY;
   view.update();

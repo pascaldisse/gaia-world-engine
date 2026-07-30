@@ -1,0 +1,80 @@
+// extensions.js — WHAT THE ENGINE LOADS IS A PARAMETER, NOT AN IMPORT.
+//
+// LAW (Pascal, 2026-07-30): "the game is not a plugin." The engine may offer a
+// plugin MECHANISM, but a production does not live inside the studio. Before
+// this file, main.js imported `AtlasStrategy` by name, constructed it, synced it,
+// updated it and published it — the engine could not boot without the Paleblood
+// Atlas being present in its own source tree.
+//
+// §IRON: a varying value is a parameter WITH A DEFAULT. The default here is the
+// engine's own historical wiring, so a boot that passes nothing behaves exactly
+// as it did before this file existed. Nothing about the live app changes until
+// someone deliberately passes a different list.
+//
+// Parameter, first one that answers wins:
+//   window.__GAIA_EXTENSIONS__ = ['/game/atlas-strategy.js', …]   host page decides
+//   ?ext=/game/atlas-strategy.js,/game/other.js                   URL, for probes
+//   DEFAULT_EXTENSIONS                                            this engine's own
+//
+// CONTRACT — an extension module exports `register(ctx)` (or a default export of
+// the same shape) and may return a descriptor:
+//   { name, api, sync(), update(dt) }
+// `name`+`api` get published on `window.gaia` under that name (so existing
+// consumers like atlas-intro's `window.gaia.atlasStrategy` keep working), and
+// sync/update are called by the engine's own loops. Returning nothing is legal:
+// an extension may be pure side effect.
+//
+// A failing extension must NOT take the engine down: the studio still opens when
+// a production is broken or absent. Failures are warned and skipped.
+
+export const DEFAULT_EXTENSIONS = ['../plugins/atlas-strategy.js'];
+export const DEFAULT_GATE = '../plugins/atlas-gate.js';
+
+// Relative defaults resolve against THIS module (client/kernel/), while a host
+// page passes origin-absolute paths ('/game/…'); `new URL` handles both, and an
+// absolute path ignores the base exactly as intended.
+const resolve = (u) => new URL(u, import.meta.url).href;
+
+function fromQuery(key) {
+  try {
+    const v = new URLSearchParams(location.search).get(key);
+    return v ? v.split(',').map((s) => s.trim()).filter(Boolean) : null;
+  } catch { return null; }
+}
+
+export function extensionList() {
+  const w = typeof window !== 'undefined' ? window.__GAIA_EXTENSIONS__ : null;
+  const list = (Array.isArray(w) && w.length ? w : null) ?? fromQuery('ext') ?? DEFAULT_EXTENSIONS;
+  return list.map(resolve);
+}
+
+export function gateModule() {
+  const w = typeof window !== 'undefined' ? window.__GAIA_GATE__ : null;
+  if (w === false || w === null) return null;          // an explicit "no gate"
+  const q = fromQuery('gate');
+  return resolve(w || (q && q[0]) || DEFAULT_GATE);
+}
+
+export async function loadExtensions(ctx) {
+  const loaded = [];
+  for (const url of extensionList()) {
+    try {
+      const mod = await import(/* @vite-ignore */ url);
+      const register = mod.register ?? mod.default;
+      if (typeof register !== 'function') {
+        console.warn('[gaia] extension has no register(ctx) export — skipped:', url);
+        continue;
+      }
+      const d = (await register(ctx)) ?? {};
+      loaded.push({ url, name: d.name ?? null, api: d.api ?? null, sync: d.sync ?? null, update: d.update ?? null });
+    } catch (err) {
+      console.warn('[gaia] extension failed to load — booting without it:', url, err);
+    }
+  }
+  return {
+    loaded,
+    published: Object.fromEntries(loaded.filter((e) => e.name && e.api).map((e) => [e.name, e.api])),
+    sync() { for (const e of loaded) { try { e.sync?.(); } catch (err) { console.warn('[gaia] extension sync failed:', e.url, err); } } },
+    update(dt) { for (const e of loaded) { try { e.update?.(dt); } catch (err) { console.warn('[gaia] extension update failed:', e.url, err); } } },
+  };
+}

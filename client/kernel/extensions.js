@@ -35,8 +35,16 @@
 // A failing extension must NOT take the engine down: the studio still opens when
 // a production is broken or absent. Failures are warned and skipped.
 
-export const DEFAULT_EXTENSIONS = ['../plugins/atlas-strategy.js'];
-export const DEFAULT_GATE = '../plugins/atlas-gate.js';
+// THE ENGINE SHIPS NO PRODUCTION (Pascal, 2026-07-31: "it should never even be
+// part of the engine to begin with"). The game lived here as 29 files under
+// client/plugins/ — a copy that drifted 1-2 days behind its real home in
+// ~/projects/paloptic/client/game and served an outdated film on :5174.
+// A host page names its own production:
+//     window.__GAIA_EXTENSIONS__ = ['/game/atlas-strategy.js']
+//     window.__GAIA_GATE__       = '/game/atlas-gate.js'
+// Defaults are EMPTY so the studio opens with no production at all.
+export const DEFAULT_EXTENSIONS = [];
+export const DEFAULT_GATE = null;
 
 // Relative defaults resolve against THIS module (client/kernel/), while a host
 // page passes origin-absolute paths ('/game/…'); `new URL` handles both, and an
@@ -62,7 +70,8 @@ export function gateModule() {
   if (w === false || w === null) return null;          // an explicit "no gate"
   if (w && typeof w !== 'string') return w;            // already imported by the host
   const q = fromQuery('gate');
-  return resolve(w || (q && q[0]) || DEFAULT_GATE);
+  const pick = w || (q && q[0]) || DEFAULT_GATE;
+  return pick ? resolve(pick) : null;    // no default gate -> no gate, not a 404
 }
 
 export async function loadExtensions(ctx) {

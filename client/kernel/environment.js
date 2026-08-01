@@ -143,7 +143,12 @@ export class Environment {
     if (fade) {
       fade.t = Math.min(1, fade.t + dt / fade.seconds);
       const k = fade.t * fade.t * (3 - 2 * fade.t);
-      this.scene.background.copy(fade.from.background).lerp(fade.to.background, k);
+      // a veiled scene (film4/seg1: "the deep is judged on black") sets
+      // scene.background to null on purpose — that is a legitimate state,
+      // not damage to repair, so every touch below skips it instead of
+      // crashing. It comes back exactly as it was (exit() restores the same
+      // Color instance) since nothing here mutates a null background.
+      if (this.scene.background) this.scene.background.copy(fade.from.background).lerp(fade.to.background, k);
       this.scene.fog.color.copy(fade.from.fogColor).lerp(fade.to.fogColor, k);
       if (fade.from.fogDensity !== null && fade.to.fogDensity !== null && this.scene.fog.isFogExp2) {
         this.fogDensity = fade.from.fogDensity + (fade.to.fogDensity - fade.from.fogDensity) * k;
@@ -155,8 +160,9 @@ export class Environment {
       this.sun.color.copy(fade.from.sunColor).lerp(fade.to.sunColor, k);
       this.sun.intensity = fade.from.sunIntensity + (fade.to.sunIntensity - fade.from.sunIntensity) * k;
       this.lightScale = fade.from.lightScale + (fade.to.lightScale - fade.from.lightScale) * k;
-      // keep the flash baseline tracking the fade
-      this.current.background.copy(this.scene.background);
+      // keep the flash baseline tracking the fade (skipped while veiled —
+      // current.background stays stale-but-harmless until background returns)
+      if (this.scene.background) this.current.background.copy(this.scene.background);
       this.current.fogColor.copy(this.scene.fog.color);
       this.current.sunIntensity = this.sun.intensity;
       this.current.hemiIntensity = this.hemi.intensity;
@@ -187,7 +193,7 @@ export class Environment {
       this.flashLevel = 0;
       this.sun.intensity = this.current.sunIntensity;
       this.hemi.intensity = this.current.hemiIntensity;
-      this.scene.background.copy(this.current.background);
+      if (this.scene.background) this.scene.background.copy(this.current.background);
       this.scene.fog.color.copy(this.current.fogColor);
       return;
     }
@@ -197,7 +203,7 @@ export class Environment {
     // lightning lifts the whole frame: sun, sky light, background, fog
     this.sun.intensity = this.current.sunIntensity + this.flashLevel * 6;
     this.hemi.intensity = this.current.hemiIntensity + this.flashLevel * 1.4;
-    this.scene.background.copy(this.current.background).lerp(this.flashColor, k * 0.55);
+    if (this.scene.background) this.scene.background.copy(this.current.background).lerp(this.flashColor, k * 0.55);
     this.scene.fog.color.copy(this.current.fogColor).lerp(this.flashColor, k * 0.5);
   }
 }

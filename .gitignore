@@ -21,4 +21,5 @@ node_modules
 
 .scratch/
 
-.gaia/memory/
+# gaia-daemon per-project room state (live runtime, never repo content)
+.gaia/

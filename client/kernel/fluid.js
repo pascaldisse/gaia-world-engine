@@ -126,7 +126,7 @@ const spikyGrad = /*#__PURE__*/ Fn(([rv, r, h]) => {
  * @param {object} [o.physics]  overrides for FLUID_PHYSICS
  * @param {object} [o.render]   overrides for FLUID_RENDER
  */
-export function createFluid({ renderer, camera = null, physics = {}, render = {} } = {}) {
+export function createFluid({ renderer, camera = null, scene = null, physics = {}, render = {} } = {}) {
   if (!renderer) throw new Error('[fluid] renderer required');
   const P = { ...FLUID_PHYSICS, ...physics,
     bounds: { ...FLUID_PHYSICS.bounds, ...(physics.bounds || {}) },
@@ -432,8 +432,8 @@ export function createFluid({ renderer, camera = null, physics = {}, render = {}
   const surface = R.mode === 'surface'
     ? createFluidSurface({ count, position, render: R })
     : null;
-  const thickness = R.mode === 'thickness'
-    ? createFluidThickness({ renderer, camera, count, position, render: R })
+  const thickness = R.mode === 'thickness' || R.mode === 'normal'
+    ? createFluidThickness({ renderer, camera, scene, count, position, render: R })
     : null;
   const mesh = surface?.mesh ?? thickness?.mesh
     ?? buildFluidMesh({ count, position, velocity, U, R });
@@ -573,6 +573,7 @@ export function register(ctx = {}) {
     sim = createFluid({
       renderer,
       camera,
+      scene,
       physics: { ...(wanted?.physics || {}), ...(opts.physics || {}) },
       render: { ...(wanted?.render || {}), ...(opts.render || {}) },
     });

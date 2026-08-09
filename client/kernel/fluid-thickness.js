@@ -22,6 +22,9 @@ export const FLUID_THICKNESS_RENDER = {
   debugMode: 'thickness', // thickness | normal | composite
   debugBlend: 'replace',
   debugEpsilon: 1e-4,
+  // Metres of thickness over which liquid fades in. A hard threshold at a
+  // downsampled target turns bilinear bleed into square halos around droplets.
+  presenceRamp: 0.02,
   // composite (P4): screen-space refraction of the opaque scene through the
   // liquid, Beer–Lambert attenuated by accumulated thickness, Fresnel rim.
   refractionStrength: 0.08, // uv offset per metre of thickness
@@ -67,7 +70,15 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
   const sceneTarget = mode === 'composite'
     ? new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: true })
     : null;
-  if (sceneTarget) sceneTarget.texture.name = 'fluidSceneColour';
+  if (sceneTarget) {
+    sceneTarget.texture.name = 'fluidSceneColour';
+    // One opaque render per frame: the depth texture written while capturing the
+    // scene colour is the SAME attachment the additive particles are tested
+    // against inside thicknessTarget.
+    const sharedDepth = new THREE.DepthTexture(1, 1);
+    sceneTarget.depthTexture = sharedDepth;
+    thicknessTarget.depthTexture = sharedDepth;
+  }
 
   const centerView = modelViewMatrix.mul(vec4(position.element(instanceIndex), 1));
   const offsetView = vec4(positionLocal.xy.mul(impostorRadius * 2), 0, 0);
@@ -155,7 +166,9 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
   }
   const sampledPresence = isNormal ? smoothed : thicknessM;
   debugMaterial.colorNode = mode === 'composite' ? compositeColour : (isNormal ? normalColour : thicknessColour);
-  debugMaterial.opacityNode = R.debugBlend === 'add' ? float(1) : saturate(sampledPresence.sub(epsilon).mul(1 / Math.max(epsilon, 1e-6)));
+  const presenceRamp = Math.max(1e-6, finite(R.presenceRamp, 0.02));
+  debugMaterial.opacityNode = R.debugBlend === 'add' ? float(1)
+    : saturate(sampledPresence.sub(epsilon).mul(mode === 'composite' ? 1 / presenceRamp : 1 / Math.max(epsilon, 1e-6)));
   debugMaterial.transparent = true;
   debugMaterial.blending = R.debugBlend === 'add' ? THREE.AdditiveBlending : THREE.NormalBlending;
   debugMaterial.depthTest = false; debugMaterial.depthWrite = false; debugMaterial.fog = false; debugMaterial.toneMapped = false;
@@ -179,11 +192,18 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
       renderer.setRenderTarget(depthTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(depthScene, camera);
       // P2 occlusion: opaque main scene populates thicknessTarget.depth; only its
       // colour is cleared, preserving that attachment for depthTest=true particles.
+      // In composite mode that single opaque render happens in sceneTarget (whose
+      // colour is ALSO the refraction source) and the particles draw there is
+      // replaced by drawing into thicknessTarget sharing the same depth texture —
+      // the main scene is rendered exactly once per frame for the skin.
       debugMesh.visible = false;
-      renderer.setRenderTarget(thicknessTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(mainScene, camera);
-      renderer.clear(true, false, false); renderer.render(thicknessScene, camera);
-      // P4: opaque scene colour, kept intact, for screen-space refraction.
-      if (sceneTarget) { renderer.setRenderTarget(sceneTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(mainScene, camera); }
+      if (sceneTarget) {
+        renderer.setRenderTarget(sceneTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(mainScene, camera);
+        renderer.setRenderTarget(thicknessTarget); renderer.clear(true, false, false); renderer.render(thicknessScene, camera);
+      } else {
+        renderer.setRenderTarget(thicknessTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(mainScene, camera);
+        renderer.clear(true, false, false); renderer.render(thicknessScene, camera);
+      }
       renderer.setRenderTarget(smoothTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(blurScene, camera);
     } finally {
       debugMesh.visible = debugVisible;

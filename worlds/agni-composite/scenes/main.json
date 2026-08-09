@@ -186,7 +186,8 @@
         "opacity": 0.85,
         "thicknessScale": 1.0,
         "debugGain": 0.05,
-        "debugBlend": "replace"
+        "debugBlend": "replace",
+        "targetScale": 0.5
       }
     }
   },

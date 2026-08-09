@@ -24,8 +24,7 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn, If, Loop, instanceIndex, instancedArray, uniform, atomicAdd, atomicStore,
-  float, int, vec3, vec4, uint, max, min, length, normalize, select,
-  positionLocal, cameraProjectionMatrix, modelViewMatrix,
+  float, int, vec3, uint, min, length, select,
 } from 'three/tsl';
 
 // ─────────────────────────────────────────────────────────────── parameters ──

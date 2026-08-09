@@ -1,0 +1,451 @@
+// fluid.js — REAL GPU FLUID. Position Based Fluids (Macklin & Müller 2013)
+// run entirely as WebGPU compute via TSL. No CPU particle loop, no fake
+// "sparkle" particles: densities, constraints and neighbour forces are solved
+// on the device, so falling water hits the floor, splats, and RE-GATHERS
+// because the density constraint says it must — the behaviour is emergent,
+// never scripted.
+//
+// LAW §IRON — nothing here is hard-coded. Every number lives in FLUID_PHYSICS /
+// FLUID_RENDER below with a default, and every entry point takes overrides.
+//
+// SEAM — this module touches NOTHING. It is loaded as an ENGINE EXTENSION
+// (client/kernel/extensions.js contract: export register(ctx) → {name, api,
+// update(dt)}). DEFAULT_EXTENSIONS is empty, so a world that does not opt in
+// never loads this file and behaves bit-identically (Atlas = unchanged).
+// Opt-in, explicit, off by default:
+//   window.__GAIA_EXTENSIONS__ = ['/kernel/fluid.js']            (host page)
+//   ?ext=/kernel/fluid.js&fluid=1                                (probe)
+//   world data: an entity component { fluid: {...} } — see attachFluidComponent
+//
+// UNVERIFIED: 60 fps on a real Metal adapter. No browser measurement has been
+// taken from this file yet; treat every perf claim as unproven until a real
+// tab reports frame times with the particle count printed.
+
+import * as THREE from 'three/webgpu';
+import {
+  Fn, If, Loop, instanceIndex, instancedArray, uniform, atomicAdd, atomicStore,
+  float, int, vec3, vec4, uint, max, min, length, normalize, select,
+  positionLocal, cameraProjectionMatrix, modelViewMatrix,
+} from 'three/tsl';
+
+// ─────────────────────────────────────────────────────────────── parameters ──
+// PBF is scale-sensitive: `radius` (kernel support h) sets the rest spacing,
+// and everything else is expressed relative to it. Change radius alone and the
+// simulation stays stable — that is the point of keeping them together.
+export const FLUID_PHYSICS = {
+  count: 16384,          // particles. >= 10000 by decree; power-of-two friendly
+  radius: 0.16,          // h, smoothing kernel support (m)
+  restDensity: 1000.0,   // ρ0 (kg/m³ nominal; mass is derived from it)
+  substeps: 1,           // integrations per frame
+  iterations: 3,         // density constraint solver iterations per substep
+  relaxation: 1.0e-4,    // ε in λ = -C / (Σ|∇C|² + ε)  — CFM regularisation
+  gravity: [0, -9.81, 0],
+  dt: 1 / 60,            // fixed sim step; frame dt is clamped to dtMax below
+  dtMax: 1 / 30,         // never integrate a stall as one giant step
+  viscosity: 0.02,       // XSPH coefficient
+  vorticity: 0.0,        // vorticity confinement ε (0 = off; costs a pass)
+  sCorrK: 0.0001,        // tensile instability (artificial pressure) strength
+  sCorrN: 4,             // its exponent
+  sCorrQ: 0.3,           // |Δp| sample point, as a fraction of radius
+  maxVelocity: 12.0,     // clamp: a blown-up particle must not poison the grid
+  damping: 0.35,         // tangential velocity kept on a wall hit (splat, not bounce)
+  restitution: 0.0,      // normal velocity kept on a wall hit
+  bounds: { min: [-4, 0, -4], max: [4, 8, 4] }, // the tank (world units)
+  cellsPerAxis: 48,      // uniform grid resolution over `bounds`
+  cellCapacity: 48,      // max particles binned per cell (overflow is dropped)
+  spawn: {
+    mode: 'block',       // 'block' | 'sphere'
+    center: [0, 5.0, 0],
+    size: [2.2, 2.2, 2.2],
+    jitter: 0.25,        // fraction of spacing; breaks the lattice symmetry
+    velocity: [0, 0, 0],
+  },
+};
+
+export const FLUID_RENDER = {
+  enabled: true,
+  pointSize: 6.0,        // px, sprite footprint
+  color: [0.32, 0.62, 1.0],
+  colorFast: [0.85, 0.95, 1.0], // tint at |v| = maxVelocity (speed shows motion)
+  opacity: 0.85,
+  sizeAttenuation: true,
+};
+
+const V3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+
+// ───────────────────────────────────────────────────────────────── kernels ──
+// Poly6 and Spiky, written once, in TSL. W(r,h) is zero outside h — every
+// neighbour loop below relies on that, not on an if-forest.
+const poly6 = /*#__PURE__*/ Fn(([r2, h]) => {
+  const h2 = h.mul(h);
+  const t = h2.sub(r2).max(0.0);
+  // 315 / (64 π h⁹)
+  const coeff = float(1.566681471).div(h2.mul(h2).mul(h2).mul(h2).mul(h));
+  return coeff.mul(t).mul(t).mul(t);
+});
+
+const spikyGrad = /*#__PURE__*/ Fn(([rv, r, h]) => {
+  // -45 / (π h⁶) * (h - r)² * r̂
+  const coeff = float(-14.323944878).div(h.mul(h).mul(h).mul(h).mul(h).mul(h));
+  const t = h.sub(r).max(0.0);
+  const dir = rv.div(r.max(1.0e-6));
+  return dir.mul(coeff.mul(t).mul(t));
+});
+
+/**
+ * Build a GPU fluid. Pure: it creates buffers, compute passes and a mesh, and
+ * hands them back. Nothing global is touched — the caller decides whether the
+ * mesh joins a scene and when `update` runs.
+ *
+ * @param {object} o
+ * @param {THREE.Renderer} o.renderer  a WebGPURenderer (the engine's own)
+ * @param {object} [o.physics]  overrides for FLUID_PHYSICS
+ * @param {object} [o.render]   overrides for FLUID_RENDER
+ */
+export function createFluid({ renderer, physics = {}, render = {} } = {}) {
+  if (!renderer) throw new Error('[fluid] renderer required');
+  const P = { ...FLUID_PHYSICS, ...physics,
+    bounds: { ...FLUID_PHYSICS.bounds, ...(physics.bounds || {}) },
+    spawn: { ...FLUID_PHYSICS.spawn, ...(physics.spawn || {}) } };
+  const R = { ...FLUID_RENDER, ...render };
+
+  const count = Math.max(1, Math.floor(P.count));
+  const NC = Math.max(2, Math.floor(P.cellsPerAxis));
+  const CAP = Math.max(4, Math.floor(P.cellCapacity));
+  const cells = NC * NC * NC;
+
+  const bMin = V3(P.bounds.min);
+  const bMax = V3(P.bounds.max);
+  const size = new THREE.Vector3().subVectors(bMax, bMin);
+  const cellSize = new THREE.Vector3(size.x / NC, size.y / NC, size.z / NC);
+  // The neighbour search only scans 3³ cells, so a cell may not be smaller than
+  // the kernel support in any axis — otherwise neighbours are silently missed.
+  const gridOk = Math.min(cellSize.x, cellSize.y, cellSize.z) >= P.radius;
+
+  // mass from rest density and rest spacing (h/2 lattice) — derived, not typed
+  const spacing = P.radius * 0.5;
+  const mass = P.restDensity * spacing * spacing * spacing;
+
+  // ── buffers ────────────────────────────────────────────────────────────────
+  const posArr = new Float32Array(count * 4);
+  const velArr = new Float32Array(count * 4);
+  seed(posArr, velArr, count, P, spacing);
+
+  const position  = instancedArray(posArr, 'vec3').setName('fluidPosition');
+  const predicted = instancedArray(count, 'vec3').setName('fluidPredicted');
+  const velocity  = instancedArray(velArr, 'vec3').setName('fluidVelocity');
+  const lambda    = instancedArray(count, 'float').setName('fluidLambda');
+  const delta     = instancedArray(count, 'vec3').setName('fluidDelta');
+  // counting-sort-free binning: fixed capacity buckets + atomic slot handout.
+  const cellCount = instancedArray(cells, 'uint').setPBO(true).setName('fluidCellCount');
+  cellCount.setAtomic(true);
+  const cellItems = instancedArray(cells * CAP, 'uint').setName('fluidCellItems');
+
+  // ── uniforms (live-tunable; the tables above are only the defaults) ─────────
+  const U = {
+    dt: uniform(P.dt),
+    gravity: uniform(V3(P.gravity)),
+    h: uniform(P.radius),
+    restDensity: uniform(P.restDensity),
+    mass: uniform(mass),
+    relaxation: uniform(P.relaxation),
+    viscosity: uniform(P.viscosity),
+    sCorrK: uniform(P.sCorrK),
+    sCorrQ: uniform(P.sCorrQ * P.radius),
+    maxVelocity: uniform(P.maxVelocity),
+    damping: uniform(P.damping),
+    restitution: uniform(P.restitution),
+    bMin: uniform(bMin.clone()),
+    bMax: uniform(bMax.clone()),
+    cellSize: uniform(cellSize.clone()),
+  };
+  const NCn = int(NC), CAPn = int(CAP);
+
+  // cell index helpers (clamped: a particle outside the tank still bins)
+  const cellCoord = Fn(([p]) => p.sub(U.bMin).div(U.cellSize).floor().toVar());
+  const cellHash = Fn(([c]) => {
+    const cc = c.clamp(int(0), NCn.sub(1)).toVar();
+    return cc.x.add(cc.y.mul(NCn)).add(cc.z.mul(NCn).mul(NCn));
+  });
+
+  // r180 dispatches ceil(count/workgroup) invocations, so the tail workgroup
+  // runs threads past the end of every buffer. Guard, always — an unguarded
+  // atomicAdd from a tail thread corrupts a real cell's bucket.
+  const guarded = (n, body) => Fn(() => {
+    If(instanceIndex.lessThan(uint(n)), body);
+  })().compute(n);
+
+  // ── pass 1: predict ────────────────────────────────────────────────────────
+  const kPredict = guarded(count, () => {
+    const v = velocity.element(instanceIndex).toVar();
+    v.addAssign(U.gravity.mul(U.dt));
+    const s = length(v);
+    If(s.greaterThan(U.maxVelocity), () => { v.assign(v.div(s.max(1e-6)).mul(U.maxVelocity)); });
+    velocity.element(instanceIndex).assign(v);
+    predicted.element(instanceIndex).assign(position.element(instanceIndex).add(v.mul(U.dt)));
+  });
+
+  // ── pass 2: clear grid ─────────────────────────────────────────────────────
+  // atomic buffers are written through atomic ops only — a plain assign to an
+  // atomic<u32> is a binding-type error, not a slow path.
+  const kClear = guarded(cells, () => { atomicStore(cellCount.element(instanceIndex), uint(0)); });
+
+  // ── pass 3: bin (atomic slot handout inside a fixed-capacity bucket) ────────
+  const kBin = guarded(count, () => {
+    const cell = cellHash(cellCoord(predicted.element(instanceIndex).toVar()).toVar()).toVar();
+    const slot = atomicAdd(cellCount.element(cell), uint(1)).toVar();
+    If(slot.lessThan(uint(CAP)), () => {
+      cellItems.element(cell.mul(CAPn).add(int(slot))).assign(uint(instanceIndex));
+    });
+  });
+
+  // neighbour visitor: 3³ cells around p, bucket-bounded. `body(j)` is inlined.
+  const forEachNeighbour = (p, body) => {
+    const base = cellCoord(p).toVar();
+    Loop({ start: int(-1), end: int(2), type: 'int', name: 'dz' }, ({ dz }) => {
+      Loop({ start: int(-1), end: int(2), type: 'int', name: 'dy' }, ({ dy }) => {
+        Loop({ start: int(-1), end: int(2), type: 'int', name: 'dx' }, ({ dx }) => {
+          const c = vec3(base.x.add(dx), base.y.add(dy), base.z.add(dz)).toVar();
+          const cell = cellHash(c).toVar();
+          const n = min(int(cellCount.element(cell)), CAPn).toVar();
+          Loop({ start: int(0), end: n, type: 'int', name: 'k' }, ({ k }) => {
+            body(int(cellItems.element(cell.mul(CAPn).add(k))));
+          });
+        });
+      });
+    });
+  };
+
+  // ── pass 4: λ (density constraint + its gradient magnitude) ────────────────
+  const kLambda = guarded(count, () => {
+    const pi = predicted.element(instanceIndex).toVar();
+    const rho = float(0).toVar();
+    const gradI = vec3(0).toVar();
+    const sumGrad2 = float(0).toVar();
+    forEachNeighbour(pi, (j) => {
+      const rv = pi.sub(predicted.element(j)).toVar();
+      const r2 = rv.dot(rv).toVar();
+      If(r2.lessThan(U.h.mul(U.h)), () => {
+        rho.addAssign(U.mass.mul(poly6(r2, U.h)));
+        const g = spikyGrad(rv, r2.sqrt(), U.h).mul(U.mass.div(U.restDensity)).toVar();
+        gradI.addAssign(g);
+        sumGrad2.addAssign(g.dot(g));
+      });
+    });
+    const C = rho.div(U.restDensity).sub(1.0).toVar();
+    sumGrad2.addAssign(gradI.dot(gradI));
+    lambda.element(instanceIndex).assign(
+      C.negate().div(sumGrad2.add(U.relaxation)),
+    );
+  });
+
+  // ── pass 5: Δp (with tensile-instability correction) then project ─────────
+  const kDelta = guarded(count, () => {
+    const pi = predicted.element(instanceIndex).toVar();
+    const li = lambda.element(instanceIndex).toVar();
+    const dp = vec3(0).toVar();
+    const wq = poly6(U.sCorrQ.mul(U.sCorrQ), U.h).toVar();
+    forEachNeighbour(pi, (j) => {
+      const rv = pi.sub(predicted.element(j)).toVar();
+      const r2 = rv.dot(rv).toVar();
+      If(r2.lessThan(U.h.mul(U.h)).and(r2.greaterThan(1e-12)), () => {
+        const ratio = poly6(r2, U.h).div(wq.max(1e-12)).toVar();
+        const sCorr = U.sCorrK.negate().mul(ratio.pow(float(P.sCorrN))).toVar();
+        dp.addAssign(spikyGrad(rv, r2.sqrt(), U.h).mul(li.add(lambda.element(j)).add(sCorr)));
+      });
+    });
+    delta.element(instanceIndex).assign(dp.mul(U.mass.div(U.restDensity)));
+  });
+
+  const kApply = guarded(count, () => {
+    const p = predicted.element(instanceIndex).add(delta.element(instanceIndex)).toVar();
+    // tank walls: a hard positional constraint, solved with the density one
+    p.assign(p.clamp(U.bMin, U.bMax));
+    predicted.element(instanceIndex).assign(p);
+  });
+
+  // ── pass 6: finalize — velocity from motion, XSPH viscosity, wall response ──
+  const kFinalize = guarded(count, () => {
+    const p0 = position.element(instanceIndex).toVar();
+    const p1 = predicted.element(instanceIndex).toVar();
+    const v = p1.sub(p0).div(U.dt).toVar();
+
+    // XSPH: velocity relaxes toward the neighbourhood mean → coherent sheets
+    const dv = vec3(0).toVar();
+    forEachNeighbour(p1, (j) => {
+      const rv = p1.sub(predicted.element(j)).toVar();
+      const r2 = rv.dot(rv).toVar();
+      If(r2.lessThan(U.h.mul(U.h)), () => {
+        dv.addAssign(velocity.element(j).sub(v).mul(poly6(r2, U.h)).mul(U.mass.div(U.restDensity)));
+      });
+    });
+    v.addAssign(dv.mul(U.viscosity));
+
+    // splat, don't bounce: normal velocity is killed, tangential is damped
+    const onMin = p1.lessThanEqual(U.bMin.add(1e-4));
+    const onMax = p1.greaterThanEqual(U.bMax.sub(1e-4));
+    const hit = onMin.or(onMax);
+    v.assign(vec3(
+      select(hit.x, v.x.mul(U.restitution.negate()), v.x),
+      select(hit.y, v.y.mul(U.restitution.negate()), v.y),
+      select(hit.z, v.z.mul(U.restitution.negate()), v.z),
+    ));
+    const anyHit = hit.x.or(hit.y).or(hit.z);
+    If(anyHit, () => { v.mulAssign(U.damping); });
+
+    const s = length(v);
+    If(s.greaterThan(U.maxVelocity), () => { v.assign(v.div(s.max(1e-6)).mul(U.maxVelocity)); });
+
+    velocity.element(instanceIndex).assign(v);
+    position.element(instanceIndex).assign(p1);
+  });
+
+  // ── mesh ───────────────────────────────────────────────────────────────────
+  const mesh = buildFluidMesh({ count, position, velocity, U, R });
+  mesh.frustumCulled = false;
+  mesh.visible = !!R.enabled;
+
+  let running = true;
+  let acc = 0;
+
+  const api = {
+    mesh,
+    count,
+    params: { physics: P, render: R },
+    uniforms: U,
+    buffers: { position, velocity, predicted, lambda, delta, cellCount, cellItems },
+    diagnostics: { cells, cellCapacity: CAP, cellSize: cellSize.toArray(), mass, gridOk },
+    get running() { return running; },
+    set running(v) { running = !!v; },
+
+    /** advance the simulation; `dt` seconds of wall time */
+    step(dt = P.dt) {
+      if (!running) return;
+      const clamped = Math.min(Math.max(dt, 0), P.dtMax);
+      acc += clamped;
+      const h = P.dt;
+      let steps = 0;
+      const maxSteps = Math.max(1, P.substeps * 2);
+      while (acc >= h && steps < maxSteps) { acc -= h; steps += 1; substep(); }
+      // if we can never catch up, drop the backlog rather than spiral
+      if (acc > h * 4) acc = 0;
+    },
+
+    dispose() {
+      mesh.geometry?.dispose?.();
+      mesh.material?.dispose?.();
+    },
+  };
+
+  // One array per substep: r180 runs them in the order given, on ONE command
+  // encoder — a per-pass await would stall the CPU on the GPU every frame.
+  const chain = [kPredict, kClear, kBin];
+  for (let i = 0; i < P.iterations; i += 1) chain.push(kLambda, kDelta, kApply);
+  chain.push(kFinalize);
+  function substep() { renderer.compute(chain); }
+
+  return api;
+}
+
+// ─────────────────────────────────────────────────────────────────── render ──
+function buildFluidMesh({ count, position, velocity, U, R }) {
+  // SpriteNodeMaterial billboards each instance for us; the instance's world
+  // position comes straight out of the storage buffer the compute passes wrote,
+  // so NOTHING is read back to the CPU — no instanceMatrix updates at all.
+  const material = new THREE.SpriteNodeMaterial({
+    transparent: R.opacity < 1,
+    depthWrite: R.opacity >= 1,
+    sizeAttenuation: R.sizeAttenuation,
+  });
+  const speed = length(velocity.element(instanceIndex)).div(U.maxVelocity).clamp(0, 1);
+  material.colorNode = vec3(...R.color).mix(vec3(...R.colorFast), speed);
+  material.opacityNode = float(R.opacity);
+  material.positionNode = position.element(instanceIndex);
+  material.scaleNode = float(R.pointSize * 0.01);
+
+  const geo = new THREE.PlaneGeometry(1, 1);
+  const inst = new THREE.InstancedMesh(geo, material, count);
+  inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  inst.name = 'gaia-fluid';
+  return inst;
+}
+
+// ──────────────────────────────────────────────────────────────────── seed ──
+// A lattice with jitter: a perfect lattice is a metastable state PBF will hold
+// for a suspiciously long time, which reads as "the sim is frozen".
+function seed(posArr, velArr, count, P, spacing) {
+  const c = P.spawn.center, s = P.spawn.size, v0 = P.spawn.velocity;
+  const nx = Math.max(1, Math.floor(s[0] / spacing));
+  const ny = Math.max(1, Math.floor(s[1] / spacing));
+  const jitter = P.spawn.jitter * spacing;
+  for (let i = 0; i < count; i += 1) {
+    const ix = i % nx;
+    const iy = Math.floor(i / nx) % ny;
+    const iz = Math.floor(i / (nx * ny));
+    const j = () => (Math.random() - 0.5) * 2 * jitter;
+    let x = c[0] - s[0] / 2 + ix * spacing + j();
+    let y = c[1] - s[1] / 2 + iy * spacing + j();
+    let z = c[2] - s[2] / 2 + iz * spacing + j();
+    if (P.spawn.mode === 'sphere') {
+      const r = Math.cbrt(Math.random()) * Math.min(s[0], s[1], s[2]) * 0.5;
+      const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
+      x = c[0] + r * Math.sin(ph) * Math.cos(th);
+      y = c[1] + r * Math.cos(ph);
+      z = c[2] + r * Math.sin(ph) * Math.sin(th);
+    }
+    posArr[i * 4 + 0] = x; posArr[i * 4 + 1] = y; posArr[i * 4 + 2] = z;
+    velArr[i * 4 + 0] = v0[0]; velArr[i * 4 + 1] = v0[1]; velArr[i * 4 + 2] = v0[2];
+  }
+}
+
+// ───────────────────────────────────────────────────────── extension seam ──
+// The ONLY way this file enters the running engine. `register` is called by
+// extensions.js with the live context; if the world never opts in, none of the
+// above ever runs. Opt-in is explicit and OFF by default.
+export function register(ctx = {}) {
+  const { renderer, scene } = ctx;
+  const q = (() => { try { return new URLSearchParams(location.search); } catch { return null; } })();
+  const wanted = (typeof window !== 'undefined' && window.__GAIA_FLUID__) || null;
+  // OPT-IN, THREE GATES, ALL OFF BY DEFAULT. `enabled === true` is required —
+  // presence of the object is not consent. If no gate says yes we allocate
+  // nothing: no buffers, no pipelines, no compute, no mesh. Atlas is untouched.
+  const on = wanted?.enabled === true || q?.get('fluid') === '1';
+  // WebGPU only: a WebGL2 fallback backend has no compute, and a "fluid" that
+  // silently degrades to a dead particle cloud is worse than an absent one.
+  const isWebGPU = renderer?.backend?.isWebGPUBackend === true;
+  if (on && !isWebGPU) {
+    console.warn('[fluid] backend is not WebGPU — GPU fluid stays OFF (no compute available)');
+  }
+  let sim = null;
+
+  const start = (opts = {}) => {
+    if (sim) return sim;
+    sim = createFluid({
+      renderer,
+      physics: { ...(wanted?.physics || {}), ...(opts.physics || {}) },
+      render: { ...(wanted?.render || {}), ...(opts.render || {}) },
+    });
+    scene?.add(sim.mesh);
+    return sim;
+  };
+  const stop = () => {
+    if (!sim) return;
+    scene?.remove(sim.mesh);
+    sim.dispose();
+    sim = null;
+  };
+
+  if (on && isWebGPU) start();
+
+  return {
+    name: 'fluid',
+    api: {
+      start, stop,
+      get sim() { return sim; },
+      FLUID_PHYSICS, FLUID_RENDER, createFluid,
+    },
+    update(dt) { sim?.step(dt); },
+  };
+}
+
+export default register;

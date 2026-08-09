@@ -51,9 +51,11 @@ export const FLUID_PHYSICS = {
   damping: 0.35,         // tangential velocity kept on a wall hit (splat, not bounce)
   restitution: 0.0,      // normal velocity kept on a wall hit
   bounds: { min: [-4, 0, -4], max: [4, 8, 4] }, // broadphase tank (world units)
-  // `box` preserves the original tank; `cylinder` adds a radial wall inside it.
+  // `box` preserves the original tank; `cylinder` adds a radial wall inside it;
+  // `cone` makes that wall y-dependent so it can match a flared basin's inner
+  // face (radius at the base → radiusTop at base+height, clamped outside).
   // radius and center are world-data parameters, never mesh-derived magic.
-  container: { type: 'box', center: [0, 0, 0], radius: 4.0 },
+  container: { type: 'box', center: [0, 0, 0], radius: 4.0, radiusTop: null, height: null },
   cellsPerAxis: 48,      // uniform grid resolution over `bounds`
   cellCapacity: 48,      // max particles binned per cell (overflow is dropped)
   spawn: {
@@ -112,7 +114,11 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     container: { ...FLUID_PHYSICS.container, ...(physics.container || {}) },
     spawn: { ...FLUID_PHYSICS.spawn, ...(physics.spawn || {}) } };
   const R = { ...FLUID_RENDER, ...render };
-  const radialContainer = P.container.type === 'cylinder';
+  const coneContainer = P.container.type === 'cone';
+  const radialContainer = P.container.type === 'cylinder' || coneContainer;
+  // A cone with no second radius/height authored degenerates to its cylinder.
+  const containerRadiusTop = P.container.radiusTop ?? P.container.radius;
+  const containerHeight = Math.max(1e-6, P.container.height ?? 1);
 
   const count = Math.max(1, Math.floor(P.count));
   const NC = Math.max(2, Math.floor(P.cellsPerAxis));
@@ -165,9 +171,25 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     bMin: uniform(bMin.clone()),
     bMax: uniform(bMax.clone()),
     cellSize: uniform(cellSize.clone()),
-    containerCenter: uniform(V3(P.container.center)),
-    containerRadius: uniform(P.container.radius),
   };
+  // Container uniforms exist ONLY when a radial wall is authored: a `box`
+  // world must not even allocate them, so no doubt can remain about whether
+  // the default path's generated shader changed.
+  if (radialContainer) {
+    U.containerCenter = uniform(V3(P.container.center));
+    U.containerRadius = uniform(P.container.radius);
+  }
+  if (coneContainer) {
+    U.containerRadiusTop = uniform(containerRadiusTop);
+    U.containerBase = uniform(P.container.center[1]);
+    U.containerHeight = uniform(containerHeight);
+  }
+  // The wall limit at height y. For `cylinder` this is the uniform itself, so
+  // the generated shader for the existing path is byte-identical.
+  const wallRadius = (y) => (coneContainer
+    ? U.containerRadius.add(U.containerRadiusTop.sub(U.containerRadius)
+        .mul(y.sub(U.containerBase).div(U.containerHeight).clamp(0, 1)))
+    : U.containerRadius);
   const NCn = int(NC), CAPn = int(CAP);
 
   // Integer coordinates keep array indices and loop offsets in WGSL's i32
@@ -283,8 +305,9 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     if (radialContainer) {
       const radial = vec3(p.x.sub(U.containerCenter.x), 0, p.z.sub(U.containerCenter.z)).toVar();
       const distance = length(radial).toVar();
-      If(distance.greaterThan(U.containerRadius), () => {
-        const edge = radial.mul(U.containerRadius.div(distance.max(1e-6))).add(U.containerCenter).toVar();
+      const limit = coneContainer ? wallRadius(p.y).toVar() : U.containerRadius;
+      If(distance.greaterThan(limit), () => {
+        const edge = radial.mul(limit.div(distance.max(1e-6))).add(U.containerCenter).toVar();
         p.assign(vec3(edge.x, p.y, edge.z));
       });
     }
@@ -321,7 +344,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     if (radialContainer) {
       const radial = vec3(p1.x.sub(U.containerCenter.x), 0, p1.z.sub(U.containerCenter.z)).toVar();
       const distance = length(radial).toVar();
-      radialHit = distance.greaterThanEqual(U.containerRadius.sub(1e-4));
+      radialHit = distance.greaterThanEqual(wallRadius(p1.y).sub(1e-4));
       // Remove only outward radial speed: a wall captures the splash without
       // inventing an inward impulse, then shares the normal wall damping.
       If(radialHit, () => {

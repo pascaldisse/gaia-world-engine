@@ -1,4 +1,27 @@
 {
+  "surya_sky": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    "skyEnvironment": {
+      "enabled": true,
+      "intensity": 1.1,
+      "zenith": "#1b3a68",
+      "horizon": "#a8ccff",
+      "ground": "#2b2f3a",
+      "sun": {
+        "enabled": true,
+        "color": "#ffe6b8",
+        "elevation": 0.55,
+        "azimuth": 0.12,
+        "size": 0.05
+      }
+    }
+  },
   "surya_sun": {
     "transform": {
       "position": [
@@ -104,13 +127,15 @@
           ]
         },
         "container": {
-          "type": "cylinder",
+          "type": "cone",
           "center": [
             0,
             0,
             0
           ],
-          "radius": 3.24
+          "radius": 1.55,
+          "radiusTop": 1.94,
+          "height": 2.4
         },
         "spawn": {
           "mode": "sphere",
@@ -120,9 +145,9 @@
             0
           ],
           "size": [
-            1.8,
-            1.8,
-            1.8
+            1.2,
+            1.2,
+            1.2
           ],
           "jitter": 0.25,
           "velocity": [
@@ -161,14 +186,14 @@
       "parts": [
         {
           "shape": "cylinder",
-          "radiusTop": 4.0,
-          "radiusBottom": 3.4,
-          "height": 1.6,
+          "radiusTop": 2.0,
+          "radiusBottom": 1.6,
+          "height": 2.4,
           "open": true,
           "doubleSide": true,
           "position": [
             0,
-            0.8,
+            1.2,
             0
           ],
           "color": "#dcefff",
@@ -181,8 +206,7 @@
             "attenuationColor": "#dff4ff",
             "attenuationDistance": 12,
             "clearcoat": 0.65,
-            "clearcoatRoughness": 0.03,
-            "opacity": 0.48
+            "clearcoatRoughness": 0.03
           }
         }
       ]

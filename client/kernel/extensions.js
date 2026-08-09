@@ -49,8 +49,11 @@
 // entities, no fluid component), register() leaves sim=null and zero storage
 // buffers, so a world that never asks pays nothing.
 import * as fluidExtension from './fluid.js';
+import * as skyEnvExtension from './skyenv.js';
 
-export const DEFAULT_EXTENSIONS = [fluidExtension];
+// Both are capabilities gated by world data: no component in the store ⇒ no
+// texture, no buffer, no change to what a world without them looks like.
+export const DEFAULT_EXTENSIONS = [fluidExtension, skyEnvExtension];
 export const DEFAULT_GATE = null;
 
 // Relative defaults resolve against THIS module (client/kernel/), while a host

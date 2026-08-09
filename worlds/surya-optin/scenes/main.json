@@ -1,0 +1,304 @@
+{
+  "surya_sun": {
+    "transform": {
+      "position": [
+        6,
+        12,
+        6
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#ffd9a0",
+      "intensity": 900,
+      "distance": 120,
+      "offset": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "surya_fill": {
+    "transform": {
+      "position": [
+        -8,
+        9,
+        -6
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9fd0ff",
+      "intensity": 420,
+      "distance": 120,
+      "offset": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "surya_floor": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        -1.5708,
+        0,
+        0
+      ]
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "plane",
+          "width": 40,
+          "height": 40,
+          "size": [
+            40,
+            40
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "color": "#2b2f3a",
+          "roughness": 0.9,
+          "metalness": 0.05
+        }
+      ]
+    }
+  },
+  "surya_spring": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    "fluid": {
+      "enabled": true,
+      "physics": {
+        "count": 16384,
+        "gravity": [
+          0,
+          -9.81,
+          0
+        ],
+        "bounds": {
+          "min": [
+            -4,
+            0,
+            -4
+          ],
+          "max": [
+            4,
+            10,
+            4
+          ]
+        },
+        "spawn": {
+          "mode": "sphere",
+          "center": [
+            0,
+            7.5,
+            0
+          ],
+          "size": [
+            1.8,
+            1.8,
+            1.8
+          ],
+          "jitter": 0.25,
+          "velocity": [
+            0,
+            -1.2,
+            0
+          ]
+        }
+      },
+      "render": {
+        "enabled": true,
+        "pointSize": 6,
+        "color": [
+          0.34,
+          0.66,
+          1.0
+        ],
+        "colorFast": [
+          0.9,
+          0.97,
+          1.0
+        ],
+        "opacity": 0.85
+      }
+    }
+  },
+  "surya_basin": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 4.0,
+          "radiusBottom": 3.4,
+          "height": 1.6,
+          "open": true,
+          "doubleSide": true,
+          "position": [
+            0,
+            0.8,
+            0
+          ],
+          "color": "#dcefff",
+          "transmission": {
+            "enabled": true,
+            "amount": 1,
+            "thickness": 0.4,
+            "ior": 1.5,
+            "roughness": 0.08,
+            "attenuationColor": "#bfe6ff",
+            "attenuationDistance": 3,
+            "clearcoat": 1,
+            "clearcoatRoughness": 0.05,
+            "opacity": 1
+          }
+        }
+      ]
+    }
+  },
+  "surya_pillar": {
+    "transform": {
+      "position": [
+        5.5,
+        0,
+        0
+      ]
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "cylinder",
+          "radiusTop": 0.4,
+          "radiusBottom": 0.6,
+          "height": 6,
+          "position": [
+            0,
+            3,
+            0
+          ],
+          "color": "#6b6250",
+          "roughness": 0.85
+        },
+        {
+          "shape": "torus",
+          "radius": 1.1,
+          "tube": 0.12,
+          "position": [
+            0,
+            6.2,
+            0
+          ],
+          "color": "#ffcf8a",
+          "emissive": "#ffb347",
+          "emissiveIntensity": 1.8,
+          "phase": {
+            "enabled": true,
+            "axis": "scale",
+            "amplitude": 0.25,
+            "speed": 1.4,
+            "offset": 0
+          }
+        }
+      ]
+    }
+  },
+  "surya_lantern": {
+    "attach": {
+      "parent": "surya_pillar"
+    },
+    "transform": {
+      "position": [
+        0,
+        6.9,
+        0
+      ],
+      "scale": 0.6
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "octahedron",
+          "radius": 0.7,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "color": "#fff0c8",
+          "emissive": "#ffcc66",
+          "emissiveIntensity": 2.4,
+          "flatShading": true
+        }
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#ffcc66",
+      "intensity": 26,
+      "distance": 22,
+      "offset": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "surya_mote": {
+    "transform": {
+      "position": [
+        -4.5,
+        1.4,
+        1.5
+      ]
+    },
+    "lifecycle": {
+      "ttl": 60
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "icosahedron",
+          "radius": 0.35,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "color": "#ffe9b0",
+          "emissive": "#ffd27a",
+          "emissiveIntensity": 2.2,
+          "flatShading": true
+        }
+      ]
+    },
+    "behavior": [
+      {
+        "type": "spin",
+        "speed": 1.2
+      }
+    ]
+  }
+}

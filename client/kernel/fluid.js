@@ -148,8 +148,17 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const size = new THREE.Vector3().subVectors(bMax, bMin);
   const cellSize = new THREE.Vector3(size.x / NC, size.y / NC, size.z / NC);
   // The neighbour search only scans 3³ cells, so a cell may not be smaller than
-  // the kernel support in any axis — otherwise neighbours are silently missed.
-  const gridOk = Math.min(cellSize.x, cellSize.y, cellSize.z) >= P.radius;
+  // what that search must reach in any axis — otherwise neighbours are silently
+  // missed. The list is built once per substep over radius*skin (not radius),
+  // so the skin is what the grid has to cover. Measured at the defaults:
+  // cellEdge 0.16667 vs search 0.192 — 1% of skin pairs already unreachable.
+  // Harmless today (h itself, 0.16, still fits, and stale h-pairs measured 0)
+  // but raising cellsPerAxis would drop real neighbours in silence, so the
+  // invariant now states the requirement the new chain actually has.
+  const searchRadius = P.radius * SKIN;
+  const gridOk = Math.min(cellSize.x, cellSize.y, cellSize.z) >= searchRadius;
+  // kept separate: h-pairs are the ones that carry the solve
+  const gridCoversKernel = Math.min(cellSize.x, cellSize.y, cellSize.z) >= P.radius;
 
   // mass from rest density and rest spacing (h/2 lattice) — derived, not typed
   const spacing = P.radius * 0.5;
@@ -433,7 +442,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     params: { physics: P, render: R, surface: surface?.params ?? null },
     uniforms: U,
     buffers: { position, velocity, predicted, lambda, delta, cellCount, cellItems, neighborCount, neighborList },
-    diagnostics: { cells, cellCapacity: CAP, maxNeighbors: MAXN, cellSize: cellSize.toArray(), mass, gridOk },
+    diagnostics: { cells, cellCapacity: CAP, maxNeighbors: MAXN, cellSize: cellSize.toArray(), mass, gridOk, gridCoversKernel, searchRadius },
     get running() { return running; },
     set running(v) { running = !!v; },
 

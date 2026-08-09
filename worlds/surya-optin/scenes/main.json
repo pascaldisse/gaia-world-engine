@@ -159,7 +159,7 @@
       },
       "render": {
         "enabled": true,
-        "mode": "surface",
+        "mode": "sprites",
         "particleRadius": 0.075,
         "smoothing": 1.35,
         "roughness": 0.075,

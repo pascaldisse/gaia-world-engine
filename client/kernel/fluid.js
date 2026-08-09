@@ -35,13 +35,16 @@ export const FLUID_PHYSICS = {
   restDensity: 1000.0,   // ρ0 (kg/m³ nominal; mass is derived from it)
   substeps: 1,           // integrations per frame
   iterations: 3,         // density constraint solver iterations per substep
-  relaxation: 1.0e-4,    // ε in λ = -C / (Σ|∇C|² + ε)  — CFM regularisation
+  relaxation: 100.0,     // ε in λ = -C / (Σ|∇C|² + ε)  — CFM regularisation.
+                         // measured on visible Metal-3: 1e-4 explodes at t1.2 and
+                         // leaves the tank floating at t3.2; 100 gives a splat mound
+                         // that re-coalesces into a puddle, zero GPU errors.
   gravity: [0, -9.81, 0],
   dt: 1 / 60,            // fixed sim step; frame dt is clamped to dtMax below
   dtMax: 1 / 30,         // never integrate a stall as one giant step
-  viscosity: 0.02,       // XSPH coefficient
+  viscosity: 0.05,       // XSPH coefficient (measured stable pair with relaxation 100)
   vorticity: 0.0,        // vorticity confinement ε (0 = off; costs a pass)
-  sCorrK: 0.0001,        // tensile instability (artificial pressure) strength
+  sCorrK: 0.001,         // tensile instability (artificial pressure) strength
   sCorrN: 4,             // its exponent
   sCorrQ: 0.3,           // |Δp| sample point, as a fraction of radius
   maxVelocity: 12.0,     // clamp: a blown-up particle must not poison the grid

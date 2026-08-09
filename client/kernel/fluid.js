@@ -22,7 +22,7 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn, If, Loop, instanceIndex, instancedArray, uniform, atomicAdd, atomicStore,
-  float, int, vec3, uint, min, length, select,
+  float, int, ivec3, vec3, uint, min, length, select, atomicLoad,
 } from 'three/tsl';
 
 // ─────────────────────────────────────────────────────────────── parameters ──
@@ -160,8 +160,10 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   };
   const NCn = int(NC), CAPn = int(CAP);
 
-  // cell index helpers (clamped: a particle outside the tank still bins)
-  const cellCoord = Fn(([p]) => p.sub(U.bMin).div(U.cellSize).floor().toVar());
+  // Integer coordinates keep array indices and loop offsets in WGSL's i32
+  // domain. Binning clamps a transient out-of-tank prediction; neighbour
+  // traversal separately skips such coordinates so no bucket is visited twice.
+  const cellCoord = Fn(([p]) => ivec3(p.sub(U.bMin).div(U.cellSize).floor()).toVar());
   const cellHash = Fn(([c]) => {
     const cc = c.clamp(int(0), NCn.sub(1)).toVar();
     return cc.x.add(cc.y.mul(NCn)).add(cc.z.mul(NCn).mul(NCn));
@@ -204,7 +206,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     Loop({ start: int(-1), end: int(2), type: 'int', name: 'dz' }, ({ dz }) => {
       Loop({ start: int(-1), end: int(2), type: 'int', name: 'dy' }, ({ dy }) => {
         Loop({ start: int(-1), end: int(2), type: 'int', name: 'dx' }, ({ dx }) => {
-          const c = vec3(base.x.add(dx), base.y.add(dy), base.z.add(dz)).toVar();
+          const c = ivec3(base.x.add(dx), base.y.add(dy), base.z.add(dz)).toVar();
           // Do not clamp neighbour coordinates: at tank edges clamping maps
           // several offsets to one bucket and counts every occupant repeatedly.
           const valid = c.x.greaterThanEqual(0).and(c.x.lessThan(NCn))
@@ -212,7 +214,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
             .and(c.z.greaterThanEqual(0)).and(c.z.lessThan(NCn));
           If(valid, () => {
             const cell = cellHash(c).toVar();
-            const n = min(int(cellCount.element(cell)), CAPn).toVar();
+            const n = min(int(atomicLoad(cellCount.element(cell))), CAPn).toVar();
             Loop({ start: int(0), end: n, type: 'int', name: 'k' }, ({ k }) => {
               body(int(cellItems.element(cell.mul(CAPn).add(k))));
             });

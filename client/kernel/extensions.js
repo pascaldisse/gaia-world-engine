@@ -42,8 +42,12 @@
 // A host page names its own production:
 //     window.__GAIA_EXTENSIONS__ = ['/game/atlas-strategy.js']
 //     window.__GAIA_GATE__       = '/game/atlas-gate.js'
-// Defaults are EMPTY so the studio opens with no production at all.
-export const DEFAULT_EXTENSIONS = [];
+// Defaults are EMPTY for productions. Engine capabilities are statically
+// imported so a built engine can discover them; their own data gates still
+// decide whether they allocate anything.
+import * as fluidExtension from './fluid.js';
+
+export const DEFAULT_EXTENSIONS = [fluidExtension];
 export const DEFAULT_GATE = null;
 
 // Relative defaults resolve against THIS module (client/kernel/), while a host

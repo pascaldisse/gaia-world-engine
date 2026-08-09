@@ -8,14 +8,12 @@
 // LAW §IRON — nothing here is hard-coded. Every number lives in FLUID_PHYSICS /
 // FLUID_RENDER below with a default, and every entry point takes overrides.
 //
-// SEAM — this module touches NOTHING. It is loaded as an ENGINE EXTENSION
+// SEAM — this module is a statically registered ENGINE CAPABILITY
 // (client/kernel/extensions.js contract: export register(ctx) → {name, api,
-// update(dt)}). DEFAULT_EXTENSIONS is empty, so a world that does not opt in
-// never loads this file and behaves bit-identically (Atlas = unchanged).
-// Opt-in, explicit, off by default:
-//   window.__GAIA_EXTENSIONS__ = ['/kernel/fluid.js']            (host page)
-//   ?ext=/kernel/fluid.js&fluid=1                                (probe)
-//   world data: an entity component { fluid: {...} } — see attachFluidComponent
+// sync(), update(dt)}). Registration has no GPU side effect: allocation starts
+// only at an explicit host/query probe or exactly one world-data component
+// `{ fluid: { enabled: true, ... } }`. Atlas replaces the default list, so its
+// behavior remains unchanged.
 //
 // UNVERIFIED: 60 fps on a real Metal adapter. No browser measurement has been
 // taken from this file yet; treat every perf claim as unproven until a real
@@ -126,13 +124,15 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const mass = P.restDensity * spacing * spacing * spacing;
 
   // ── buffers ────────────────────────────────────────────────────────────────
-  const posArr = new Float32Array(count * 4);
-  const velArr = new Float32Array(count * 4);
-  seed(posArr, velArr, count, P, spacing);
-
-  const position  = instancedArray(posArr, 'vec3').setName('fluidPosition');
+  // `instancedArray` owns vec3's GPU alignment. Passing a padded JS array
+  // makes its logical count/stride wrong; create count elements then seed the
+  // backing three-float array before its first upload.
+  const position  = instancedArray(count, 'vec3').setName('fluidPosition');
   const predicted = instancedArray(count, 'vec3').setName('fluidPredicted');
-  const velocity  = instancedArray(velArr, 'vec3').setName('fluidVelocity');
+  const velocity  = instancedArray(count, 'vec3').setName('fluidVelocity');
+  seed(position.value.array, velocity.value.array, count, P, spacing);
+  position.value.needsUpdate = true;
+  velocity.value.needsUpdate = true;
   const lambda    = instancedArray(count, 'float').setName('fluidLambda');
   const delta     = instancedArray(count, 'vec3').setName('fluidDelta');
   // counting-sort-free binning: fixed capacity buckets + atomic slot handout.
@@ -205,10 +205,17 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
       Loop({ start: int(-1), end: int(2), type: 'int', name: 'dy' }, ({ dy }) => {
         Loop({ start: int(-1), end: int(2), type: 'int', name: 'dx' }, ({ dx }) => {
           const c = vec3(base.x.add(dx), base.y.add(dy), base.z.add(dz)).toVar();
-          const cell = cellHash(c).toVar();
-          const n = min(int(cellCount.element(cell)), CAPn).toVar();
-          Loop({ start: int(0), end: n, type: 'int', name: 'k' }, ({ k }) => {
-            body(int(cellItems.element(cell.mul(CAPn).add(k))));
+          // Do not clamp neighbour coordinates: at tank edges clamping maps
+          // several offsets to one bucket and counts every occupant repeatedly.
+          const valid = c.x.greaterThanEqual(0).and(c.x.lessThan(NCn))
+            .and(c.y.greaterThanEqual(0)).and(c.y.lessThan(NCn))
+            .and(c.z.greaterThanEqual(0)).and(c.z.lessThan(NCn));
+          If(valid, () => {
+            const cell = cellHash(c).toVar();
+            const n = min(int(cellCount.element(cell)), CAPn).toVar();
+            Loop({ start: int(0), end: n, type: 'int', name: 'k' }, ({ k }) => {
+              body(int(cellItems.element(cell.mul(CAPn).add(k))));
+            });
           });
         });
       });
@@ -392,8 +399,8 @@ function seed(posArr, velArr, count, P, spacing) {
       y = c[1] + r * Math.cos(ph);
       z = c[2] + r * Math.sin(ph) * Math.sin(th);
     }
-    posArr[i * 4 + 0] = x; posArr[i * 4 + 1] = y; posArr[i * 4 + 2] = z;
-    velArr[i * 4 + 0] = v0[0]; velArr[i * 4 + 1] = v0[1]; velArr[i * 4 + 2] = v0[2];
+    posArr[i * 3 + 0] = x; posArr[i * 3 + 1] = y; posArr[i * 3 + 2] = z;
+    velArr[i * 3 + 0] = v0[0]; velArr[i * 3 + 1] = v0[1]; velArr[i * 3 + 2] = v0[2];
   }
 }
 
@@ -402,23 +409,28 @@ function seed(posArr, velArr, count, P, spacing) {
 // extensions.js with the live context; if the world never opts in, none of the
 // above ever runs. Opt-in is explicit and OFF by default.
 export function register(ctx = {}) {
-  const { renderer, scene } = ctx;
+  const { renderer, scene, store } = ctx;
   const q = (() => { try { return new URLSearchParams(location.search); } catch { return null; } })();
   const wanted = (typeof window !== 'undefined' && window.__GAIA_FLUID__) || null;
-  // OPT-IN, THREE GATES, ALL OFF BY DEFAULT. `enabled === true` is required —
-  // presence of the object is not consent. If no gate says yes we allocate
-  // nothing: no buffers, no pipelines, no compute, no mesh. Atlas is untouched.
-  const on = wanted?.enabled === true || q?.get('fluid') === '1';
-  // WebGPU only: a WebGL2 fallback backend has no compute, and a "fluid" that
-  // silently degrades to a dead particle cloud is worse than an absent one.
+  const probe = wanted?.enabled === true || q?.get('fluid') === '1';
   const isWebGPU = renderer?.backend?.isWebGPUBackend === true;
-  if (on && !isWebGPU) {
-    console.warn('[fluid] backend is not WebGPU — GPU fluid stays OFF (no compute available)');
-  }
   let sim = null;
+  let activeConfig = null;
 
+  const stop = () => {
+    if (!sim) return;
+    scene?.remove(sim.mesh);
+    sim.dispose();
+    sim = null;
+    activeConfig = null;
+  };
   const start = (opts = {}) => {
+    if (!isWebGPU) {
+      console.warn('[fluid] backend is not WebGPU — GPU fluid stays OFF (no compute available)');
+      return null;
+    }
     if (sim) return sim;
+    activeConfig = opts;
     sim = createFluid({
       renderer,
       physics: { ...(wanted?.physics || {}), ...(opts.physics || {}) },
@@ -427,14 +439,27 @@ export function register(ctx = {}) {
     scene?.add(sim.mesh);
     return sim;
   };
-  const stop = () => {
-    if (!sim) return;
-    scene?.remove(sim.mesh);
-    sim.dispose();
-    sim = null;
+  const worldConfig = () => {
+    const matches = [...(store?.entities?.values?.() ?? [])]
+      .map((components) => components?.fluid)
+      .filter((fluid) => fluid?.enabled === true);
+    // Ambiguous world data is not consent: one component owns the singleton.
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const sync = () => {
+    const config = worldConfig();
+    if (!config) {
+      if (!probe) stop();
+      return;
+    }
+    const next = { physics: config.physics || {}, render: config.render || {} };
+    if (JSON.stringify(next) !== JSON.stringify(activeConfig)) {
+      stop();
+      start(next);
+    }
   };
 
-  if (on && isWebGPU) start();
+  if (probe) start();
 
   return {
     name: 'fluid',
@@ -443,6 +468,7 @@ export function register(ctx = {}) {
       get sim() { return sim; },
       FLUID_PHYSICS, FLUID_RENDER, createFluid,
     },
+    sync,
     update(dt) { sim?.step(dt); },
   };
 }

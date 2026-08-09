@@ -24,6 +24,7 @@ import {
   Fn, If, Loop, instanceIndex, instancedArray, uniform, atomicAdd, atomicStore,
   float, int, ivec3, vec3, color, materialColor, uint, min, length, select, atomicLoad,
 } from 'three/tsl';
+import { createFluidSurface } from './fluid-surface.js';
 
 // ─────────────────────────────────────────────────────────────── parameters ──
 // PBF is scale-sensitive: `radius` (kernel support h) sets the rest spacing,
@@ -76,6 +77,9 @@ export const FLUID_PHYSICS = {
 };
 
 export const FLUID_RENDER = {
+  // `sprites` retains the legacy/default renderer exactly. `surface` is an
+  // explicit depth-writing refractive representation from fluid-surface.js.
+  mode: 'sprites',
   enabled: true,
   pointSize: 6.0,        // px, sprite footprint
   color: [0.32, 0.62, 1.0],
@@ -413,7 +417,10 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   });
 
   // ── mesh ───────────────────────────────────────────────────────────────────
-  const mesh = buildFluidMesh({ count, position, velocity, U, R });
+  const surface = R.mode === 'surface'
+    ? createFluidSurface({ count, position, render: R })
+    : null;
+  const mesh = surface?.mesh ?? buildFluidMesh({ count, position, velocity, U, R });
   mesh.frustumCulled = false;
   mesh.visible = !!R.enabled;
 
@@ -423,7 +430,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const api = {
     mesh,
     count,
-    params: { physics: P, render: R },
+    params: { physics: P, render: R, surface: surface?.params ?? null },
     uniforms: U,
     buffers: { position, velocity, predicted, lambda, delta, cellCount, cellItems, neighborCount, neighborList },
     diagnostics: { cells, cellCapacity: CAP, maxNeighbors: MAXN, cellSize: cellSize.toArray(), mass, gridOk },

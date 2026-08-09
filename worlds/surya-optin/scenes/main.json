@@ -159,6 +159,15 @@
       },
       "render": {
         "enabled": true,
+        "mode": "surface",
+        "particleRadius": 0.075,
+        "smoothing": 1.35,
+        "roughness": 0.075,
+        "transmission": 0.92,
+        "thickness": 0.42,
+        "ior": 1.333,
+        "attenuationColor": [0.18, 0.55, 1.0],
+        "attenuationDistance": 1.8,
         "pointSize": 6,
         "color": [
           0.34,

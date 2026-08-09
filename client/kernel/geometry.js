@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { Brush, Evaluator, SUBTRACTION, HOLLOW_SUBTRACTION } from 'three-bvh-csg';
 import { makePresetMaterial } from './presets.js';
+import { makeTransmissionMaterial } from './transmission.js';
 import { mergeIntoLibrary } from '../../shared/ops.js';
 
 // the mesh single-part-vs-parts convention, decided once
@@ -45,6 +46,7 @@ const MATERIAL_FIELDS = [
   // every differently-sized sphere in the world its own material.
   'norm', 'seed', 'arms', 'thick', 'warp', 'warpScale', 'skew', 'octaves', 'rough', 'freq',
   'gain', 'floor', 'lane', 'laneScale', 'laneSoft', 'laneOctaves', 'laneCut', 'laneOnly',
+  'transmission',
   'facing', 'far', 'farMean', 'farGain', 'edge', 'accent', 'accentMix', 'accent2', 'accent2Mix',
   'warm', 'mode', 'hole', 'spin', 'squash', 'armCount', 'armSharp', 'armFloor', 'lopsided', 'coreFall', 'hot', 'hotColor', 'hotFall', 'near', 'rimEnd', 'laneNeed', 'laneNeedSoft',
 ];
@@ -314,6 +316,8 @@ export function makePartMaterial(part) {
 }
 
 function buildPartMaterial(part) {
+  const transmission = makeTransmissionMaterial(part);
+  if (transmission) return transmission;
   if (part.preset) {
     const preset = makePresetMaterial(part);
     if (preset) {

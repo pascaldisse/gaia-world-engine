@@ -27,6 +27,7 @@ import { setMaterialLibrary, mergeMaterial, partsOf } from './kernel/geometry.js
 import { connect, clientId } from './kernel/net.js';
 import { connectStatic, staticModeRequested } from './kernel/static-world.js';
 import { isTyping } from './kernel/dom.js';
+import { PrimitiveRuntime } from './kernel/primitives.js';
 import { substitute } from '../shared/ops.js';
 import { r2 } from '../shared/num.js';
 
@@ -108,6 +109,8 @@ await waitForGate();
 // instead of opening a websocket. Same callbacks, same `net` shape either way
 // (see kernel/static-world.js) — nothing below this line knows which one ran.
 const staticMode = __GAIA_STATIC__ || staticModeRequested();
+let primitives;
+
 const netConfig = {
   url: `ws://${location.hostname}:${__GAIA_PORT__}`,
   presence: presenceId,
@@ -181,6 +184,7 @@ const netConfig = {
     }
     // the active scene set must be known before the snapshot builds, so only
     // the player's surroundings (plus backdrops) turn into meshes
+    primitives?.setWorld(world);
     scenes.setWorld(world);
     scenes.update(player.position);
     store.applySnapshot(entities);
@@ -235,6 +239,7 @@ const netConfig = {
   },
 };
 const net = staticMode ? connectStatic(netConfig) : connect(netConfig);
+primitives = new PrimitiveRuntime({ store, view, clock, send: (ops) => net.send(ops) });
 
 // ---- title screen: a world's game.json replaces the default overlay with
 // NEW GAME / LEVEL SELECT. A level entry is pure data: { id, name, spawn:
@@ -917,6 +922,7 @@ renderer.setAnimationLoop(() => {
   scenes.update(player.position);
   player.voidY = scenes.currentVoidY;
   view.update();
+  if (!sim.stopped) primitives.update();
   shading.update();
   viewFx.update();
   if (!sim.stopped) {

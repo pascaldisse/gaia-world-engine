@@ -6,7 +6,7 @@ import {
   instanceIndex, uv, float, vec2, vec3, vec4, sqrt, saturate, texture, screenUV,
   textureSize, positionLocal, modelViewMatrix, cameraProjectionMatrix,
   cameraProjectionMatrixInverse, cameraNear, cameraFar, viewZToPerspectiveDepth,
-  getViewPosition, normalize, cross, abs, select, exp, pow, dot, clamp,
+  getViewPosition, normalize, cross, abs, select, exp, pow, dot, clamp, sign,
 } from 'three/tsl';
 
 export const FLUID_THICKNESS_RENDER = {
@@ -144,9 +144,11 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
     // Absorbance per metre per channel: what the attenuation colour does NOT pass.
     const absorb = vec3(...attC.map((c) => Math.max(0, 1 - c) / attD));
     const viewDir = normalize(p.negate());
-    const facing = saturate(dot(normal, viewDir));
+    // Reconstruction winding may flip the normal; force it toward the viewer.
+    const facingNormal = normal.mul(sign(dot(normal, viewDir)));
+    const facing = saturate(dot(facingNormal, viewDir));
     const fresnel = pow(float(1).sub(facing), 5).mul(1 - f0).add(f0);
-    const refractUV = clamp(screenUV.sub(normal.xy.mul(saturate(thicknessM).mul(strength))), vec2(0), vec2(1));
+    const refractUV = clamp(screenUV.sub(facingNormal.xy.mul(saturate(thicknessM).mul(strength))), vec2(0), vec2(1));
     const refracted = texture(sceneTarget.texture, refractUV).rgb;
     const transmit = exp(absorb.mul(thicknessM).negate());
     compositeColour = refracted.mul(transmit).mul(float(1).sub(fresnel)).add(vec3(...fTint).mul(fresnel));

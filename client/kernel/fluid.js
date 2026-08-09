@@ -25,6 +25,7 @@ import {
   float, int, ivec3, vec3, color, materialColor, uint, min, length, select, atomicLoad,
 } from 'three/tsl';
 import { createFluidSurface } from './fluid-surface.js';
+import { createFluidThickness } from './fluid-thickness.js';
 
 // ─────────────────────────────────────────────────────────────── parameters ──
 // PBF is scale-sensitive: `radius` (kernel support h) sets the rest spacing,
@@ -79,6 +80,8 @@ export const FLUID_PHYSICS = {
 export const FLUID_RENDER = {
   // `sprites` retains the legacy/default renderer exactly. `surface` is an
   // explicit depth-writing refractive representation from fluid-surface.js.
+  // `thickness` is the screen-space skin's P2 pass shown on its own, as a grey
+  // debug view (fluid-thickness.js) — the piece 8e28cd9 was missing.
   mode: 'sprites',
   enabled: true,
   pointSize: 6.0,        // px, sprite footprint
@@ -123,7 +126,7 @@ const spikyGrad = /*#__PURE__*/ Fn(([rv, r, h]) => {
  * @param {object} [o.physics]  overrides for FLUID_PHYSICS
  * @param {object} [o.render]   overrides for FLUID_RENDER
  */
-export function createFluid({ renderer, physics = {}, render = {} } = {}) {
+export function createFluid({ renderer, camera = null, physics = {}, render = {} } = {}) {
   if (!renderer) throw new Error('[fluid] renderer required');
   const P = { ...FLUID_PHYSICS, ...physics,
     bounds: { ...FLUID_PHYSICS.bounds, ...(physics.bounds || {}) },
@@ -429,7 +432,11 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const surface = R.mode === 'surface'
     ? createFluidSurface({ count, position, render: R })
     : null;
-  const mesh = surface?.mesh ?? buildFluidMesh({ count, position, velocity, U, R });
+  const thickness = R.mode === 'thickness'
+    ? createFluidThickness({ renderer, camera, count, position, render: R })
+    : null;
+  const mesh = surface?.mesh ?? thickness?.mesh
+    ?? buildFluidMesh({ count, position, velocity, U, R });
   mesh.frustumCulled = false;
   mesh.visible = !!R.enabled;
 
@@ -439,7 +446,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const api = {
     mesh,
     count,
-    params: { physics: P, render: R, surface: surface?.params ?? null },
+    params: { physics: P, render: R, surface: surface?.params ?? null, thickness: thickness?.params ?? null },
     uniforms: U,
     buffers: { position, velocity, predicted, lambda, delta, cellCount, cellItems, neighborCount, neighborList },
     diagnostics: { cells, cellCapacity: CAP, maxNeighbors: MAXN, cellSize: cellSize.toArray(), mass, gridOk, gridCoversKernel, searchRadius },
@@ -457,9 +464,13 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
       while (acc >= h && steps < maxSteps) { acc -= h; steps += 1; substep(); }
       // if we can never catch up, drop the backlog rather than spiral
       if (acc > h * 4) acc = 0;
+      // The thickness pass reads the positions this step just wrote, into its
+      // OWN target, before the engine's main pass draws the debug quad.
+      thickness?.update();
     },
 
     dispose() {
+      if (thickness) { thickness.dispose(); return; }
       mesh.geometry?.dispose?.();
       mesh.material?.dispose?.();
     },
@@ -537,7 +548,7 @@ function seed(posArr, velArr, count, P, spacing) {
 // extensions.js with the live context; if the world never opts in, none of the
 // above ever runs. Opt-in is explicit and OFF by default.
 export function register(ctx = {}) {
-  const { renderer, scene, store } = ctx;
+  const { renderer, scene, store, camera = null } = ctx;
   const q = (() => { try { return new URLSearchParams(location.search); } catch { return null; } })();
   const wanted = (typeof window !== 'undefined' && window.__GAIA_FLUID__) || null;
   const probe = wanted?.enabled === true || q?.get('fluid') === '1';
@@ -561,6 +572,7 @@ export function register(ctx = {}) {
     activeConfig = opts;
     sim = createFluid({
       renderer,
+      camera,
       physics: { ...(wanted?.physics || {}), ...(opts.physics || {}) },
       render: { ...(wanted?.render || {}), ...(opts.render || {}) },
     });

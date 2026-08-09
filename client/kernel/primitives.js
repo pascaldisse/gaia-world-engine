@@ -1,3 +1,5 @@
+import * as THREE from 'three/webgpu';
+
 // Opt-in entity mechanics. A world enables this kernel with
 // `world.features.primitives: true`; worlds without that exact flag remain
 // byte-for-byte on their historical scene graph path.
@@ -10,6 +12,12 @@ export class PrimitiveRuntime {
     this.enabled = false;
     this.expired = new Set();
     this.births = new Map();
+    this.position = new THREE.Vector3();
+    this.rotation = new THREE.Quaternion();
+    this.euler = new THREE.Euler();
+    this.scale = new THREE.Vector3();
+    this.local = new THREE.Matrix4();
+    this.world = new THREE.Matrix4();
   }
 
   setWorld(world) {
@@ -33,28 +41,47 @@ export class PrimitiveRuntime {
     const child = this.view.getGroup(id);
     if (!child) return;
     const parentId = typeof spec?.parent === 'string' ? spec.parent : null;
-    const parent = parentId ? this.view.getGroup(parentId) : this.view.scene;
-    // Missing parents leave the child in the scene root: load order cannot
-    // make a valid entity disappear, and the next frame heals the link.
-    const target = parent ?? this.view.scene;
-    if (child.parent === target) return;
-    target.attach(child); // preserves world pose during streamed parent arrival
-    if (parent) {
-      const local = spec?.local ?? true;
-      if (local) this.applyLocal(child, this.store.get(id)?.transform);
+    if (!parentId || parentId === id) {
+      if (child.userData.base) this.applyLocal(child, child.userData.base);
+      return;
     }
+    this.inherit(id, new Set());
+  }
+
+  // Entity groups stay direct scene children. View owns their teardown and
+  // rebuild path, so physical Object3D reparenting would leave stale children
+  // behind on a mesh edit. Matrix inheritance gives the same authored result
+  // without changing View's ownership invariant.
+  inherit(id, visiting) {
+    if (visiting.has(id)) return;
+    visiting.add(id);
+    const child = this.view.getGroup(id);
+    const spec = this.store.get(id)?.attach;
+    const parentId = typeof spec?.parent === 'string' ? spec.parent : null;
+    const parent = parentId && parentId !== id ? this.view.getGroup(parentId) : null;
+    if (!child || !parent) return;
+    this.inherit(parentId, visiting);
+    const base = child.userData.base;
+    if (!base) return;
+    this.local.compose(
+      this.position.fromArray(base.position),
+      this.rotation.setFromEuler(this.euler.fromArray(base.rotation)),
+      this.scale.set(...(Array.isArray(base.scale) ? base.scale : [base.scale, base.scale, base.scale])),
+    );
+    parent.updateMatrixWorld(true);
+    this.world.multiplyMatrices(parent.matrixWorld, this.local).decompose(child.position, child.quaternion, child.scale);
   }
 
   detachAll() {
     for (const group of this.view.groups.values()) {
-      if (group.parent && group.parent !== this.view.scene) this.view.scene.attach(group);
+      if (group.userData.base) this.applyLocal(group, group.userData.base);
     }
   }
 
   applyLocal(group, transform = {}) {
-    const [x, y, z] = transform.position ?? [0, 0, 0];
-    const [rx, ry, rz] = transform.rotation ?? [0, 0, 0];
-    const scale = transform.scale ?? 1;
+    const [x, y, z] = transform?.position ?? [0, 0, 0];
+    const [rx, ry, rz] = transform?.rotation ?? [0, 0, 0];
+    const scale = transform?.scale ?? 1;
     group.position.set(x, y, z);
     group.rotation.set(rx, ry, rz);
     if (Array.isArray(scale)) group.scale.set(...scale);

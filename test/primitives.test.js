@@ -20,7 +20,7 @@ test('per-part phase retains the authored local baseline', () => {
   part.userData.kind = 'mesh-part';
   const entity = { mesh: { parts: [{ position: [0, 3, 0], phase: { axis: 'position', amplitude: 2, speed: 0, offset: Math.PI / 2 } }] } };
   const scene = { attach() {} };
-  const runtime = new PrimitiveRuntime({ store: { entities: new Map([['lamp', entity]]) }, view: { groups: new Map([['lamp', { children: [part], parent: scene }]]), getGroup(id) { return this.groups.get(id); }, scene }, clock: { now: () => 0 }, send: () => {} });
+  const runtime = new PrimitiveRuntime({ store: { entities: new Map([['lamp', entity]]) }, view: { groups: new Map([['lamp', { children: [part], parent: scene, userData: {} }]]), getGroup(id) { return this.groups.get(id); }, scene }, clock: { now: () => 0 }, send: () => {} });
   runtime.setWorld({ features: { primitives: true } });
   runtime.update();
   assert.equal(part.position.y, 5);

@@ -108,7 +108,7 @@
     "fluid": {
       "enabled": true,
       "physics": {
-        "count": 16384,
+        "count": 8192,
         "gravity": [
           0,
           -9.81,
@@ -138,21 +138,21 @@
           "height": 2.4
         },
         "spawn": {
-          "mode": "sphere",
+          "mode": "box",
           "center": [
             0,
-            7.5,
+            1.0,
             0
           ],
           "size": [
-            1.2,
-            1.2,
-            1.2
+            2.6,
+            1.4,
+            2.6
           ],
-          "jitter": 0.25,
+          "jitter": 0.2,
           "velocity": [
             0,
-            -1.2,
+            0,
             0
           ]
         }
@@ -187,7 +187,7 @@
         "thicknessScale": 1.0,
         "debugGain": 0.05,
         "debugBlend": "replace",
-        "targetScale": 0.35
+        "targetScale": 0.5
       }
     }
   },

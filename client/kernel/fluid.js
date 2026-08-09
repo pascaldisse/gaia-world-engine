@@ -58,6 +58,14 @@ export const FLUID_PHYSICS = {
   container: { type: 'box', center: [0, 0, 0], radius: 4.0, radiusTop: null, height: null },
   cellsPerAxis: 48,      // uniform grid resolution over `bounds`
   cellCapacity: 48,      // max particles binned per cell (overflow is dropped)
+  // NEIGHBOUR LIST (perf, measured): the 3³ cell walk visits ~200 candidates to
+  // find ~35 real neighbours, and the old code paid that walk SEVEN times per
+  // substep (λ, Δp ×iterations, then finalize). Built once per substep instead,
+  // every later pass reads a compact list. `neighborSkin` widens the search
+  // radius so a neighbour that drifts inward during the projection iterations
+  // is already on the list (the passes still test the exact h themselves).
+  maxNeighbors: 128,     // per-particle list capacity (overflow is dropped)
+  neighborSkin: 1.2,     // search radius = radius * skin, for list building
   spawn: {
     mode: 'block',       // 'block' | 'sphere'
     center: [0, 5.0, 0],
@@ -72,7 +80,10 @@ export const FLUID_RENDER = {
   pointSize: 6.0,        // px, sprite footprint
   color: [0.32, 0.62, 1.0],
   colorFast: [0.85, 0.95, 1.0], // tint at |v| = maxVelocity (speed shows motion)
-  speedColorMix: 0.0,     // 0 = authored color remains exact; 1 = full speed tint
+  // 1 = the original expression (colour runs from `color` at rest to `colorFast`
+  // at maxVelocity — motion is READ off the liquid). 0 flattens it to a paint
+  // chip; that default was a regression and is not allowed to return.
+  speedColorMix: 1.0,
   opacity: 0.85,
   sizeAttenuation: true,
 };
@@ -124,6 +135,8 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const count = Math.max(1, Math.floor(P.count));
   const NC = Math.max(2, Math.floor(P.cellsPerAxis));
   const CAP = Math.max(4, Math.floor(P.cellCapacity));
+  const MAXN = Math.max(8, Math.floor(P.maxNeighbors));
+  const SKIN = Math.max(1, P.neighborSkin);
   const cells = NC * NC * NC;
 
   const bMin = V3(P.bounds.min);
@@ -154,6 +167,9 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   const cellCount = instancedArray(cells, 'uint').setPBO(true).setName('fluidCellCount');
   cellCount.setAtomic(true);
   const cellItems = instancedArray(cells * CAP, 'uint').setName('fluidCellItems');
+  // compact per-particle neighbour list, rebuilt once per substep
+  const neighborCount = instancedArray(count, 'uint').setName('fluidNeighborCount');
+  const neighborList = instancedArray(count * MAXN, 'uint').setName('fluidNeighborList');
 
   // ── uniforms (live-tunable; the tables above are only the defaults) ─────────
   const U = {
@@ -172,6 +188,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     bMin: uniform(bMin.clone()),
     bMax: uniform(bMax.clone()),
     cellSize: uniform(cellSize.clone()),
+    hSearch2: uniform(P.radius * SKIN * P.radius * SKIN),
   };
   // Container uniforms exist ONLY when a radial wall is authored: a `box`
   // world must not even allocate them, so no doubt can remain about whether
@@ -191,7 +208,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     ? U.containerRadius.add(U.containerRadiusTop.sub(U.containerRadius)
         .mul(y.sub(U.containerBase).div(U.containerHeight).clamp(0, 1)))
     : U.containerRadius);
-  const NCn = int(NC), CAPn = int(CAP);
+  const NCn = int(NC), CAPn = int(CAP), MAXNn = int(MAXN);
 
   // Integer coordinates keep array indices and loop offsets in WGSL's i32
   // domain. Binning clamps a transient out-of-tank prediction; neighbour
@@ -233,8 +250,10 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     });
   });
 
-  // neighbour visitor: 3³ cells around p, bucket-bounded. `body(j)` is inlined.
-  const forEachNeighbour = (p, body) => {
+  // grid visitor: 3³ cells around p, bucket-bounded. `body(j)` is inlined.
+  // Used ONCE per substep now (to build the list) — the solver passes walk the
+  // list, not the grid.
+  const forEachGridCandidate = (p, body) => {
     const base = cellCoord(p).toVar();
     Loop({ start: int(-1), end: int(2), type: 'int', name: 'dz' }, ({ dz }) => {
       Loop({ start: int(-1), end: int(2), type: 'int', name: 'dy' }, ({ dy }) => {
@@ -257,10 +276,39 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     });
   };
 
+  // ── pass 3b: neighbour list (the grid walk, paid once) ─────────────────────
+  // Self is deliberately NOT stored: it contributes nothing to Δp or XSPH, and
+  // its density term is added analytically in λ below (same arithmetic, one
+  // slot saved per particle).
+  const kNeighbors = guarded(count, () => {
+    const pi = predicted.element(instanceIndex).toVar();
+    const n = int(0).toVar();
+    forEachGridCandidate(pi, (j) => {
+      If(n.lessThan(MAXNn).and(j.notEqual(int(instanceIndex))), () => {
+        const rv = pi.sub(predicted.element(j)).toVar();
+        If(rv.dot(rv).lessThan(U.hSearch2), () => {
+          neighborList.element(int(instanceIndex).mul(MAXNn).add(n)).assign(uint(j));
+          n.addAssign(int(1));
+        });
+      });
+    });
+    neighborCount.element(instanceIndex).assign(uint(n));
+  });
+
+  // list visitor: what every solver pass uses from here on.
+  const forEachNeighbour = (_p, body) => {
+    const n = min(int(neighborCount.element(instanceIndex)), MAXNn).toVar();
+    const base = int(instanceIndex).mul(MAXNn).toVar();
+    Loop({ start: int(0), end: n, type: 'int', name: 'k' }, ({ k }) => {
+      body(int(neighborList.element(base.add(k))));
+    });
+  };
+
   // ── pass 4: λ (density constraint + its gradient magnitude) ────────────────
   const kLambda = guarded(count, () => {
     const pi = predicted.element(instanceIndex).toVar();
-    const rho = float(0).toVar();
+    // self term: poly6(0, h) — the list omits self, the physics does not
+    const rho = float(0).add(U.mass.mul(poly6(float(0), U.h))).toVar();
     const gradI = vec3(0).toVar();
     const sumGrad2 = float(0).toVar();
     forEachNeighbour(pi, (j) => {
@@ -377,8 +425,8 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     count,
     params: { physics: P, render: R },
     uniforms: U,
-    buffers: { position, velocity, predicted, lambda, delta, cellCount, cellItems },
-    diagnostics: { cells, cellCapacity: CAP, cellSize: cellSize.toArray(), mass, gridOk },
+    buffers: { position, velocity, predicted, lambda, delta, cellCount, cellItems, neighborCount, neighborList },
+    diagnostics: { cells, cellCapacity: CAP, maxNeighbors: MAXN, cellSize: cellSize.toArray(), mass, gridOk },
     get running() { return running; },
     set running(v) { running = !!v; },
 
@@ -403,7 +451,7 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
 
   // One array per substep: r180 runs them in the order given, on ONE command
   // encoder — a per-pass await would stall the CPU on the GPU every frame.
-  const chain = [kPredict, kClear, kBin];
+  const chain = [kPredict, kClear, kBin, kNeighbors];
   for (let i = 0; i < P.iterations; i += 1) chain.push(kLambda, kDelta, kApply);
   chain.push(kFinalize);
   function substep() { renderer.compute(chain); }

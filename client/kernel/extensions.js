@@ -42,9 +42,12 @@
 // A host page names its own production:
 //     window.__GAIA_EXTENSIONS__ = ['/game/atlas-strategy.js']
 //     window.__GAIA_GATE__       = '/game/atlas-gate.js'
-// Defaults are EMPTY for productions. Engine capabilities are statically
-// imported so a built engine can discover them; their own data gates still
-// decide whether they allocate anything.
+// No production ships by default: DEFAULT_EXTENSIONS carries engine
+// capabilities only, never a game. It is NOT empty — the fluid is statically
+// imported so a built engine can discover it — but registering a capability
+// allocates nothing. Its own data gate decides: measured on Atlas (56
+// entities, no fluid component), register() leaves sim=null and zero storage
+// buffers, so a world that never asks pays nothing.
 import * as fluidExtension from './fluid.js';
 
 export const DEFAULT_EXTENSIONS = [fluidExtension];

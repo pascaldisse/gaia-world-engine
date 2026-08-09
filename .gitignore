@@ -4,7 +4,7 @@ debug/
 world/saves/
 # every world keeps its own save dir — live player state, same class as
 # world/saves/ above: runtime, regenerated on connect, never repo content
-worlds/*/saves/
+worlds/**/saves/
 
 # generated paloptic atlas sidecar, copied from $GAIA_WORLD for same-origin fetch
 client/atlas-graph.json

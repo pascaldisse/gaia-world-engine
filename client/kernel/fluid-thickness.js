@@ -6,7 +6,7 @@ import {
   instanceIndex, uv, float, vec2, vec3, vec4, sqrt, saturate, texture, screenUV,
   textureSize, positionLocal, modelViewMatrix, cameraProjectionMatrix,
   cameraProjectionMatrixInverse, cameraNear, cameraFar, viewZToPerspectiveDepth,
-  getViewPosition, normalize, cross, abs, select,
+  getViewPosition, normalize, cross, abs, select, exp, pow, dot, clamp,
 } from 'three/tsl';
 
 export const FLUID_THICKNESS_RENDER = {
@@ -19,9 +19,16 @@ export const FLUID_THICKNESS_RENDER = {
   debugGain: 0.6,
   debugTint: [1, 1, 1],
   debugView: true,
-  debugMode: 'thickness', // thickness | normal
+  debugMode: 'thickness', // thickness | normal | composite
   debugBlend: 'replace',
   debugEpsilon: 1e-4,
+  // composite (P4): screen-space refraction of the opaque scene through the
+  // liquid, Beer–Lambert attenuated by accumulated thickness, Fresnel rim.
+  refractionStrength: 0.08, // uv offset per metre of thickness
+  fresnelF0: 0.02,
+  fresnelTint: [1, 1, 1],
+  attenuationColor: [0.18, 0.55, 1.0],
+  attenuationDistance: 1.8,
 };
 const finite = (v, fallback) => Number.isFinite(v) ? v : fallback;
 
@@ -54,6 +61,13 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
   const thicknessTarget = new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: true });
   const smoothTarget = new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: false });
   depthTarget.texture.name = 'fluidViewZ'; thicknessTarget.texture.name = 'fluidThickness'; smoothTarget.texture.name = 'fluidViewZSmooth';
+  const mode = R.debugMode === 'normal' || R.mode === 'normal' ? 'normal'
+    : (R.debugMode === 'composite' || R.mode === 'composite' ? 'composite' : 'thickness');
+  // P4 needs the opaque scene colour to refract through; allocated only in composite.
+  const sceneTarget = mode === 'composite'
+    ? new THREE.RenderTarget(1, 1, { ...targetOptions, depthBuffer: true })
+    : null;
+  if (sceneTarget) sceneTarget.texture.name = 'fluidSceneColour';
 
   const centerView = modelViewMatrix.mul(vec4(position.element(instanceIndex), 1));
   const offsetView = vec4(positionLocal.xy.mul(impostorRadius * 2), 0, 0);
@@ -118,9 +132,27 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
   const normal = normalize(cross(px.sub(p), py.sub(p)));
   const normalColour = normal.mul(0.5).add(0.5);
   const thicknessColour = vec3(...tint).mul(saturate(texture(thicknessTarget.texture, screenUV).x.mul(gain)));
-  const isNormal = R.debugMode === 'normal' || R.mode === 'normal';
-  const sampledPresence = isNormal ? smoothed : texture(thicknessTarget.texture, screenUV).x;
-  debugMaterial.colorNode = isNormal ? normalColour : thicknessColour;
+  const isNormal = mode === 'normal';
+  const thicknessM = texture(thicknessTarget.texture, screenUV).x;
+  let compositeColour = null;
+  if (mode === 'composite') {
+    const strength = Math.max(0, finite(R.refractionStrength, 0.08));
+    const f0 = Math.min(1, Math.max(0, finite(R.fresnelF0, 0.02)));
+    const fTint = Array.isArray(R.fresnelTint) && R.fresnelTint.length === 3 ? R.fresnelTint : [1, 1, 1];
+    const attC = Array.isArray(R.attenuationColor) && R.attenuationColor.length === 3 ? R.attenuationColor : [0.18, 0.55, 1.0];
+    const attD = Math.max(1e-4, finite(R.attenuationDistance, 1.8));
+    // Absorbance per metre per channel: what the attenuation colour does NOT pass.
+    const absorb = vec3(...attC.map((c) => Math.max(0, 1 - c) / attD));
+    const viewDir = normalize(p.negate());
+    const facing = saturate(dot(normal, viewDir));
+    const fresnel = pow(float(1).sub(facing), 5).mul(1 - f0).add(f0);
+    const refractUV = clamp(screenUV.sub(normal.xy.mul(saturate(thicknessM).mul(strength))), vec2(0), vec2(1));
+    const refracted = texture(sceneTarget.texture, refractUV).rgb;
+    const transmit = exp(absorb.mul(thicknessM).negate());
+    compositeColour = refracted.mul(transmit).mul(float(1).sub(fresnel)).add(vec3(...fTint).mul(fresnel));
+  }
+  const sampledPresence = isNormal ? smoothed : thicknessM;
+  debugMaterial.colorNode = mode === 'composite' ? compositeColour : (isNormal ? normalColour : thicknessColour);
   debugMaterial.opacityNode = R.debugBlend === 'add' ? float(1) : saturate(sampledPresence.sub(epsilon).mul(1 / Math.max(epsilon, 1e-6)));
   debugMaterial.transparent = true;
   debugMaterial.blending = R.debugBlend === 'add' ? THREE.AdditiveBlending : THREE.NormalBlending;
@@ -132,7 +164,7 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
   const resize = () => {
     renderer.getDrawingBufferSize(size);
     const w = Math.max(1, Math.floor(size.x * targetScale)), h = Math.max(1, Math.floor(size.y * targetScale));
-    for (const target of [depthTarget, thicknessTarget, smoothTarget]) if (target.width !== w || target.height !== h) target.setSize(w, h);
+    for (const target of [depthTarget, thicknessTarget, smoothTarget, ...(sceneTarget ? [sceneTarget] : [])]) if (target.width !== w || target.height !== h) target.setSize(w, h);
   };
   let rendering = false;
   const update = () => {
@@ -148,6 +180,8 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
       debugMesh.visible = false;
       renderer.setRenderTarget(thicknessTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(mainScene, camera);
       renderer.clear(true, false, false); renderer.render(thicknessScene, camera);
+      // P4: opaque scene colour, kept intact, for screen-space refraction.
+      if (sceneTarget) { renderer.setRenderTarget(sceneTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(mainScene, camera); }
       renderer.setRenderTarget(smoothTarget); renderer.setClearColor(0, 0); renderer.clear(); renderer.render(blurScene, camera);
     } finally {
       debugMesh.visible = debugVisible;
@@ -158,8 +192,8 @@ export function createFluidThickness({ renderer, camera, scene: mainScene, count
   const dispose = () => {
     geometry.dispose(); depthMaterial.dispose(); thicknessMaterial.dispose(); depthMesh.dispose?.(); thicknessMesh.dispose?.();
     blurMesh.geometry.dispose(); blurMaterial.dispose(); debugMesh.geometry.dispose(); debugMaterial.dispose();
-    depthTarget.dispose(); thicknessTarget.dispose(); smoothTarget.dispose();
+    depthTarget.dispose(); thicknessTarget.dispose(); smoothTarget.dispose(); sceneTarget?.dispose();
   };
-  return { mesh: debugMesh, depthTarget, thicknessTarget, smoothTarget, update, dispose, params: { ...R, impostorRadius } };
+  return { mesh: debugMesh, depthTarget, thicknessTarget, smoothTarget, sceneTarget, update, dispose, params: { ...R, impostorRadius, mode } };
 }
 export default createFluidThickness;

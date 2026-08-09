@@ -432,7 +432,7 @@ export function createFluid({ renderer, camera = null, scene = null, physics = {
   const surface = R.mode === 'surface'
     ? createFluidSurface({ count, position, render: R })
     : null;
-  const thickness = R.mode === 'thickness' || R.mode === 'normal'
+  const thickness = R.mode === 'thickness' || R.mode === 'normal' || R.mode === 'composite'
     ? createFluidThickness({ renderer, camera, scene, count, position, render: R })
     : null;
   const mesh = surface?.mesh ?? thickness?.mesh

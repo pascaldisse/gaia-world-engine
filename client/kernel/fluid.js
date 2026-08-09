@@ -22,7 +22,7 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn, If, Loop, instanceIndex, instancedArray, uniform, atomicAdd, atomicStore,
-  float, int, ivec3, vec3, uint, min, length, select, atomicLoad,
+  float, int, ivec3, vec3, color, materialColor, uint, min, length, select, atomicLoad,
 } from 'three/tsl';
 
 // ─────────────────────────────────────────────────────────────── parameters ──
@@ -72,6 +72,7 @@ export const FLUID_RENDER = {
   pointSize: 6.0,        // px, sprite footprint
   color: [0.32, 0.62, 1.0],
   colorFast: [0.85, 0.95, 1.0], // tint at |v| = maxVelocity (speed shows motion)
+  speedColorMix: 0.0,     // 0 = authored color remains exact; 1 = full speed tint
   opacity: 0.85,
   sizeAttenuation: true,
 };
@@ -420,8 +421,14 @@ function buildFluidMesh({ count, position, velocity, U, R }) {
     depthWrite: R.opacity >= 1,
     sizeAttenuation: R.sizeAttenuation,
   });
-  const speed = length(velocity.element(instanceIndex)).div(U.maxVelocity).clamp(0, 1);
-  material.colorNode = vec3(...R.color).mix(vec3(...R.colorFast), speed);
+  // SpriteNodeMaterial's native `color` follows its tested color-management
+  // path. Raw colorNode constants did not: a blue world value rendered yellow.
+  material.color.setRGB(...R.color);
+  if (R.speedColorMix > 0) {
+    const speed = length(velocity.element(instanceIndex)).div(U.maxVelocity).clamp(0, 1);
+    const speedTint = float(R.speedColorMix).clamp(0, 1).mul(speed);
+    material.colorNode = materialColor.mix(color(...R.colorFast), speedTint);
+  }
   material.opacityNode = float(R.opacity);
   material.positionNode = position.element(instanceIndex);
   material.scaleNode = float(R.pointSize * 0.01);

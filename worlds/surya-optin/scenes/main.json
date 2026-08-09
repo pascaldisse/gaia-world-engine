@@ -103,6 +103,15 @@
             4
           ]
         },
+        "container": {
+          "type": "cylinder",
+          "center": [
+            0,
+            0,
+            0
+          ],
+          "radius": 3.24
+        },
         "spawn": {
           "mode": "sphere",
           "center": [
@@ -165,15 +174,15 @@
           "color": "#dcefff",
           "transmission": {
             "enabled": true,
-            "amount": 1,
-            "thickness": 0.4,
-            "ior": 1.5,
-            "roughness": 0.08,
-            "attenuationColor": "#bfe6ff",
-            "attenuationDistance": 3,
-            "clearcoat": 1,
-            "clearcoatRoughness": 0.05,
-            "opacity": 1
+            "amount": 0.72,
+            "thickness": 0.18,
+            "ior": 1.45,
+            "roughness": 0.025,
+            "attenuationColor": "#dff4ff",
+            "attenuationDistance": 12,
+            "clearcoat": 0.65,
+            "clearcoatRoughness": 0.03,
+            "opacity": 0.48
           }
         }
       ]

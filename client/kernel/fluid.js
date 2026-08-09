@@ -50,7 +50,10 @@ export const FLUID_PHYSICS = {
   maxVelocity: 12.0,     // clamp: a blown-up particle must not poison the grid
   damping: 0.35,         // tangential velocity kept on a wall hit (splat, not bounce)
   restitution: 0.0,      // normal velocity kept on a wall hit
-  bounds: { min: [-4, 0, -4], max: [4, 8, 4] }, // the tank (world units)
+  bounds: { min: [-4, 0, -4], max: [4, 8, 4] }, // broadphase tank (world units)
+  // `box` preserves the original tank; `cylinder` adds a radial wall inside it.
+  // radius and center are world-data parameters, never mesh-derived magic.
+  container: { type: 'box', center: [0, 0, 0], radius: 4.0 },
   cellsPerAxis: 48,      // uniform grid resolution over `bounds`
   cellCapacity: 48,      // max particles binned per cell (overflow is dropped)
   spawn: {
@@ -106,8 +109,10 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
   if (!renderer) throw new Error('[fluid] renderer required');
   const P = { ...FLUID_PHYSICS, ...physics,
     bounds: { ...FLUID_PHYSICS.bounds, ...(physics.bounds || {}) },
+    container: { ...FLUID_PHYSICS.container, ...(physics.container || {}) },
     spawn: { ...FLUID_PHYSICS.spawn, ...(physics.spawn || {}) } };
   const R = { ...FLUID_RENDER, ...render };
+  const radialContainer = P.container.type === 'cylinder';
 
   const count = Math.max(1, Math.floor(P.count));
   const NC = Math.max(2, Math.floor(P.cellsPerAxis));
@@ -160,6 +165,8 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
     bMin: uniform(bMin.clone()),
     bMax: uniform(bMax.clone()),
     cellSize: uniform(cellSize.clone()),
+    containerCenter: uniform(V3(P.container.center)),
+    containerRadius: uniform(P.container.radius),
   };
   const NCn = int(NC), CAPn = int(CAP);
 
@@ -270,8 +277,17 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
 
   const kApply = guarded(count, () => {
     const p = predicted.element(instanceIndex).add(delta.element(instanceIndex)).toVar();
-    // tank walls: a hard positional constraint, solved with the density one
+    // Broadphase box plus optional authored circular basin wall. The latter is
+    // a positional constraint, so density projection cannot leak into corners.
     p.assign(p.clamp(U.bMin, U.bMax));
+    if (radialContainer) {
+      const radial = vec3(p.x.sub(U.containerCenter.x), 0, p.z.sub(U.containerCenter.z)).toVar();
+      const distance = length(radial).toVar();
+      If(distance.greaterThan(U.containerRadius), () => {
+        const edge = radial.mul(U.containerRadius.div(distance.max(1e-6))).add(U.containerCenter).toVar();
+        p.assign(vec3(edge.x, p.y, edge.z));
+      });
+    }
     predicted.element(instanceIndex).assign(p);
   });
 
@@ -301,7 +317,20 @@ export function createFluid({ renderer, physics = {}, render = {} } = {}) {
       select(hit.y, v.y.mul(U.restitution.negate()), v.y),
       select(hit.z, v.z.mul(U.restitution.negate()), v.z),
     ));
-    const anyHit = hit.x.or(hit.y).or(hit.z);
+    let radialHit = null;
+    if (radialContainer) {
+      const radial = vec3(p1.x.sub(U.containerCenter.x), 0, p1.z.sub(U.containerCenter.z)).toVar();
+      const distance = length(radial).toVar();
+      radialHit = distance.greaterThanEqual(U.containerRadius.sub(1e-4));
+      // Remove only outward radial speed: a wall captures the splash without
+      // inventing an inward impulse, then shares the normal wall damping.
+      If(radialHit, () => {
+        const normal = radial.div(distance.max(1e-6)).toVar();
+        const outward = v.dot(normal).toVar();
+        If(outward.greaterThan(0), () => { v.subAssign(normal.mul(outward)); });
+      });
+    }
+    const anyHit = radialHit ? hit.x.or(hit.y).or(hit.z).or(radialHit) : hit.x.or(hit.y).or(hit.z);
     If(anyHit, () => { v.mulAssign(U.damping); });
 
     const s = length(v);

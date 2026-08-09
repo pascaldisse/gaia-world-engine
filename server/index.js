@@ -686,6 +686,9 @@ function describe(op) {
   return op.op;
 }
 
-server.listen(PORT, () => {
+// GAIA_HOST: bind address — default loopback (own machine only); set
+// GAIA_HOST=0.0.0.0 explicitly to expose on the LAN. (Pascal-approved 08-09.)
+const HOST = process.env.GAIA_HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
   console.log(`[gaia] world server on http://localhost:${PORT} (ws + http + sense + act)`);
 });

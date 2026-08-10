@@ -3,7 +3,8 @@ import { makeGeometry, disposeOwn } from './geometry.js';
 import { pointerNDC } from './dom.js';
 import { r2 } from '../../shared/num.js';
 
-const BASE = `http://${location.hostname}:${__GAIA_PORT__}`;
+import { GAIA_PORT } from './port.js';
+const BASE = `http://${location.hostname}:${GAIA_PORT}`;
 
 // Prefab palette with ghost stamping. The library lives on the server as
 // plain component documents — agents can add new brushes at runtime.

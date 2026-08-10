@@ -1,3 +1,4 @@
+import { GAIA_PORT } from './kernel/port.js';
 import { createRenderer } from './kernel/renderer.js';
 import { WorldStore } from './kernel/world.js';
 import { View } from './kernel/view.js';
@@ -109,7 +110,7 @@ await waitForGate();
 // (see kernel/static-world.js) — nothing below this line knows which one ran.
 const staticMode = __GAIA_STATIC__ || staticModeRequested();
 const netConfig = {
-  url: `ws://${location.hostname}:${__GAIA_PORT__}`,
+  url: `ws://${location.hostname}:${GAIA_PORT}`,
   presence: presenceId,
   onSnapshot: (entities, time, world, game, materials) => {
     clock.offset = time - performance.now() / 1000;
@@ -568,7 +569,7 @@ function captureSnapshot() {
   pendingSnapshot = false;
   canvasToDataURL(async (image) => {
     try {
-      const res = await fetch(`http://${location.hostname}:${__GAIA_PORT__}/snapshot`, {
+      const res = await fetch(`http://${location.hostname}:${GAIA_PORT}/snapshot`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

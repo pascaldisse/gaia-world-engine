@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 
-const SERVER = `http://${location.hostname}:${__GAIA_PORT__}`;
+import { GAIA_PORT } from './port.js';
+const SERVER = `http://${location.hostname}:${GAIA_PORT}`;
 
 // three's PositionalAudio (and AudioListener) re-schedule six panner ramps
 // EVERY FRAME, moving or not — with a dozen positional sounds that floods

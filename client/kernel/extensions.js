@@ -60,9 +60,14 @@ function fromQuery(key) {
 
 export function extensionList() {
   const w = typeof window !== 'undefined' ? window.__GAIA_EXTENSIONS__ : null;
-  const list = (Array.isArray(w) && w.length ? w : null) ?? fromQuery('ext') ?? DEFAULT_EXTENSIONS;
+  if (w === false) return []; // same explicit opt-out convention as __GAIA_GATE__
+  const host = Array.isArray(w) && w.length ? w : null;
+  const query = fromQuery('ext');
+  const list = host ? [...host, ...(query ?? [])] : (query ?? DEFAULT_EXTENSIONS);
   // only strings are URLs to resolve; modules and functions pass through as-is
-  return list.map((e) => (typeof e === 'string' ? resolve(e) : e));
+  // Host entries retain precedence; the URL query appends only new entries.
+  const seen = new Set();
+  return list.map((e) => (typeof e === 'string' ? resolve(e) : e)).filter((e) => !seen.has(e) && (seen.add(e), true));
 }
 
 export function gateModule() {

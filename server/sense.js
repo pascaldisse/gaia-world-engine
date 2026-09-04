@@ -3,6 +3,39 @@ import { routeHeight, terrainEntries } from '../shared/terrainmap.js';
 import { sceneAt, activeScenes } from '../shared/scenes.js';
 import { r1 } from '../shared/num.js';
 
+// Bounds are emitted by importers in mesh-local coordinates. Rotate each
+// corner through the entity transform so validation measures visual geometry,
+// not an arbitrary source-model pivot.
+function visualYBounds(comps, position) {
+  const bounds = comps.mesh?.bounds;
+  if (!bounds?.center || !bounds?.size) return null;
+  const center = bounds.center;
+  const half = bounds.size.map((v) => Math.abs(v) / 2);
+  const scale = Array.isArray(comps.transform?.scale)
+    ? comps.transform.scale
+    : [comps.transform?.scale ?? 1, comps.transform?.scale ?? 1, comps.transform?.scale ?? 1];
+  const [ex = 0, ey = 0, ez = 0] = comps.transform?.rotation ?? [0, 0, 0];
+  const c1 = Math.cos(ex / 2), c2 = Math.cos(ey / 2), c3 = Math.cos(ez / 2);
+  const s1 = Math.sin(ex / 2), s2 = Math.sin(ey / 2), s3 = Math.sin(ez / 2);
+  const qx = s1 * c2 * c3 + c1 * s2 * s3;
+  const qy = c1 * s2 * c3 - s1 * c2 * s3;
+  const qz = c1 * c2 * s3 + s1 * s2 * c3;
+  const qw = c1 * c2 * c3 - s1 * s2 * s3;
+  let min = Infinity, max = -Infinity;
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+    const x = (center[0] + sx * half[0]) * scale[0];
+    const y = (center[1] + sy * half[1]) * scale[1];
+    const z = (center[2] + sz * half[2]) * scale[2];
+    const tx = 2 * (qy * z - qz * y);
+    const ty = 2 * (qz * x - qx * z);
+    const tz = 2 * (qx * y - qy * x);
+    const worldY = position[1] + y + qw * ty + (qz * tx - qx * tz);
+    min = Math.min(min, worldY);
+    max = Math.max(max, worldY);
+  }
+  return { min, max };
+}
+
 // Perception without pixels: the same world documents the renderer draws are
 // summarized into compact text frames, queries, maps, and sanity checks.
 export class Sense {
@@ -204,7 +237,7 @@ export class Sense {
     return lines.join('\n');
   }
 
-  check() {
+  check({ floatTolerance = 4, buriedTolerance = 0.5 } = {}) {
     const problems = [];
     const spheres = [];
     for (const [id, comps] of this.world.entities) {
@@ -214,8 +247,11 @@ export class Sense {
       const [x, y, z] = this.positionOf(comps);
       const ground = this.groundAt(x, z);
       if (!comps.ground && !orbits) {
-        if (y - ground > 4) problems.push(`${id} floats ${r1(y - ground)}m above ground`);
-        if (y < ground - 0.5) problems.push(`${id} is buried ${r1(ground - y)}m below ground`);
+        const visual = visualYBounds(comps, [x, y, z]);
+        const low = visual?.min ?? y;
+        const high = visual?.max ?? y;
+        if (low - ground > floatTolerance) problems.push(`${id} floats ${r1(low - ground)}m above ground`);
+        if (high < ground - buriedTolerance) problems.push(`${id} is buried ${r1(ground - high)}m below ground`);
       }
       let radius = 0.5;
       for (const part of comps.mesh.parts ?? []) {

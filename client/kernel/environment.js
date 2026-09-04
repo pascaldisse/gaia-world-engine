@@ -59,11 +59,20 @@ export class Environment {
     const p = { ...this.defaults, ...(params ?? {}) };
     if (this.scene.background?.isColor) this.scene.background.set(p.background);
     else this.scene.background = new THREE.Color(p.background);
-    const fog = { ...this.defaults.fog, ...(p.fog ?? {}) };
-    // mutate the existing fog in place — the fog OBJECT is part of every
-    // pipeline's cache key, so replacing it recompiles the whole scene.
-    // Only a fog-type change (linear ↔ exp) pays that price.
-    if (fog.density) {
+    const declaredFog = p.fog ?? null;
+    const fog = { ...this.defaults.fog, ...(declaredFog ?? {}) };
+    // A world that DECLARES fog with density 0 and no linear range declares NO
+    // fog — the engine must not fall back to its own near/far and hang haze in
+    // somebody else's sky (same law as undeclared sound = silence). Worlds that
+    // declare nothing at all keep the engine's default air.
+    const fogDeclaredOff = !!declaredFog
+      && !declaredFog.density
+      && declaredFog.near === undefined
+      && declaredFog.far === undefined;
+    if (fogDeclaredOff) {
+      this.scene.fog = null;
+      this.fogDensity = null;
+    } else if (fog.density) {
       if (this.scene.fog?.isFogExp2) {
         this.scene.fog.color.set(fog.color);
         this.scene.fog.density = fog.density;
@@ -77,7 +86,7 @@ export class Environment {
     } else {
       this.scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
     }
-    this.fogDensity = fog.density ?? null;
+    if (!fogDeclaredOff) this.fogDensity = fog.density ?? null;
     this.exposure = p.exposure;
     const hemi = { ...this.defaults.hemisphere, ...(p.hemisphere ?? {}) };
     this.hemi.color.set(hemi.sky);
@@ -107,8 +116,9 @@ export class Environment {
   captureState() {
     return {
       background: this.scene.background.clone(),
-      fogColor: this.scene.fog.color.clone(),
-      fogDensity: this.scene.fog.isFogExp2 ? this.scene.fog.density : null,
+      // a world with fog switched off has no fog object to read a colour from
+      fogColor: (this.scene.fog?.color ?? this.scene.background).clone(),
+      fogDensity: this.scene.fog?.isFogExp2 ? this.scene.fog.density : null,
       exposure: this.exposure,
       hemiSky: this.hemi.color.clone(),
       hemiGround: this.hemi.groundColor.clone(),
@@ -143,14 +153,9 @@ export class Environment {
     if (fade) {
       fade.t = Math.min(1, fade.t + dt / fade.seconds);
       const k = fade.t * fade.t * (3 - 2 * fade.t);
-      // a veiled scene (film4/seg1: "the deep is judged on black") sets
-      // scene.background to null on purpose — that is a legitimate state,
-      // not damage to repair, so every touch below skips it instead of
-      // crashing. It comes back exactly as it was (exit() restores the same
-      // Color instance) since nothing here mutates a null background.
-      if (this.scene.background) this.scene.background.copy(fade.from.background).lerp(fade.to.background, k);
-      this.scene.fog.color.copy(fade.from.fogColor).lerp(fade.to.fogColor, k);
-      if (fade.from.fogDensity !== null && fade.to.fogDensity !== null && this.scene.fog.isFogExp2) {
+      this.scene.background.copy(fade.from.background).lerp(fade.to.background, k);
+      if (this.scene.fog) this.scene.fog.color.copy(fade.from.fogColor).lerp(fade.to.fogColor, k);
+      if (fade.from.fogDensity !== null && fade.to.fogDensity !== null && this.scene.fog?.isFogExp2) {
         this.fogDensity = fade.from.fogDensity + (fade.to.fogDensity - fade.from.fogDensity) * k;
       }
       this.exposure = fade.from.exposure + (fade.to.exposure - fade.from.exposure) * k;
@@ -160,10 +165,9 @@ export class Environment {
       this.sun.color.copy(fade.from.sunColor).lerp(fade.to.sunColor, k);
       this.sun.intensity = fade.from.sunIntensity + (fade.to.sunIntensity - fade.from.sunIntensity) * k;
       this.lightScale = fade.from.lightScale + (fade.to.lightScale - fade.from.lightScale) * k;
-      // keep the flash baseline tracking the fade (skipped while veiled —
-      // current.background stays stale-but-harmless until background returns)
-      if (this.scene.background) this.current.background.copy(this.scene.background);
-      this.current.fogColor.copy(this.scene.fog.color);
+      // keep the flash baseline tracking the fade
+      this.current.background.copy(this.scene.background);
+      if (this.scene.fog) this.current.fogColor.copy(this.scene.fog.color);
       this.current.sunIntensity = this.sun.intensity;
       this.current.hemiIntensity = this.hemi.intensity;
       this.current.ambientIntensity =
@@ -183,7 +187,7 @@ export class Environment {
     }
     this.renderer.toneMappingExposure = exposure * this.debugMul;
     this.ambient.intensity = this.current.ambientIntensity + this.debugAmbient;
-    if (this.scene.fog.isFogExp2 && this.fogDensity !== null) {
+    if (this.scene.fog?.isFogExp2 && this.fogDensity !== null) {
       this.scene.fog.density = this.fogDensity * this.debugFog;
     }
 
@@ -193,8 +197,8 @@ export class Environment {
       this.flashLevel = 0;
       this.sun.intensity = this.current.sunIntensity;
       this.hemi.intensity = this.current.hemiIntensity;
-      if (this.scene.background) this.scene.background.copy(this.current.background);
-      this.scene.fog.color.copy(this.current.fogColor);
+      this.scene.background.copy(this.current.background);
+      this.scene.fog?.color.copy(this.current.fogColor);
       return;
     }
     this.flashLevel *= Math.exp(-dt * 4.5);
@@ -203,7 +207,7 @@ export class Environment {
     // lightning lifts the whole frame: sun, sky light, background, fog
     this.sun.intensity = this.current.sunIntensity + this.flashLevel * 6;
     this.hemi.intensity = this.current.hemiIntensity + this.flashLevel * 1.4;
-    if (this.scene.background) this.scene.background.copy(this.current.background).lerp(this.flashColor, k * 0.55);
-    this.scene.fog.color.copy(this.current.fogColor).lerp(this.flashColor, k * 0.5);
+    this.scene.background.copy(this.current.background).lerp(this.flashColor, k * 0.55);
+    this.scene.fog?.color.copy(this.current.fogColor).lerp(this.flashColor, k * 0.5);
   }
 }

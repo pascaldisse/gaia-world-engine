@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { Brush, Evaluator, SUBTRACTION, HOLLOW_SUBTRACTION } from 'three-bvh-csg';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makePresetMaterial } from './presets.js';
-import { makeTransmissionMaterial } from './transmission.js';
 import { mergeIntoLibrary } from '../../shared/ops.js';
 
 // the mesh single-part-vs-parts convention, decided once
@@ -28,27 +29,23 @@ export function tubeRadii(part) {
 
 const geometryCache = new Map();
 const materialCache = new Map();
+const modelCache = new Map();
+const modelSkinnedCache = new Map();
+const textureCache = new Map();
+const modelLoader = new GLTFLoader();
 
 const GEOMETRY_FIELDS = [
-  'shape', 'size', 'radius', 'radiusTop', 'radiusBottom', 'height', 'open', 'tube', 'segments',
+  'shape', 'src', 'size', 'radius', 'radiusTop', 'radiusBottom', 'height', 'open', 'tube', 'segments',
   'thetaStart', 'thetaLength', 'radialSegments',
   'path', 'radii', 'tubularSegments', 'closed', 'inside', 'wobble', 'wobbleScale',
   'carve',
 ];
 const MATERIAL_FIELDS = [
-  'preset', 'color', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
+  'preset', 'color', 'map', 'normalMap', 'normalScale', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
   'opacity', 'fog', 'tip', 'speed', 'glowStrength', 'beamStrength', 'sparkle', 'sky', 'glint', 'lines',
   'fadeAbove', 'flicker',
   'horizon', 'bands', 'bright', 'sunPos', 'sunColor', 'sunGlow', 'sunRadius', 'noiseScale', 'cover',
   'waveHeight', 'waveScale', 'crest', 'haze', 'blockSize', 'grout', 'grain', 'doubleSide',
-  // nebula (§IRON NEBULA, presets.js): `norm` carries the shell radius on
-  // purpose — putting the geometry field `radius` in this list would give
-  // every differently-sized sphere in the world its own material.
-  'norm', 'seed', 'arms', 'thick', 'warp', 'warpScale', 'skew', 'octaves', 'rough', 'freq',
-  'gain', 'floor', 'lane', 'laneScale', 'laneSoft', 'laneOctaves', 'laneCut', 'laneOnly',
-  'transmission',
-  'facing', 'far', 'farMean', 'farGain', 'edge', 'accent', 'accentMix', 'accent2', 'accent2Mix',
-  'warm', 'mode', 'hole', 'spin', 'squash', 'armCount', 'armSharp', 'armFloor', 'lopsided', 'coreFall', 'hot', 'hotColor', 'hotFall', 'near', 'rimEnd', 'laneNeed', 'laneNeedSoft',
 ];
 
 function recipeKey(part, fields) {
@@ -182,8 +179,163 @@ function buildBaseGeometry(part) {
     }
     case 'tube':
       return buildTubeGeometry(part);
+    case 'model':
+      // Runtime model parts are built asynchronously in view.js. If a model
+      // part reaches a generic geometry caller (palette ghosts, old tools,
+      // or editor carves), answer with the same placeholder convention rather
+      // than throwing through the render path.
+      return new THREE.BoxGeometry(...(part.placeholderSize ?? part.size ?? [1, 1, 1]));
     default:
       return new THREE.BoxGeometry(...(part.size ?? [1, 1, 1]));
+  }
+}
+
+// ---- model assets -----------------------------------------------------------
+//
+// `shape: "model"` parts share one loaded GLB scene per src. Instances clone
+// the object graph, but geometries/materials are the SAME objects under every
+// clone, marked userData.shared so normal teardown never disposes them.
+// Loaded GLB lights/cameras are intentionally stripped: scene light SETs are
+// shader-cache keys in the WebGPU renderer, so a model file must not smuggle
+// runtime lights into the world.
+
+export function loadModel(src) {
+  if (!src) return Promise.reject(new Error('model part needs src'));
+  if (!modelCache.has(src)) {
+    const promise = modelLoader
+      .loadAsync(assetUrl(src))
+      .then((gltf) => {
+        const root = gltf.scene ?? new THREE.Group();
+        const strip = [];
+        root.traverse((obj) => {
+          if (obj.isLight || obj.isCamera) strip.push(obj);
+          if (!obj.isMesh) return;
+          if (obj.geometry) obj.geometry.userData.shared = true;
+          markSharedMaterial(obj.material);
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+        });
+        for (const obj of strip) obj.parent?.remove(obj);
+        root.updateMatrixWorld(true);
+        // Instancing templates: merge every sub-mesh sharing a material (and
+        // attribute layout) into ONE baked geometry. Landmark GLBs carry
+        // thousands of sub-meshes; without merging each becomes its own
+        // InstancedMesh pool (observed: 13k pools -> WebGPU device loss).
+        const templates = [];
+        {
+          const groups = new Map();
+          root.traverse((obj) => {
+            if (obj.isMesh && obj.geometry && !Array.isArray(obj.material)) {
+              const g = obj.geometry.clone().applyMatrix4(obj.matrixWorld);
+              const sig = `${Object.keys(g.attributes).sort().join(',')}|${g.index ? 'i' : 'n'}`;
+              const key = `${obj.material.uuid}|${sig}`;
+              let entry = groups.get(key);
+              if (!entry) { entry = { material: obj.material, geoms: [] }; groups.set(key, entry); }
+              entry.geoms.push(g);
+            }
+          });
+          for (const entry of groups.values()) {
+            const merged = entry.geoms.length === 1 ? entry.geoms[0] : mergeGeometries(entry.geoms, false);
+            if (!merged) {
+              // layout mismatch despite signature — fall back to per-mesh templates
+              for (const g of entry.geoms) templates.push({ geometry: g, material: entry.material, matrix: new THREE.Matrix4() });
+              continue;
+            }
+            if (entry.geoms.length > 1) for (const g of entry.geoms) g.dispose();
+            merged.userData.shared = true;
+            templates.push({ geometry: merged, material: entry.material, matrix: new THREE.Matrix4() });
+          }
+        }
+        const box = new THREE.Box3().setFromObject(root);
+        const size = box.isEmpty() ? new THREE.Vector3(1, 1, 1) : box.getSize(new THREE.Vector3());
+        const center = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
+        return { src, root, box, size, center, templates };
+      })
+      .catch((err) => {
+        modelCache.delete(src);
+        throw err;
+      });
+    modelCache.set(src, promise);
+  }
+  return modelCache.get(src);
+}
+
+// `animated: true` model parts: a skinned character's SkinnedMesh/Skeleton
+// bindings must survive intact — the instancing path above merges every
+// sub-mesh into baked static templates, which throws that binding away. This
+// loader keeps the loaded scene graph exactly as parsed (lights/cameras
+// still stripped, same shared-material convention) and hands back the raw
+// AnimationClips alongside it; view.js clones a fresh instance per entity
+// with SkeletonUtils.clone (the generic Object3D clone does not re-parent
+// skinned bones) and drives its own THREE.AnimationMixer.
+export function loadModelSkinned(src) {
+  if (!src) return Promise.reject(new Error('model part needs src'));
+  if (!modelSkinnedCache.has(src)) {
+    const promise = modelLoader
+      .loadAsync(assetUrl(src))
+      .then((gltf) => {
+        const root = gltf.scene ?? new THREE.Group();
+        const strip = [];
+        root.traverse((obj) => {
+          if (obj.isLight || obj.isCamera) strip.push(obj);
+          if (!obj.isMesh) return;
+          if (obj.geometry) obj.geometry.userData.shared = true;
+          markSharedMaterial(obj.material);
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+        });
+        for (const obj of strip) obj.parent?.remove(obj);
+        root.updateMatrixWorld(true);
+        return { src, scene: root, animations: gltf.animations ?? [] };
+      })
+      .catch((err) => {
+        modelSkinnedCache.delete(src);
+        throw err;
+      });
+    modelSkinnedCache.set(src, promise);
+  }
+  return modelSkinnedCache.get(src);
+}
+
+function assetUrl(src) {
+  if (!src?.startsWith?.('/assets/')) return src;
+  const port = typeof __GAIA_PORT__ !== 'undefined' ? __GAIA_PORT__ : location.port;
+  return `${location.protocol}//${location.hostname}:${port}${src}`;
+}
+
+function loadPartTexture(url, { srgb = true } = {}) {
+  // normal/data maps are linear by spec — a separate cache slot per colorspace,
+  // the same file can legitimately serve as both
+  const key = srgb ? url : `${url}#linear`;
+  if (!textureCache.has(key)) {
+    const tex = new THREE.TextureLoader().load(assetUrl(url));
+    tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.flipY = false; // GLB/GLTF UV convention — these maps dress converted model meshes
+    tex.anisotropy = 4;
+    textureCache.set(key, tex);
+  }
+  return textureCache.get(key);
+}
+
+export function cloneModel(asset) {
+  const clone = asset.root.clone(true);
+  clone.traverse((obj) => {
+    if (!obj.isMesh) return;
+    if (obj.geometry) obj.geometry.userData.shared = true;
+    markSharedMaterial(obj.material);
+    obj.castShadow = true;
+    obj.receiveShadow = true;
+  });
+  return clone;
+}
+
+export function markSharedMaterial(material) {
+  const materials = Array.isArray(material) ? material : [material];
+  for (const mat of materials) {
+    if (!mat) continue;
+    mat.userData ??= {};
+    mat.userData.shared = true;
   }
 }
 
@@ -298,6 +450,10 @@ export function mergeMaterial(name, value) {
   mergeIntoLibrary(materialLibrary, name, value);
 }
 
+export function libraryMaterialDoc(name) {
+  return typeof name === 'string' ? materialLibrary[name] ?? null : null;
+}
+
 function resolveMaterial(part) {
   const doc = typeof part.material === 'string' ? materialLibrary[part.material] : null;
   return doc ? { ...doc, ...part } : part;
@@ -316,8 +472,6 @@ export function makePartMaterial(part) {
 }
 
 function buildPartMaterial(part) {
-  const transmission = makeTransmissionMaterial(part);
-  if (transmission) return transmission;
   if (part.preset) {
     const preset = makePresetMaterial(part);
     if (preset) {
@@ -349,6 +503,11 @@ function buildPartMaterial(part) {
   // doubleSide: shells seen from both worlds (the crater: pale rock outside,
   // near-black inside — the ZONE lighting does the painting, not the part)
   if (part.doubleSide) material.side = THREE.DoubleSide;
+  if (typeof part.map === 'string') material.map = loadPartTexture(part.map);
+  if (typeof part.normalMap === 'string') {
+    material.normalMap = loadPartTexture(part.normalMap, { srgb: false });
+    if (part.normalScale != null) material.normalScale = new THREE.Vector2(part.normalScale, part.normalScale);
+  }
   return material;
 }
 

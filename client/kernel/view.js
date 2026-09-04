@@ -1,15 +1,28 @@
 import * as THREE from 'three/webgpu';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { buildTerrainMesh, heightAt, registerTerrain, unregisterTerrain } from './terrain.js';
-import { makeGeometry, makePartMaterial, disposeOwn, partsOf } from './geometry.js';
+import { makeGeometry, makePartMaterial, disposeOwn, partsOf, loadModel, loadModelSkinned, cloneModel, libraryMaterialDoc } from './geometry.js';
 import { SKY_PRESETS } from './presets.js';
 import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
+import { hasMotion } from '../../shared/motion.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
+import { InstancedModels } from './instanced-models.js';
+import { resolveRainBones } from './rain-body.js';
+import { ImpostorCache, bucketOf, projectedExtents } from './impostors.js';
 
-// nebula-cull scratch (see cullFadedClouds)
-const _cullPos = new THREE.Vector3();
-const _cullAt = new THREE.Vector3();
+// `mesh.parts[].animated: true` picks skinned playback (below) instead of
+// the static instancing path — `auto` gait picks a clip from the entity's
+// own measured speed the same way vrm.js's locomotion nerve does.
+function autoClipName(auto, speed) {
+  if (!auto) return null;
+  const idleBelow = auto.idleBelow ?? 0.1;
+  const runAbove = auto.runAbove ?? 2.5;
+  if (speed >= runAbove && auto.run) return auto.run;
+  if (speed <= idleBelow) return auto.idle ?? auto.walk ?? auto.run ?? null;
+  return auto.walk ?? auto.idle ?? auto.run ?? null;
+}
 
 // In the node renderer the SET of scene lights is part of every material's
 // shader cache key (LightsNode hashes light.id + castShadow) — adding or
@@ -44,6 +57,18 @@ export class View {
     this.camera = camera;
     this.renderer = renderer;
     this.groups = new Map();
+    this.motion = new Map();
+    this.smoothTau = 0.12;
+    this.snapTransforms = false;
+    this.instancedModels = new InstancedModels(this.scene);
+    // sprite impostors: OFF until a scene declares `impostors` (see
+    // client/kernel/impostors.js). Holders registered here are swapped to
+    // billboards once their model has loaded, and only re-rendered when the
+    // camera crosses an angle bucket.
+    this.impostors = new ImpostorCache({ renderer: this.renderer, spec: null });
+    this.impostorHolders = new Set();
+    this.impostorBatches = new Map(); // cache cell -> one InstancedMesh draw
+    this.impostorViewKey = null;
     // under a camera rig the protagonist is the BODY, not the lens: the own
     // presence renders (showOwnBody), follows the player at frame rate (the
     // 300ms presence trickle is for everyone else), and carries its light on
@@ -63,6 +88,15 @@ export class View {
     this.showQueue = [];
     this.lightSpecs = new Map(); // id -> point light spec, pool-assigned by distance
     this.slotById = new Map(); // id -> pool slot currently lighting it
+    this.modelWarmPromises = new Map(); // src -> Promise that has drawn the GLB once
+    // skinned `animated: true` model parts: entityId -> { holder, mixer,
+    // clips (name -> AnimationClip), actions (name -> AnimationAction),
+    // current (playing clip name), spec (the `animation` component doc),
+    // acc (step-quantization budget), lastPos (smoothed-speed sample).
+    // Self-heals like instancedModels — updateAnimatedModels() prunes any
+    // entry whose holder is no longer attached to the scene, so a despawn
+    // (which never walks this map directly) still lets go of it.
+    this.animatedModels = new Map();
     // component indexes for the per-frame ground/water pipeline — the player
     // asks every frame, so it must never scan the whole entity map
     this.colliderIds = new Set();
@@ -111,6 +145,7 @@ export class View {
     this.sounds.get(id)?.dispose();
     this.sounds.delete(id);
     this.releaseSlot(id);
+    if (this.instancedModels) this.instancedModels.markDirty();
   }
 
   show(id) {
@@ -121,6 +156,7 @@ export class View {
     this.buildVersion++;
     const components = this.store.get(id);
     if (components?.sound) this.applySound(id, group, components.sound);
+    if (this.instancedModels) this.instancedModels.markDirty();
   }
 
   queueBuild(id) {
@@ -132,8 +168,37 @@ export class View {
   // time-sliced streaming: a scene coming in never drops a frame — builds
   // run against a per-frame millisecond deadline, weighted by mesh-part
   // count (pipelines were all warmed at load; first-draw setup wasn't)
-  update() {
-    this.cullFadedClouds();
+  update(dt) {
+    if (dt === undefined) {
+      const now = performance.now();
+      dt = Math.min(0.1, Math.max(0, (now - (this.lastUpdate ?? now)) / 1000));
+      this.lastUpdate = now;
+    }
+    let eased = false;
+    for (const [id, m] of this.motion) {
+      const group = this.groups.get(id);
+      if (!group) {
+        this.motion.delete(id);
+        continue;
+      }
+      eased = true;
+      const k = 1 - Math.exp(-dt / this.smoothTau);
+      group.position.x += (m.x - group.position.x) * k;
+      group.position.z += (m.z - group.position.z) * k;
+      if (m.grounded) group.position.y = heightAt(group.position.x, group.position.z) + m.groundOffset;
+      else group.position.y += (m.y - group.position.y) * k;
+      let dy = m.ry - group.rotation.y;
+      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      group.rotation.y += dy * k;
+      group.rotation.x = m.rx;
+      group.rotation.z = m.rz;
+      if (Math.hypot(m.x - group.position.x, m.z - group.position.z) < 0.01 && Math.abs(dy) < 0.01) {
+        group.position.set(m.x, m.grounded ? heightAt(m.x, m.z) + m.groundOffset : m.y, m.z);
+        group.rotation.set(m.rx, m.ry, m.rz);
+        this.motion.delete(id);
+      }
+    }
+    if (eased && this.instancedModels) this.instancedModels.markDirty();
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
       this.hide(this.hideQueue.shift());
@@ -161,14 +226,19 @@ export class View {
       if (own) {
         if (this.showOwnBody && this.player) {
           if (!own.userData.hidden) own.visible = true;
-          own.position.copy(this.player.position);
-          own.rotation.y = this.player.bodyYaw;
+          const pose = this.player.vehicle ? this.player.drivePose : null;
+          own.position.copy(pose?.position ?? this.player.position);
+          // glTF model front is +Z; GAIA forward at yaw 0 is -Z (the same
+          // convention the path behavior resolves via atan2(dx,dz)) — flip.
+          own.rotation.y = (pose?.yaw ?? this.player.bodyYaw) + Math.PI;
         } else {
           own.visible = false;
         }
       }
     }
     this.updateLights();
+    this.instancedModels.sync();
+    this.syncImpostors();
   }
 
   handle(event) {
@@ -241,6 +311,10 @@ export class View {
     };
     const seen = new Set();
     for (const { part, instanced } of parts) {
+      if (part.shape === 'model') {
+        this.warmModelSource(part.src);
+        continue;
+      }
       const material = makePartMaterial(part);
       const key = instanced ? material.uuid + 'i' : material.uuid;
       if (seen.has(key)) continue;
@@ -270,6 +344,47 @@ export class View {
       holder.traverse((node) => disposeOwn(node));
     };
     requestAnimationFrame(tick);
+  }
+
+  warmModelSource(src) {
+    if (!src || !this.scene) return Promise.resolve();
+    if (this.modelWarmPromises.has(src)) return this.modelWarmPromises.get(src);
+    const promise = loadModel(src)
+      .then((asset) => {
+        const probe = cloneModel(asset);
+        probe.name = `model-warm:${src}`;
+        // out of sight but unculled — the normal animation loop renders this
+        // through the real post chain before any visible instance swaps in.
+        probe.position.set(0, -800, 0);
+        probe.traverse((node) => {
+          if (node.isMesh) {
+            node.frustumCulled = false;
+            node.castShadow = true;
+            node.receiveShadow = true;
+          }
+        });
+        this.scene.add(probe);
+        return new Promise((resolve) => {
+          let framesLeft = 2;
+          const tick = () => {
+            if (--framesLeft > 0) {
+              requestAnimationFrame(tick);
+              return;
+            }
+            this.scene.remove(probe);
+            disposeObject(probe);
+            resolve(asset);
+          };
+          requestAnimationFrame(tick);
+        });
+      })
+      .catch((err) => {
+        this.modelWarmPromises.delete(src);
+        console.warn('[gaia] model load failed', src, err);
+        throw err;
+      });
+    this.modelWarmPromises.set(src, promise);
+    return promise;
   }
 
   buildAnimated(id) {
@@ -380,8 +495,20 @@ export class View {
         if (!this.suppressed.has(id)) this.applyTransform(id);
         break;
       case 'mesh':
-        this.applyMesh(group, value);
+        group.userData.dynamic = Boolean(components.behavior);
+        this.applyMesh(group, value, id);
         this.buildVersion++;
+        break;
+      case 'behavior': {
+        const dynamic = Boolean(value);
+        if (dynamic !== Boolean(group.userData.dynamic)) {
+          group.userData.dynamic = dynamic;
+          if (components.mesh) this.applyMesh(group, components.mesh, id);
+        }
+        break;
+      }
+      case 'animation':
+        this.applyAnimation(id, value);
         break;
       case 'light':
         this.applyLight(id, group, value);
@@ -411,7 +538,20 @@ export class View {
       case 'presence':
         // other players' bodies face their published yaw (your own body
         // follows the local player in update() at frame rate instead)
-        if (id !== this.ownPresence && value?.yaw !== undefined) group.rotation.y = value.yaw;
+        if (id !== this.ownPresence && value?.yaw !== undefined) {
+          const yawT = value.yaw + Math.PI; // +Z-front models vs -Z GAIA forward
+          const m = this.motion.get(id);
+          if (m) m.ry = yawT;
+          else if (this.warming || this.snapTransforms) group.rotation.y = yawT;
+          else {
+            const ground = this.store.get(id)?.ground;
+            this.motion.set(id, {
+              x: group.position.x, y: group.position.y, z: group.position.z,
+              rx: group.rotation.x, ry: yawT, rz: group.rotation.z,
+              grounded: !!ground, groundOffset: ground?.offset ?? 0,
+            });
+          }
+        }
         break;
     }
   }
@@ -445,42 +585,38 @@ export class View {
 
   applyTransform(id) {
     const group = this.groups.get(id);
+    const first = !group.userData.base;
     const components = this.store.get(id);
     const t = components.transform ?? {};
     const [x, y, z] = t.position ?? [0, 0, 0];
     const py = components.ground ? heightAt(x, z) + (components.ground.offset ?? 0) : y;
-    group.position.set(x, py, z);
     const [rx, ry, rz] = t.rotation ?? [0, 0, 0];
-    group.rotation.set(rx, ry, rz);
     const s = t.scale ?? 1;
     if (Array.isArray(s)) group.scale.set(s[0], s[1], s[2]);
     else group.scale.setScalar(s);
     group.userData.base = { position: [x, py, z], rotation: [rx, ry, rz], scale: s };
-  }
-
-  // §IRON NEBULA CULL. A nebula quad fades out below its `near` range (a cloud
-  // you are INSIDE is fog, not a cloud) — but a fully transparent full-screen
-  // quad still shades every one of its fragments, and 3 of them cost ~12 fps at
-  // the close framing (measured: probe c2-d42 35.7 fps with the fade alone).
-  // Alpha 0 is not free; not drawing is. Culling is by the mesh's own centre
-  // distance, which is exactly what the shader's fade uses, so a quad can never
-  // pop: it is already invisible at the moment it stops being drawn.
-  cullFadedClouds() {
-    const list = this.nebulaQuads;
-    if (!list?.length || !this.camera) return;
-    const cam = this.camera.getWorldPosition(_cullPos);
-    for (const q of list) {
-      if (!q.mesh.parent) continue;
-      const d = q.mesh.getWorldPosition(_cullAt).distanceTo(cam);
-      q.mesh.visible = d > q.near0;
+    if (
+      first ||
+      this.warming ||
+      this.snapTransforms ||
+      id === this.ownPresence ||
+      hasMotion(this.store.get(id)) ||
+      Math.hypot(x - group.position.x, py - group.position.y, z - group.position.z) > 6
+    ) {
+      group.position.set(x, py, z);
+      group.rotation.set(rx, ry, rz);
+      this.motion.delete(id);
+    } else {
+      this.motion.set(id, { x, y: py, z, rx, ry, rz, grounded: !!components.ground, groundOffset: components.ground?.offset ?? 0 });
     }
+    if (this.instancedModels) this.instancedModels.markDirty();
   }
 
-  applyMesh(group, recipe) {
-    if (this.nebulaQuads?.length) this.nebulaQuads = this.nebulaQuads.filter((q) => q.mesh.parent && q.mesh.parent !== group);
+  applyMesh(group, recipe, id) {
     for (const child of [...group.children]) {
       if (child.userData.kind === 'mesh-part') {
         if (child.userData.vrm) liveVrms.delete(child.userData.vrm);
+        if (child.userData.animated && id !== undefined) this.animatedModels.delete(id);
         disposeObject(child);
         group.remove(child);
       }
@@ -489,6 +625,7 @@ export class View {
       liveVrms.delete(group.userData.vrm);
       delete group.userData.vrm;
     }
+    delete group.userData.rainBody;
     if (!recipe) return;
     // VRM avatar source: `mesh.vrm = { src, edits }` — the whole avatar mounts
     // as one mesh-part child so the primitive dispose/rebuild path owns it.
@@ -526,6 +663,11 @@ export class View {
       if (!recipe.parts) return; // pure-VRM recipe: no primitive parts to build
     }
     for (const part of partsOf(recipe)) {
+      if (part.shape === 'model') {
+        if (part.animated) this.applyAnimatedModelPart(group, part, id);
+        else this.applyModelPart(group, part);
+        continue;
+      }
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
       // preset parts (water, flame, glow, hologram) are visual, not walkable
       // by default — but an explicit solid wins either way: architectural
@@ -543,19 +685,363 @@ export class View {
       }
       mesh.castShadow = part.castShadow ?? true;
       mesh.receiveShadow = true;
-      // renderOrder: transparent parts that SHARE a centre (nested nebula
-      // shells) have no distance to sort by, so three's back-to-front order
-      // between them is arbitrary — and a dust-lane shell drawn BEFORE the
-      // glow it is supposed to occlude gets washed out by the additive pass.
-      // Authors state the stack explicitly instead.
-      if (part.renderOrder !== undefined) mesh.renderOrder = part.renderOrder;
-      // nebula quads with a near-fade join the cull list (see cullFadedClouds)
-      if (part.preset === 'nebula' && Array.isArray(part.near) && part.near[1] > part.near[0]) {
-        (this.nebulaQuads ??= []).push({ mesh, near0: part.near[0] });
-      }
       mesh.userData.kind = 'mesh-part';
       group.add(mesh);
     }
+  }
+
+  // A scene turns impostors on/off and tunes them; any declared change rebuilds
+  // the batches, so a world can safely tune size/alpha without stale sprites.
+  configureImpostors(spec) {
+    this.impostors.configure(spec);
+    this.impostorViewKey = null;
+    if (!this.impostors.enabled) this.restoreImpostors();
+  }
+
+  registerImpostor(holder, src) {
+    // Record the holder even when the system is off: a holder that kept its own
+    // clone (the non-instanced path) can be swapped later, so a runtime toggle
+    // works. Holders built while off went down the instancing path and simply
+    // have no source to render from -- syncImpostors skips them.
+    holder.userData.impostorSrc = src;
+    this.impostorHolders.add(holder);
+    this.impostorViewKey = null; // force a pass
+    return true;
+  }
+
+  // Every cache cell becomes one InstancedMesh. The old path made one mesh
+  // per holder, turning 330 geometry draws into 2,754 sprite draws; that is
+  // an impostor-shaped regression, not an impostor system.
+  disposeImpostorBatches() {
+    for (const batch of this.impostorBatches.values()) {
+      this.scene.remove(batch);
+      batch.geometry.dispose();
+      batch.material.dispose?.();
+    }
+    this.impostorBatches.clear();
+  }
+
+  faceImpostorBatches() {
+    const matrix = new THREE.Matrix4();
+    for (const batch of this.impostorBatches.values()) {
+      for (let i = 0; i < batch.userData.instances.length; i++) {
+        const instance = batch.userData.instances[i];
+        matrix.compose(instance.position, this.camera.quaternion, instance.scale);
+        batch.setMatrixAt(i, matrix);
+      }
+      batch.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  // Only a new angle/animation cell re-renders a source. A continuous camera
+  // turn merely rotates existing instance matrices.
+  syncImpostors() {
+    if (!this.impostors.enabled || !this.camera) return;
+    const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+    const view = { yaw: e.y, pitch: e.x };
+    const cache = this.impostors;
+    const bucket = bucketOf(cache.spec, view);
+    const cellKey = `${cache.spec.tile}|${bucket.yawBucket}|${bucket.pitchBucket}|${this.impostorHolders.size}`;
+    if (cellKey === this.impostorViewKey) {
+      this.faceImpostorBatches();
+      return;
+    }
+    this.impostorViewKey = cellKey;
+    this.disposeImpostorBatches();
+    const cells = new Map();
+    for (const holder of [...this.impostorHolders]) {
+      if (!holder.parent) {
+        this.impostorHolders.delete(holder);
+        continue;
+      }
+      const source = holder.userData.impostorSource ?? holder.children.find((c) => c.userData.kind !== 'impostor');
+      if (!source) continue;
+      holder.userData.impostorSource = source;
+      if (holder.userData.impostorSourceVisible === undefined) holder.userData.impostorSourceVisible = source.visible;
+      source.visible = holder.userData.impostorSourceVisible;
+      const box = new THREE.Box3().setFromObject(source);
+      if (box.isEmpty()) continue;
+      const dimensions = box.getSize(new THREE.Vector3());
+      const size = dimensions.length();
+      if (size < cache.spec.minSize || (cache.spec.maxSize > 0 && size > cache.spec.maxSize)) continue;
+      const half = dimensions.multiplyScalar(0.5);
+      const ext = projectedExtents({ x: half.x, y: half.y, z: half.z }, view, cache.spec.padding);
+      const acquired = cache.acquire(holder.userData.impostorSrc ?? source.name ?? 'model', source, view);
+      const instances = cells.get(acquired.key) ?? [];
+      instances.push({
+        position: box.getCenter(new THREE.Vector3()),
+        scale: new THREE.Vector3(ext.halfWidth * 2, ext.halfHeight * 2, 1),
+        target: acquired.target,
+      });
+      cells.set(acquired.key, instances);
+      source.visible = false;
+    }
+    for (const [key, instances] of cells) {
+      const prototype = cache.billboard(instances[0].target, 1, 1);
+      const batch = new THREE.InstancedMesh(prototype.geometry, prototype.material, instances.length);
+      batch.userData.kind = 'impostor-batch';
+      batch.userData.instances = instances;
+      batch.frustumCulled = false;
+      this.scene.add(batch);
+      this.impostorBatches.set(key, batch);
+    }
+    this.faceImpostorBatches();
+  }
+
+  restoreImpostors() {
+    this.disposeImpostorBatches();
+    for (const holder of this.impostorHolders) {
+      if (holder.userData.impostorSource) holder.userData.impostorSource.visible = holder.userData.impostorSourceVisible ?? true;
+      holder.userData.impostorMesh = null; // compatibility with pre-batch sessions
+    }
+    this.impostors.clear();
+  }
+
+  applyModelPart(group, part) {
+    const holder = new THREE.Group();
+    holder.userData.kind = 'mesh-part';
+    holder.userData.model = true;
+    holder.userData.solid = part.solid !== undefined ? !!part.solid : !part.preset;
+    holder.userData.src = part.src;
+    holder.position.set(...(part.position ?? [0, 0, 0]));
+    holder.rotation.set(...(part.rotation ?? [0, 0, 0]));
+    if (part.scale) {
+      if (Array.isArray(part.scale)) holder.scale.set(...part.scale);
+      else holder.scale.setScalar(part.scale);
+    }
+    holder.castShadow = part.castShadow ?? true;
+    holder.receiveShadow = true;
+    if (part.visible === false) holder.visible = false;
+
+    const placeholder = new THREE.Mesh(
+      makeGeometry({ shape: 'box', size: part.placeholderSize ?? part.size ?? [1, 1, 1] }),
+      makePartMaterial({ color: part.color ?? '#66aaff', roughness: 0.85, metalness: 0 }),
+    );
+    placeholder.name = `${part.src ?? 'model'} placeholder`;
+    placeholder.userData.kind = 'model-placeholder';
+    placeholder.userData.solid = holder.userData.solid;
+    placeholder.castShadow = part.castShadow ?? true;
+    placeholder.receiveShadow = true;
+    holder.add(placeholder);
+    group.add(holder);
+
+    loadModel(part.src)
+      .then((asset) => this.warmModelSource(part.src).then(() => asset))
+      .then((asset) => {
+        if (holder.parent !== group) return; // superseded while loading/warming
+        const doc = libraryMaterialDoc(part.material);
+        // instancing and impostors are rival batching strategies for the same
+        // holder: an InstancedMesh has no per-holder object to hide, so when a
+        // scene declares impostors the sprite path wins and this holder keeps
+        // its own clone (which the impostor renders from, then hides).
+        if (!this.impostors.enabled && !group.userData.dynamic && holder.userData.solid === false && asset.templates?.length && asset.templates.every((t) => !Array.isArray(t.material))) {
+          const override = doc && doc.map ? makePartMaterial({ material: part.material }) : null;
+          const materialKey = doc && doc.map ? part.material : '';
+          for (const child of [...holder.children]) {
+            disposeObject(child);
+            holder.remove(child);
+          }
+          this.instancedModels.register(holder, {
+            src: part.src,
+            templates: asset.templates,
+            material: override,
+            materialKey,
+            castShadow: part.castShadow ?? true,
+          });
+          this.buildVersion++;
+          return;
+        }
+        const model = cloneModel(asset);
+        if (doc && doc.map) {
+          const override = makePartMaterial({ material: part.material });
+          model.traverse((node) => {
+            if (node.isMesh) node.material = Array.isArray(node.material) ? node.material.map(() => override) : override;
+          });
+        }
+        model.name = part.src;
+        model.traverse((node) => {
+          if (!node.isMesh) return;
+          node.castShadow = part.castShadow ?? true;
+          node.receiveShadow = true;
+          node.userData.solid = holder.userData.solid;
+        });
+        for (const child of [...holder.children]) {
+          disposeObject(child);
+          holder.remove(child);
+        }
+        holder.add(model);
+        this.registerImpostor(holder, part.src);
+        this.buildVersion++;
+      })
+      .catch(() => {
+        // Keep the placeholder visible and walkable; warmModelSource already
+        // logged the failing src once.
+      });
+  }
+
+  // `mesh.parts[].animated: true` — a skinned character. No instancing (that
+  // path bakes sub-meshes into templates and throws the SkinnedMesh binding
+  // away): each entity gets its OWN clone via SkeletonUtils.clone (the only
+  // clone that re-parents bones correctly) and its own AnimationMixer.
+  // `variant`: the glb may carry several outfit meshes on one skeleton
+  // (Mesh, Mesh.001…) — showing only the named one is how one file plays
+  // nine bodies.
+  applyAnimatedModelPart(group, part, id) {
+    const holder = new THREE.Group();
+    holder.userData.kind = 'mesh-part';
+    holder.userData.model = true;
+    holder.userData.animated = true;
+    holder.userData.solid = part.solid !== undefined ? !!part.solid : !part.preset;
+    holder.userData.src = part.src;
+    holder.position.set(...(part.position ?? [0, 0, 0]));
+    holder.rotation.set(...(part.rotation ?? [0, 0, 0]));
+    if (part.scale) {
+      if (Array.isArray(part.scale)) holder.scale.set(...part.scale);
+      else holder.scale.setScalar(part.scale);
+    }
+    holder.castShadow = part.castShadow ?? true;
+    holder.receiveShadow = true;
+    if (part.visible === false) holder.visible = false;
+
+    const placeholder = new THREE.Mesh(
+      makeGeometry({ shape: 'box', size: part.placeholderSize ?? part.size ?? [1, 1, 1] }),
+      makePartMaterial({ color: part.color ?? '#66aaff', roughness: 0.85, metalness: 0 }),
+    );
+    placeholder.name = `${part.src ?? 'model'} placeholder`;
+    placeholder.userData.kind = 'model-placeholder';
+    placeholder.userData.solid = holder.userData.solid;
+    placeholder.castShadow = part.castShadow ?? true;
+    placeholder.receiveShadow = true;
+    holder.add(placeholder);
+    group.add(holder);
+
+    loadModelSkinned(part.src)
+      .then((asset) => {
+        if (holder.parent !== group) return; // superseded while loading
+        const model = cloneSkinned(asset.scene);
+        model.name = part.src;
+        model.traverse((node) => {
+          if (!node.isMesh) return;
+          node.castShadow = part.castShadow ?? true;
+          node.receiveShadow = true;
+          node.userData.solid = holder.userData.solid;
+          if (part.variant) node.visible = node.name === part.variant;
+        });
+        for (const child of [...holder.children]) {
+          disposeObject(child);
+          holder.remove(child);
+        }
+        holder.add(model);
+        if (part.proprio) group.userData.rainBody = { bones: resolveRainBones(model, part.proprio) };
+        const mixer = new THREE.AnimationMixer(model);
+        const clips = new Map(asset.animations.map((c) => [c.name, c]));
+        const entry = {
+          holder,
+          mixer,
+          clips,
+          actions: new Map(),
+          current: null,
+          acc: 0,
+          spec: group.userData.animationSpec ?? {},
+          lastPos: null,
+        };
+        this.animatedModels.set(id, entry);
+        this.driveAnimationEntry(entry, 0);
+        this.buildVersion++;
+      })
+      .catch((err) => {
+        console.warn('[gaia] skinned model load failed', part.src, err);
+      });
+  }
+
+  // the `animation` component: read like every other component, applied
+  // both to a live registry entry (immediate crossfade) and stashed on the
+  // group (spec.clip that arrives before the async skinned load resolves —
+  // the entry reads it back at creation time, mirroring the vrm.animation
+  // race the same recipe already handles).
+  applyAnimation(id, value) {
+    const group = this.groups.get(id);
+    if (group) group.userData.animationSpec = value ?? null;
+    const entry = this.animatedModels.get(id);
+    if (!entry) return;
+    entry.spec = value ?? {};
+    entry.acc = 0;
+    this.driveAnimationEntry(entry, entry.lastPos?.speed ?? 0);
+  }
+
+  // explicit `clip` always wins; otherwise `auto` picks idle/walk/run from
+  // the entity's measured speed. Clip changes crossfade over `fade`
+  // (mirrors vrm.js's playClip: reset+play the incoming action, crossFadeTo
+  // it from whatever was playing).
+  driveAnimationEntry(entry, speed) {
+    const spec = entry.spec ?? {};
+    const name = spec.clip ?? autoClipName(spec.auto, speed);
+    if (!name || name === entry.current) return;
+    const clip = entry.clips.get(name);
+    if (!clip) {
+      console.warn('[gaia] animation clip not found', name, '- have:', [...entry.clips.keys()]);
+      return;
+    }
+    let action = entry.actions.get(name);
+    if (!action) {
+      action = entry.mixer.clipAction(clip);
+      entry.actions.set(name, action);
+    }
+    action.loop = spec.loop === 'once' ? THREE.LoopOnce : THREE.LoopRepeat;
+    action.clampWhenFinished = spec.loop === 'once';
+    action.timeScale = spec.speed ?? 1;
+    const prevAction = entry.current && entry.actions.get(entry.current);
+    if (prevAction && prevAction !== action) {
+      action.reset();
+      prevAction.crossFadeTo(action, spec.fade ?? 0.2, false);
+      action.play();
+    } else {
+      action.reset().play();
+    }
+    entry.current = name;
+  }
+
+  // per-frame tick, called from main.js next to updateVrms(dt). Prunes any
+  // entry whose holder fell off the scene graph (despawn never walks this
+  // map directly — the same lazy self-heal instancedModels.sync() uses),
+  // measures horizontal speed off the owning entity's group for `auto`,
+  // then advances the mixer either smoothly or step-quantized.
+  updateAnimatedModels(dt) {
+    for (const [id, entry] of this.animatedModels) {
+      if (!this.isAttachedToScene(entry.holder)) {
+        this.animatedModels.delete(id);
+        continue;
+      }
+      const group = this.groups.get(id);
+      let speed = 0;
+      if (group && dt > 0) {
+        const p = group.position;
+        const last = entry.lastPos;
+        if (last) {
+          const raw = Math.hypot(p.x - last.x, p.z - last.z) / Math.max(dt, 1e-4);
+          const alpha = Math.min(1, dt / 0.25); // ~0.25s smoothing window
+          speed = last.speed + (raw - last.speed) * alpha;
+        }
+        entry.lastPos = { x: p.x, z: p.z, speed };
+      }
+      this.driveAnimationEntry(entry, speed);
+      const step = entry.spec?.step ?? 0;
+      if (step <= 0) {
+        entry.mixer.update(dt);
+      } else {
+        entry.acc += dt;
+        const q = 1 / step;
+        while (entry.acc >= q) {
+          entry.mixer.update(q);
+          entry.acc -= q;
+        }
+      }
+    }
+  }
+
+  isAttachedToScene(obj) {
+    for (let o = obj; o; o = o.parent) if (o === this.scene) return true;
+    return false;
   }
 
   applyLight(id, group, value) {
@@ -708,6 +1194,7 @@ export class View {
   }
 
   remove(id) {
+    this.motion.delete(id);
     const group = this.groups.get(id);
     if (!group) return;
     this.sounds.get(id)?.dispose();
@@ -717,9 +1204,21 @@ export class View {
     this.releaseSlot(id);
     this.particleSystems.delete(id);
     unregisterTerrain(group);
+    // Holders are registered outside the entity map. Purge them before their
+    // entity graph is disposed: otherwise rebuildAll leaves dead source graphs
+    // in the sprite pass and silently doubles both instances and draw calls.
+    let removedImpostor = false;
+    group.traverse((node) => {
+      if (this.impostorHolders.delete(node)) removedImpostor = true;
+    });
+    if (removedImpostor) {
+      this.impostorViewKey = null;
+      this.disposeImpostorBatches();
+    }
     disposeObject(group);
     this.scene.remove(group);
     this.groups.delete(id);
+    if (this.instancedModels) this.instancedModels.markDirty();
   }
 
   // analytic walkable boxes from `collider` components — the reliable path
@@ -772,7 +1271,7 @@ export class View {
 
   // blocker boxes (`blocker: true` in a collider) push a body out
   // horizontally — cave walls, railings. Mutates `position` in place.
-  resolveBlockers(position, eyeHeight) {
+  resolveBlockers(position, eyeHeight, velocity = null) {
     const feet = position.y - eyeHeight;
     const head = position.y + 0.2;
     const r = 0.35;
@@ -781,29 +1280,61 @@ export class View {
       if (!boxes) continue;
       const group = this.groups.get(id);
       if (!group) continue;
-      const yaw = group.rotation.y;
-      const cos = Math.cos(yaw);
-      const sin = Math.sin(yaw);
+      const groupYaw = group.rotation.y;
+      const groupCos = Math.cos(groupYaw);
+      const groupSin = Math.sin(groupYaw);
+      // Collider boxes live in entity-local coordinates. Mirror/non-uniform
+      // transform scale must affect both their bounds and the push-out vector.
+      const scaleX = group.scale.x;
+      const scaleY = group.scale.y;
+      const scaleZ = group.scale.z;
+      if (Math.abs(scaleX) < 1e-9 || Math.abs(scaleY) < 1e-9 || Math.abs(scaleZ) < 1e-9) continue;
+      const absX = Math.abs(scaleX);
+      const absY = Math.abs(scaleY);
+      const absZ = Math.abs(scaleZ);
       for (const box of boxes) {
         if (!box.blocker) continue;
         const [bx, by, bz] = box.position ?? [0, 0, 0];
         const [sx, sy, sz] = box.size ?? [1, 1, 1];
-        const top = group.position.y + by + sy / 2;
-        const bottom = group.position.y + by - sy / 2;
+        const boxYaw = box.rotation?.[1] ?? 0;
+        const boxCos = Math.cos(boxYaw);
+        const boxSin = Math.sin(boxYaw);
+        const top = group.position.y + by * scaleY + sy * absY / 2;
+        const bottom = group.position.y + by * scaleY - sy * absY / 2;
         if (feet >= top - 0.05 || head <= bottom) continue;
-        const wx = position.x - group.position.x;
-        const wz = position.z - group.position.z;
-        const lx = wx * cos - wz * sin;
-        const lz = wx * sin + wz * cos;
-        const px = sx / 2 + r - Math.abs(lx - bx);
-        const pz = sz / 2 + r - Math.abs(lz - bz);
+        const pxWorld = position.x - group.position.x;
+        const pzWorld = position.z - group.position.z;
+        const gx = (pxWorld * groupCos - pzWorld * groupSin) / scaleX;
+        const gz = (pxWorld * groupSin + pzWorld * groupCos) / scaleZ;
+        const dx = gx - bx;
+        const dz = gz - bz;
+        const lx = dx * boxCos - dz * boxSin;
+        const lz = dx * boxSin + dz * boxCos;
+        const px = sx / 2 + r / absX - Math.abs(lx);
+        const pz = sz / 2 + r / absZ - Math.abs(lz);
         if (px <= 0 || pz <= 0) continue;
         let ox = 0;
         let oz = 0;
-        if (px < pz) ox = lx > bx ? px : -px;
-        else oz = lz > bz ? pz : -pz;
-        position.x += ox * cos + oz * sin;
-        position.z += -ox * sin + oz * cos;
+        if (px * absX < pz * absZ) ox = lx > 0 ? px : -px;
+        else oz = lz > 0 ? pz : -pz;
+        const groupX = ox * boxCos + oz * boxSin;
+        const groupZ = -ox * boxSin + oz * boxCos;
+        const wx = groupX * scaleX * groupCos + groupZ * scaleZ * groupSin;
+        const wz = -groupX * scaleX * groupSin + groupZ * scaleZ * groupCos;
+        position.x += wx;
+        position.z += wz;
+        if (velocity) {
+          const len = Math.hypot(wx, wz);
+          if (len >= 1e-9) {
+            const nx = wx / len;
+            const nz = wz / len;
+            const dot = velocity.x * nx + velocity.z * nz;
+            if (dot < 0) {
+              velocity.x -= nx * dot;
+              velocity.z -= nz * dot;
+            }
+          }
+        }
       }
     }
   }
@@ -840,7 +1371,10 @@ export class View {
     this._rayOrigin.set(x, fromY, z);
     this._surfaceRay.set(this._rayOrigin, this._down);
     this._surfaceRay.far = 80;
-    const hits = this._surfaceRay.intersectObjects(candidates, false);
+    // primitive parts are direct Meshes; model parts are direct Groups whose
+    // loaded GLB meshes sit below them, so recurse only across this already
+    // filtered candidate set.
+    const hits = this._surfaceRay.intersectObjects(candidates, true);
     return hits.length ? hits[0].point.y : null;
   }
 

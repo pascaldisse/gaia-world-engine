@@ -1,13 +1,16 @@
 import * as THREE from 'three/webgpu';
+import { animatedPosition, hasMotion } from '../../shared/motion.js';
 import { matchesWhen } from '../../shared/ops.js';
+import { pointToInteractDistance } from '../../shared/collider.js';
 import { r2 } from '../../shared/num.js';
+import { heightAt } from './terrain.js';
 
 // Always-on hands: look at a thing, E to grab, scroll to push/pull, E to drop.
 // A carry is a stream of merge ops — every other client (and agent) sees it live.
 // Entities with an `interact` component answer E differently: a `use` op goes
 // to the server, which decides what happens — the only hands a game world has.
 export class Interact {
-  constructor({ camera, scene, store, view, send, sendDev, player, hintEl, history, presence }) {
+  constructor({ camera, scene, store, view, send, sendDev, player, hintEl, history, presence, clock }) {
     this.camera = camera;
     this.scene = scene;
     this.store = store;
@@ -21,6 +24,7 @@ export class Interact {
     this.hintEl = hintEl;
     this.history = history;
     this.presence = presence;
+    this.clock = clock;
     this.grabStart = null;
     this.raycaster = new THREE.Raycaster();
     this.raycaster.far = 40;
@@ -37,7 +41,8 @@ export class Interact {
 
     document.addEventListener('keydown', (e) => {
       if (e.code !== 'KeyE' || !this.player.locked || this.player.editorMode) return;
-      if (this.holding) this.drop();
+      if (this.player.vehicle) this.carExit();
+      else if (this.holding) this.drop();
       else if (this.usable) this.use(this.usable);
       else if (!this.player.gameMode && this.hovered) this.grab(this.hovered);
     });
@@ -68,8 +73,9 @@ export class Interact {
 
   // under a camera rig there is no look-ray to aim — the BODY picks: the
   // nearest usable interactable whose radius covers where the body stands.
-  // Same 3D eye-to-origin distance the server checks (minus its 2m slack),
-  // so the prompt never promises what the server would refuse.
+  // Interact radii are body-space: using the eye's y here made a player beside
+  // a ground-level car appear 1.7m farther away than their body actually is.
+  // The server's range check retains its eye-height slack.
   pickByBody() {
     let best = null;
     const p = this.player.position;
@@ -78,7 +84,13 @@ export class Interact {
       if (!act) continue;
       const group = this.view.getGroup(id);
       if (!group || group.userData.hidden) continue;
-      const d = Math.hypot(group.position.x - p.x, group.position.y - p.y, group.position.z - p.z);
+      const pos = hasMotion(comps)
+        ? animatedPosition(comps, this.clock?.now() ?? 0, heightAt)
+        : [group.position.x, group.position.y, group.position.z];
+      // measure to the collider SURFACE (blocker box), not the pivot — a car's
+      // hull holds the body ~1.8m off the origin, so a pivot check with radius
+      // 1.3 could never fire. Falls back to horizontal origin distance.
+      const d = pointToInteractDistance(p, comps, pos);
       if (d > (act.radius ?? 4)) continue;
       if (act.when && !this.matches(act.when)) continue;
       if (!best || d < best.distance) best = { id, distance: d };
@@ -101,6 +113,10 @@ export class Interact {
 
   use(id) {
     this.send([{ op: 'use', id, by: this.presence }]);
+  }
+
+  carExit() {
+    this.send([{ op: 'carexit', by: this.presence }]);
   }
 
   grab(id) {
@@ -193,7 +209,9 @@ export class Interact {
   }
 
   updateHint() {
-    const text = this.holding
+    const text = this.player.vehicle
+      ? 'driving — E exit'
+      : this.holding
       ? `holding ${this.holding} — E drop · scroll push/pull`
       : this.usable
         ? `${this.usePrompt} — E`

@@ -61,7 +61,8 @@ export class Effects {
         this.scene.remove(wisp);
         wisp.geometry.dispose();
         wisp.material.dispose();
-        this.audio?.blip(620 + Math.random() * 260);
+        // engine owns no sound: the world declares `wisp` or it stays silent
+        this.audio?.event('wisp', { hint: { freq: 620 + Math.random() * 260 } });
         done?.();
       },
     });

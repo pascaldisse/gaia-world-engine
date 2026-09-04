@@ -47,7 +47,9 @@ export class Shading {
       group.traverse((node) => {
         if (!node.isMesh || node.userData.shadingMode === this.mode) return;
         node.userData.litMaterial ??= node.material;
-        node.material = this.derive(node.userData.litMaterial, this.mode);
+        node.material = Array.isArray(node.userData.litMaterial)
+          ? node.userData.litMaterial.map((mat) => this.derive(mat, this.mode))
+          : this.derive(node.userData.litMaterial, this.mode);
         node.userData.shadingMode = this.mode;
       });
     }

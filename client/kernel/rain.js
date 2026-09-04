@@ -30,9 +30,12 @@ const cm = (m) => Math.round(m * 100);
 // Measured facing: the direction the SKELETON faces, from the shoulder line
 // (up × left→right), projected to the ground plane. Independent of every
 // rotation variable the animator sets — pure observation.
-function measuredFacing(vrm) {
-  const l = vrm.humanoid?.getRawBoneNode('leftUpperArm');
-  const r = vrm.humanoid?.getRawBoneNode('rightUpperArm');
+function bodyBone(body, semantic) {
+  return body.vrm ? body.vrm.humanoid?.getRawBoneNode(semantic) : body.bones?.[semantic];
+}
+function measuredFacing(body) {
+  const l = bodyBone(body, body.vrm ? 'leftUpperArm' : 'leftShoulder');
+  const r = bodyBone(body, body.vrm ? 'rightUpperArm' : 'rightShoulder');
   if (!l || !r) return null;
   l.getWorldPosition(_a);
   r.getWorldPosition(_b);
@@ -64,18 +67,22 @@ function grid(chans, rows) {
 }
 
 export function makeRain({ store, view }) {
-  const vrmOf = (id) => view.getGroup(id)?.userData?.vrm ?? null;
+  const bodyOf = (id) => {
+    const group = view.getGroup(id);
+    const vrm = group?.userData?.vrm;
+    const body = vrm ? { vrm } : group?.userData?.rainBody;
+    return group && body ? { group, body } : null;
+  };
 
   // ---- proprio: the body, sampled over time --------------------------------
   async function proprio(id, { ticks = 20, hz = 10 } = {}) {
-    const group = view.getGroup(id);
-    const vrm = vrmOf(id);
-    if (!group || !vrm) return `#rain proprio ${id} !NOBODY`;
-    const bone = (n) => vrm.humanoid?.getRawBoneNode(n);
-    const hips = bone('hips');
-    // ground truth is the sole: prefer toe bones (~2cm up) over ankles (~10cm)
-    const lf = bone('leftToes') ?? bone('leftFoot');
-    const rf = bone('rightToes') ?? bone('rightFoot');
+    const found = bodyOf(id);
+    if (!found) return `#rain proprio ${id} !NOBODY`;
+    const { group, body } = found;
+    const hips = bodyBone(body, 'hips');
+    // VRM has normalized toe/foot semantics; generic GLBs bind world-declared soles.
+    const lf = body.vrm ? bodyBone(body, 'leftToes') ?? bodyBone(body, 'leftFoot') : bodyBone(body, 'leftFoot');
+    const rf = body.vrm ? bodyBone(body, 'rightToes') ?? bodyBone(body, 'rightFoot') : bodyBone(body, 'rightFoot');
     const chans = ['t', 'px', 'pz', 'spd', 'hdg', 'fac', 'err', 'hipY', 'LFy', 'RFy', 'LFf', 'RFf'];
     const rows = [];
     let last = null;
@@ -90,7 +97,7 @@ export function makeRain({ store, view }) {
         spd = cm(d * hz);
         if (d > 0.005) heading = Math.atan2(dx, dz);
       }
-      const fac = measuredFacing(vrm);
+      const fac = measuredFacing(body);
       const hdgD = heading === null ? null : deg(heading);
       const facD = fac === null ? null : deg(fac);
       const err = hdgD === null || facD === null ? '·' : wrap180(facD - hdgD);
@@ -138,7 +145,8 @@ export function makeRain({ store, view }) {
     if (!group) return `#rain fov ${id} !NOBODY`;
     const pos = group.getWorldPosition(new THREE.Vector3());
     const vrm = group.userData?.vrm;
-    const facing = (vrm && measuredFacing(vrm)) ?? group.rotation.y;
+    const rainBody = group.userData?.rainBody;
+    const facing = (vrm && measuredFacing({ vrm })) ?? (rainBody && measuredFacing(rainBody)) ?? group.rotation.y;
     const facD = deg(facing);
     const rows = [];
     for (const [eid, comps] of store.entities) {

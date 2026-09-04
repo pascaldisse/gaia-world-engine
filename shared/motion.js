@@ -17,20 +17,82 @@ function pathLegs(b, pts) {
   const speed = b.speed ?? 2;
   const cached = legsCache.get(b);
   if (cached && cached.pts === pts && cached.speed === speed) return cached;
-  const legs = []; // { dwell: pause at the leg's start point, travel: seconds underway }
+  const legs = []; // { dwell: pause at the leg's start point, travel: seconds underway, dist: leg length in meters }
   let total = 0;
   for (let i = 1; i < pts.length; i++) {
     const dwell = pts[i - 1][3] ?? 0;
-    const travel =
-      Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]) /
-      Math.max(0.01, speed);
-    legs.push({ dwell, travel });
+    const dist = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1], pts[i][2] - pts[i - 1][2]);
+    const travel = dist / Math.max(0.01, speed);
+    legs.push({ dwell, travel, dist });
     total += dwell + travel;
   }
   total += pts[pts.length - 1][3] ?? 0; // looping: pause at the end too
   const entry = { pts, speed, legs, total };
   legsCache.set(b, entry);
   return entry;
+}
+
+// pure polyline geometry — no time, no speed, no dwells — the single source
+// of truth for "how long is this path" and "where is arc-length s along it".
+// Shared by the time-parameterized walk below (arcAtTime) and by anything
+// that just wants a fixed spot on the path (paused entries, scrubbing).
+// Cached per points array; ops replace the array wholesale like `b` above.
+const lengthCache = new WeakMap();
+export function pathLength(points) {
+  const cached = lengthCache.get(points);
+  if (cached !== undefined) return cached;
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(
+      points[i][0] - points[i - 1][0],
+      points[i][1] - points[i - 1][1],
+      points[i][2] - points[i - 1][2]
+    );
+  }
+  lengthCache.set(points, total);
+  return total;
+}
+
+export function pointAtArc(points, s) {
+  if (!points.length) return [0, 0, 0];
+  if (points.length === 1) return [points[0][0], points[0][1], points[0][2]];
+  const total = pathLength(points);
+  let d = total ? ((s % total) + total) % total : 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const c = points[i];
+    const legLen = Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+    if (d <= legLen || i === points.length - 1) {
+      const k = legLen ? Math.min(1, d / legLen) : 1;
+      return [a[0] + (c[0] - a[0]) * k, a[1] + (c[1] - a[1]) * k, a[2] + (c[2] - a[2]) * k];
+    }
+    d -= legLen;
+  }
+  const last = points[points.length - 1];
+  return [last[0], last[1], last[2]];
+}
+
+// the time-domain walk (dwells + travel, `start`/`loop`/`phase`) collapsed
+// to "how far along the polyline, in meters, is this behavior right now" —
+// exactly the parameter the old inline code derived before interpolating
+// a position from it. Position/heading now read that arc length instead of
+// re-deriving it, so there is one source of truth for the walk.
+export function arcAtTime(b, time) {
+  const pts = b.points ?? [];
+  if (pts.length < 2) return 0;
+  const { legs, total } = pathLegs(b, pts);
+  let t = Math.max(0, time - (b.start ?? 0)) + (b.phase ?? 0);
+  if (b.loop) t = total ? ((t % total) + total) % total : 0;
+  else t = Math.min(t, total);
+  let cum = 0;
+  for (let i = 0; i < legs.length; i++) {
+    if (t < legs[i].dwell) return cum;
+    t -= legs[i].dwell;
+    if (t < legs[i].travel) return cum + legs[i].dist * (legs[i].travel ? Math.min(1, t / legs[i].travel) : 1);
+    t -= legs[i].travel;
+    cum += legs[i].dist;
+  }
+  return cum;
 }
 
 export function animatedPosition(comps, time, heightFn) {
@@ -51,34 +113,13 @@ export function animatedPosition(comps, time, heightFn) {
       // moment (triggers stamp $now), loop:false parks at the last point.
       // A waypoint's 4th number is a dwell: seconds parked there before
       // moving on — ferry stops. The walk is time-parameterized so dwells
-      // and travel share one clock (phase is seconds too).
+      // and travel share one clock (phase is seconds too). `paused` freezes
+      // the entry at a fixed arc-length (`pausedAt`, meters) regardless of
+      // time — the mover's own pause/resume state, not a global stop.
       const pts = b.points ?? [];
       if (pts.length >= 2) {
-        const { legs, total } = pathLegs(b, pts);
-        let t = Math.max(0, time - (b.start ?? 0)) + (b.phase ?? 0);
-        if (b.loop) t = total ? ((t % total) + total) % total : 0;
-        else t = Math.min(t, total);
-        let seg = legs.length - 1;
-        let k = 1;
-        for (let i = 0; i < legs.length; i++) {
-          if (t < legs[i].dwell) {
-            seg = i;
-            k = 0;
-            break;
-          }
-          t -= legs[i].dwell;
-          if (t < legs[i].travel) {
-            seg = i;
-            k = legs[i].travel ? Math.min(1, t / legs[i].travel) : 1;
-            break;
-          }
-          t -= legs[i].travel;
-        }
-        const a = pts[seg];
-        const c = pts[seg + 1];
-        x = a[0] + (c[0] - a[0]) * k;
-        y = a[1] + (c[1] - a[1]) * k;
-        z = a[2] + (c[2] - a[2]) * k;
+        const s = b.paused ? (b.pausedAt ?? 0) : arcAtTime(b, time);
+        [x, y, z] = pointAtArc(pts, s);
         if (b.ground && heightFn) y = heightFn(x, z) + (b.height ?? 0);
       }
     } else if (b.type === 'bob') {

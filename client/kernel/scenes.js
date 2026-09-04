@@ -7,11 +7,13 @@ import { mergeIntoLibrary } from '../../shared/ops.js';
 // Streaming is invisible — scenes are built before they can be seen or
 // entered, and builds are time-sliced in the view.
 export class Scenes {
-  constructor({ store, view, environment, onCamera }) {
+  constructor({ store, view, environment, onCamera, onLocomotion, onImpostors }) {
     this.store = store;
     this.view = view;
     this.environment = environment;
     this.onCamera = onCamera;
+    this.onImpostors = onImpostors;
+    this.onLocomotion = onLocomotion;
     this.raw = null; // the world file as authored — what the editor edits
     this.index = null;
     this.current = null;
@@ -73,6 +75,8 @@ export class Scenes {
     if (changed) {
       this.applyEnvironment(first);
       this.applyCamera();
+      this.applyLocomotion();
+      this.applyImpostors();
       this.view.updateAmbience();
     }
   }
@@ -89,6 +93,34 @@ export class Scenes {
       }
     }
     this.onCamera?.(spec && spec.mode !== 'first' ? spec : null);
+  }
+
+  // and the same rule for sprite impostors: a scene's `impostors` component
+  // declares whether its models are drawn as runtime-generated billboards and
+  // how they are bucketed. Scenes without one render plain geometry.
+  applyImpostors() {
+    let spec = null;
+    for (const comps of this.store.entities.values()) {
+      if (comps.impostors && comps.scene?.name === this.current) {
+        spec = comps.impostors;
+        break;
+      }
+    }
+    this.onImpostors?.(spec ?? null);
+  }
+
+  // same rule for move speeds: a scene's `locomotion` component (on its
+  // environment entity) tunes the local player's walk/run/backward factor;
+  // scenes without one keep the engine defaults
+  applyLocomotion() {
+    let spec = null;
+    for (const comps of this.store.entities.values()) {
+      if (comps.locomotion && comps.scene?.name === this.current) {
+        spec = comps.locomotion;
+        break;
+      }
+    }
+    this.onLocomotion?.(spec ?? null);
   }
 
   // crossing into a scene adopts its mood — crossfaded, so a seam is a slow

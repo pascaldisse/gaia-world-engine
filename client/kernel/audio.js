@@ -30,6 +30,7 @@ export class AudioEngine {
     this.listener = rampOnlyWhenMoved(new THREE.AudioListener());
     camera.add(this.listener);
     this.buffers = new Map();
+    this.eventSpecs = null; // world-declared event soundscape; null = silence
     this.master = null;
     this.muted = false;
     document.addEventListener('click', () => {
@@ -324,37 +325,30 @@ export class AudioEngine {
     if (audio) setTimeout(() => group.remove(audio), ((spec.delay ?? 0) + attack + decay + 1) * 1000);
   }
 
-  blip(freq = 740, level = 0.16) {
-    this.oneShot({ freq, level, attack: 0.015, decay: 0.5, reverb: 0.15 });
+  // ---- world-declared event soundscape ---------------------------------
+  // The engine owns NO sounds. A world declares every event sound it wants in
+  // world.json under `audio.events`: { <eventName>: [ <oneShot spec>, ... ] }.
+  // An undeclared event is SILENCE - that is the contract, not a fallback.
+  setEvents(events) {
+    this.eventSpecs = events && typeof events === 'object' ? events : null;
   }
 
-  splash(level = 1) {
-    this.oneShot({ wave: 'noise', lowpass: 1400, sweep: 220, attack: 0.02, decay: 0.9, level: 0.4 * level, reverb: 0.4 });
-    this.oneShot({ freq: 180, freqEnd: 60, attack: 0.01, decay: 0.35, level: 0.18 * level, reverb: 0.2 });
-  }
-
-  thunder(intensity = 0.7, delay = 1.6) {
-    this.ensureGraph();
-    const ctx = this.listener.context;
-    if (ctx.state !== 'running') return;
-    this.oneShot({
-      wave: 'noise',
-      lowpass: 900,
-      sweep: 48,
-      attack: 0.06,
-      decay: 3.2 + intensity * 2,
-      level: 0.5 * intensity,
-      reverb: 0.8,
-      delay,
-    });
-    this.oneShot({
-      freq: 46,
-      freqEnd: 26,
-      attack: 0.05,
-      decay: 1.5,
-      level: 0.22 * intensity,
-      reverb: 0.3,
-      delay,
-    });
+  // play a world-declared event. `scale` multiplies declared levels (weather
+  // intensity etc.); `delay`/`hint` only FILL fields the world left out, so
+  // declared values always win and the world stays authoritative.
+  event(name, { scale = 1, delay, hint = null, group = null } = {}) {
+    const specs = this.eventSpecs?.[name];
+    if (!specs) return 0;
+    const list = Array.isArray(specs) ? specs : [specs];
+    let played = 0;
+    for (const spec of list) {
+      if (!spec || typeof spec !== 'object') continue;
+      const merged = { ...(hint ?? {}), ...spec };
+      if (delay !== undefined && merged.delay === undefined) merged.delay = delay;
+      if (scale !== 1) merged.level = (merged.level ?? 0.2) * scale;
+      this.oneShot(merged, spec.positional === false ? null : group);
+      played++;
+    }
+    return played;
   }
 }

@@ -43,10 +43,25 @@ function stripComment(line) {
 }
 
 function prepareLines(lines) {
-  return lines
-    .map(raw => stripComment(raw.replace(/\t/g, '  ')))
-    .filter(line => line.trim().length > 0)
-    .map(line => ({ indent: countIndent(line), text: line.trim() }));
+  const out = [];
+  let pending = null, depth = 0, quote = null;
+  for (const raw of lines) {
+    const line = stripComment(raw.replace(/\t/g, '  '));
+    if (!line.trim()) continue;
+    if (!pending) pending = { indent: countIndent(line), text: line.trim() };
+    else pending.text += ' ' + line.trim();
+    const flow = depth > 0 || /(?:^[-]\s+|:\s*)[\[{]/.test(line.trim());
+    if (flow) for (let i=0; i<line.length; i++) {
+      const c=line[i];
+      if ((c === '"' || c === "'") && line[i-1] !== '\\') { quote=quote===c?null:(quote??c); continue; }
+      if (quote) continue;
+      if (c==='{' || c==='[') depth++;
+      else if(c==='}' || c===']') depth--;
+    }
+    if (depth <= 0) { out.push(pending); pending=null; depth=0; quote=null; }
+  }
+  if (pending) throw new Error('unterminated Unity YAML flow collection');
+  return out;
 }
 
 function findTopLevelColon(s) {

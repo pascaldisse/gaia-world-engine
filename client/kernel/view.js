@@ -393,10 +393,12 @@ export class View {
     const components = this.store.get(id);
     // hidden builds (spawn into a streamed-out scene) materialize silently
     if (!group || group.userData.hidden || !this.effects || components?.terrain || id === this.ownPresence) return;
+    group.userData.groundTransient = true;
     group.visible = false;
     this.effects.wispTo(group.position.clone(), () => {
-      group.visible = true;
-      this.effects.scaleIn(group);
+      if (this.groups.get(id) !== group || !this.store.get(id)) return;
+      group.visible = !group.userData.hidden;
+      this.effects.scaleIn(group, () => { group.userData.groundTransient = false; });
     });
   }
 
@@ -1232,7 +1234,8 @@ export class View {
   groundEntityEligible(id, group, excludeIds, exclude = this.ownPresence) {
     const comps = this.store.get(id);
     return id !== exclude && !excludeIds?.has(id) && !!comps &&
-      !!group && group.parent === this.scene && !group.userData.hidden && this.isActive(comps);
+      !!group && group.parent === this.scene && !group.userData.hidden &&
+      !group.userData.groundTransient && this.isActive(comps);
   }
 
   walkableAt(x, z, maxTop = Infinity, { excludeIds } = {}) {

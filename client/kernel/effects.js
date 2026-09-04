@@ -68,7 +68,7 @@ export class Effects {
     });
   }
 
-  scaleIn(group) {
+  scaleIn(group, done) {
     const target = group.scale.clone();
     group.scale.setScalar(0.001);
     this.tween({
@@ -77,7 +77,7 @@ export class Effects {
         const e = Math.max(0.001, easeOutBack(k));
         group.scale.set(target.x * e, target.y * e, target.z * e);
       },
-      done: () => group.scale.copy(target),
+      done: () => { group.scale.copy(target); done?.(); },
     });
   }
 

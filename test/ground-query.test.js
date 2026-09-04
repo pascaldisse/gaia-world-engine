@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import * as THREE from 'three/webgpu';
 import { View } from '../client/kernel/view.js';
 import { Player } from '../client/kernel/player.js';
+import { Effects } from '../client/kernel/effects.js';
 
 function fixture() {
   const store = { entities: new Map(), get(id) { return this.entities.get(id); }, onChange() {} };
@@ -83,6 +84,21 @@ describe('ground queries — generic scene graph / actual Three raycasts', () =>
     expect(player.driveGroundAt(0, 0, 1.7)).toEqual(player.groundAt(0, 0, 1.7));
     player.vehicle = null;
     expect(player.groundAt(0, 0, 1.7).y).toBeCloseTo(0.6);
+  });
+
+  test('spawn wisp/scale transients become support only after the real effect completes', () => {
+    const { view, store, scene } = fixture();
+    view.effects = new Effects({ scene });
+    store.entities.set('deck', { mesh: { parts: [{ shape: 'box', size: [4, 0.2, 4], solid: true }] }, collider: { boxes: [{ size: [4, 0.2, 4] }] } });
+    view.indexEntity('deck', store.get('deck'));
+    view.buildAnimated('deck');
+    expect(view.surfaceAt(0, 0, 2)).toBeNull();
+    expect(view.walkableAt(0, 0, 2)).toBeNull();
+    view.effects.update(0.55);
+    expect(view.surfaceAt(0, 0, 2)).toBeNull();
+    view.effects.update(0.4);
+    expect(view.surfaceAt(0, 0, 2)).toBeCloseTo(0.1);
+    expect(view.walkableAt(0, 0, 2)?.id).toBe('deck');
   });
 
   test('Float32 mesh seam does not erase an analytic platform identity', () => {

@@ -83,3 +83,38 @@ test('§7.3 legacy Prefab container is not an unresolved instance',async()=>{
  const r=await composeScene(o.scene,{unityProjectRoot:o.projectRoot,guids:{}},o.outDir);
  expect(r.ir.documentCount).toBe(3);expect(r.ir.prefabInstances).toHaveLength(0);expect(r.unresolved).toHaveLength(0);
 });
+test('§7.3 multiline flow reference retains following override fields',async()=>{
+ const {parseUnityYamlBody}=await import('../tools/unity/unity-yaml.mjs');
+ const p=parseUnityYamlBody(['PrefabInstance:','  mods:','  - target: {fileID: 1234567890123456789, guid: '+guid+',','      type: 3}','    propertyPath: boundsSize.x','    value: 1.8957732','    objectReference: {fileID: 0}']);
+ expect(p.PrefabInstance.mods[0].target.fileID).toBe('1234567890123456789');
+ expect(p.PrefabInstance.mods[0].propertyPath).toBe('boundsSize.x');
+ expect(p.PrefabInstance.mods[0].value).toBe(1.8957732);
+});
+test('§7.4 extracts serialized environment into explicit output',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const o=setup(direct+'--- !u!104 &10\nRenderSettings:\n  m_Fog: 1\n  m_FogDensity: 0.025\n  m_Sun: {fileID: 11}\n--- !u!108 &11\nLight:\n  m_GameObject: {fileID: 1}\n  m_Type: 1\n  m_Intensity: 2\n  m_Color: {r: 1, g: 0.5, b: 0.2, a: 1}\n');
+ const file=path.join(o.outDir,'environment.json');const r=spawnSync(process.execPath,[path.join(engine,'tools/unity/extract-env.mjs'),o.projectRoot,'--scene',o.scene,'--out',file],{encoding:'utf8'});
+ expect(r.status).toBe(0);const env=JSON.parse(fs.readFileSync(file));expect(env.renderSettings.fogDensity).toBe(0.025);expect(env.directionalLights[0].intensity).toBe(2);
+});
+test('§7.5-6 asset-only pass suppresses control plane; subsequent emit writes generic world',async()=>{
+ const {spawnSync}=await import('node:child_process');const o=setup();
+ fs.mkdirSync(o.outDir,{recursive:true});
+ const db=path.join(o.outDir,'guids.json');writeJSON(db,{unityProjectRoot:o.projectRoot,guids:{}});
+ const {ir}=await composeScene(o.scene,{unityProjectRoot:o.projectRoot,guids:{}},o.outDir);
+ const world=path.join(o.outDir,'world');
+ const argv=[path.join(engine,'tools/unity/emit.mjs'),path.join(o.outDir,'scene.ir.json'),world,'--guids',db];
+ const prepare=spawnSync(process.execPath,[...argv,'--prepare-assets'],{encoding:'utf8'});expect(prepare.status).toBe(0);
+ expect(fs.existsSync(path.join(world,'world.json'))).toBe(false);expect(fs.existsSync(path.join(world,'assets/models/models.json'))).toBe(true);
+ const emit=spawnSync(process.execPath,[...argv,'--reuse-models'],{encoding:'utf8'});expect(emit.status).toBe(0);
+ expect(fs.existsSync(path.join(world,'world.json'))).toBe(true);expect(fs.existsSync(path.join(world,'game.json'))).toBe(false);
+ expect(Object.keys(JSON.parse(fs.readFileSync(path.join(world,'scenes/test.json'))))).not.toContain('safezone-police-station');
+});
+test('§7.8 audit reports missing assets, prefabs, scenes and invalid GLBs',async()=>{
+ const {auditWorld}=await import('../tools/unity/audit.mjs');const o=setup();
+ writeJSON(path.join(o.outDir,'world.json'),{scenes:{missing:{}}});
+ writeJSON(path.join(o.outDir,'scenes/test.json'),{entity:{prefab:'absent',mesh:{parts:[{src:'/assets/no.glb'}]}}});
+ fs.mkdirSync(path.join(o.outDir,'assets'));fs.writeFileSync(path.join(o.outDir,'assets/bad.glb'),'broken');
+ const r=auditWorld(o.outDir,{requiredFiles:['vehicles.json']});
+ expect(r.errors.map(e=>e.kind).sort()).toEqual(['invalid-glb','missing-asset','missing-prefab','missing-required-file','missing-scene']);
+ expect(r.counts.entities).toBe(1);expect(r.capabilities.runtime).toBe('UNVERIFIED');
+});

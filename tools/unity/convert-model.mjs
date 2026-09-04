@@ -3,7 +3,6 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { xxh64, signed, parseMetaRecycleNames, safeBase as sharedSafeBase } from './fileid.mjs';
 
@@ -20,7 +19,7 @@ function die(message, code = 1) {
 
 function usage() {
   console.log(`Usage:
-  node tools/unity/convert-model.mjs <in.fbx> <out.glb> [--materials <dir>] [--unity-root <project>]
+  node tools/unity/convert-model.mjs <in.fbx> <out.glb> [--materials <dir>] [--unity-root <project>] [--texture-aliases <json>]
   node tools/unity/convert-model.mjs --batch [dir] [--out-dir world/assets/models] [--unity-root <project>] [--materials <dir>] [--texture-root <dir>]
   node tools/unity/convert-model.mjs --materials <dir> [--out-dir world/assets/models] [--unity-root <project>]
 
@@ -39,6 +38,7 @@ function parseArgs(argv) {
     else if (a === '--out-dir') args.outDir = path.resolve(argv[++i] ?? die('--out-dir requires a path'));
     else if (a === '--unity-root') args.unityRoot = path.resolve(argv[++i] ?? die('--unity-root requires a path'));
     else if (a === '--materials') args.materials = path.resolve(argv[++i] ?? die('--materials requires a path'));
+    else if (a === '--texture-aliases') args.textureAliases = path.resolve(argv[++i] ?? die('--texture-aliases requires a path'));
     else if (a === '--texture-root') args.textureRoots.push(path.resolve(argv[++i] ?? die('--texture-root requires a path')));
     else if (a === '--guid-db') args.guidDb = path.resolve(argv[++i] ?? die('--guid-db requires a path'));
     else if (a === '--dry-run') args.dryRun = true;
@@ -95,7 +95,7 @@ function convertWithAssimp(bin, inFile, outFile) {
 
 function convertWithBlender(bin, inFile, outFile) {
   mkdirSync(path.dirname(outFile), { recursive: true });
-  const script = path.join(os.tmpdir(), `gaia-fbx2glb-${process.pid}.py`);
+  const script = path.join(path.dirname(outFile), `gaia-fbx2glb-${process.pid}.py`);
   writeFileSync(script, `
 import bpy, sys
 in_file = ${JSON.stringify(inFile)}
@@ -300,6 +300,10 @@ function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null) {
   // TODO: Trim unused meshes/accessors/bufferViews/buffers after the scene is narrowed.
   const outJson = JSON.parse(JSON.stringify(json));
   outJson.nodes = nodes;
+  // Static mesh-subasset export: discarded node graph cannot retain skin or
+  // animation indices. Full animated-model conversion keeps both untouched.
+  delete outJson.skins;
+  delete outJson.animations;
   const sceneIndex = Number.isInteger(outJson.scene) ? outJson.scene : 0;
   if (!outJson.scenes?.length) outJson.scenes = [{}];
   outJson.scene = sceneIndex;
@@ -796,9 +800,9 @@ function resolveTextureViaGuidMap(uri, guidMap, unityRoot) {
   return null;
 }
 
-function makeAdjacentTextures(glbFile, textureRoots, guidMap = null, unityRoot = null) {
+function makeAdjacentTextures(glbFile, textureRoots, guidMap = null, unityRoot = null, aliases = {}) {
   const hasGuidFallback = Boolean(guidMap && guidMap.size);
-  if (!textureRoots.length && !hasGuidFallback) return { rewritten: 0, placeholders: 0, notes: [] };
+  if (!textureRoots.length && !hasGuidFallback && !Object.keys(aliases).length) return { rewritten: 0, placeholders: 0, notes: [] };
   const glb = readGlbJson(glbFile);
   if (!glb?.json?.images?.length) return { rewritten: 0, placeholders: 0, notes: [] };
   const idx = buildTextureIndex(textureRoots);
@@ -808,7 +812,10 @@ function makeAdjacentTextures(glbFile, textureRoots, guidMap = null, unityRoot =
   const notes = [];
   for (const image of glb.json.images) {
     if (!image.uri || image.uri.startsWith('data:')) continue;
-    let src = resolveTextureSource(image.uri, idx);
+    const stem = path.basename(String(image.uri).replaceAll('\\', '/'), path.extname(image.uri));
+    const alias = aliases[stem];
+    let src = alias ? path.resolve(unityRoot ?? '.', alias) : resolveTextureSource(image.uri, idx);
+    if (alias && !existsSync(src)) throw new Error(`declared texture alias missing: ${alias}`);
     if (!src && hasGuidFallback) {
       const fallback = resolveTextureViaGuidMap(image.uri, guidMap, unityRoot);
       if (fallback) {
@@ -953,7 +960,7 @@ function embedSourceMaterialTextures(glbFile, sourceFile, guidMap, unityRoot) {
   };
 }
 
-function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFileID = null, guidMap = null, unityRoot = null) {
+function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFileID = null, guidMap = null, unityRoot = null, aliases = {}) {
   if (!existsSync(inFile)) die(`input model not found: ${inFile}`);
   if (/\.asset$/i.test(inFile)) {
     mkdirSync(path.dirname(outFile), { recursive: true });
@@ -969,7 +976,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
     if (!existsSync(outFile) || statSync(outFile).size === 0) throw new Error(`blend export produced no GLB: ${outFile}`);
     embedSourceMaterialTextures(outFile, inFile, guidMap, unityRoot);
     const doubleSided = makeGlbDoubleSided(outFile);
-    const textures = makeAdjacentTextures(outFile, textureRoots, guidMap, unityRoot);
+    const textures = makeAdjacentTextures(outFile, textureRoots, guidMap, unityRoot, aliases);
     if (meshFileID != null) {
       const metaFile = inFile + '.meta';
       const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
@@ -995,7 +1002,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
       if (/\.fbx$/i.test(inFile)) fixFbxUnitScale(outFile, inFile);
       embedSourceMaterialTextures(outFile, inFile, guidMap, unityRoot);
       const doubleSided = makeGlbDoubleSided(outFile);
-      const textures = makeAdjacentTextures(outFile, textureRoots, guidMap, unityRoot);
+      const textures = makeAdjacentTextures(outFile, textureRoots, guidMap, unityRoot, aliases);
       if (meshFileID != null) {
         const metaFile = inFile + '.meta';
         const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
@@ -1017,7 +1024,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
     if (/\.fbx$/i.test(inFile)) fixFbxUnitScale(outFile, inFile);
     embedSourceMaterialTextures(outFile, inFile, guidMap, unityRoot);
     const doubleSided = makeGlbDoubleSided(outFile);
-    const textures = makeAdjacentTextures(outFile, textureRoots, guidMap, unityRoot);
+    const textures = makeAdjacentTextures(outFile, textureRoots, guidMap, unityRoot, aliases);
     if (meshFileID != null) {
       const metaFile = inFile + '.meta';
       const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
@@ -1122,6 +1129,8 @@ function readGuidDb(file) {
 
 function inferUnityRoot(args, guidMap) {
   if (args.unityRoot) return args.unityRoot;
+  const boomtown = '/Users/pascaldisse/projects/boomtown-rampage';
+  if (existsSync(path.join(boomtown, 'Assets'))) return boomtown;
   for (const e of guidMap.values()) {
     if (e.path && path.isAbsolute(e.path)) {
       const idx = e.path.split(path.sep).lastIndexOf('Assets');
@@ -1347,8 +1356,9 @@ function main() {
       const inFile = path.resolve(args.positional[0]);
       const outFile = path.resolve(args.positional[1]);
       const textureRoots = discoverTextureRoots(args, [inFile]);
-      const r = convertOne(inFile, outFile, null, textureRoots, args.meshFileID, guidMap, unityRoot);
+      const r = convertOne(inFile, outFile, null, textureRoots, args.meshFileID, guidMap, unityRoot, args.textureAliases ? JSON.parse(readFileSync(args.textureAliases, 'utf8')) : {});
       console.log(`converted ${inFile} -> ${outFile} with ${r.converter} (${r.bytes} bytes)`);
+      if (r.textures?.placeholders) console.warn(`convert-model: placeholders=${r.textures.placeholders}`);
       for (const note of r.textures?.notes ?? []) console.log(`  ${note}`);
       const materials = writeMaterials(args.materials, path.dirname(outFile), guidMap, unityRoot);
       if (materials.length) console.log(`wrote ${materials.length} material sidecars under ${path.join(path.dirname(outFile), 'materials')}`);

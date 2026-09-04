@@ -196,7 +196,10 @@ export async function parseFile(scenePath, guidDb) {
   // on the owning PrefabInstance's root-target override. Build this relation
   // before resolving hierarchy so children compose through their real parent.
   const prefabInstances = [];
-  for (const doc of byClass.get(1001) ?? []) prefabInstances.push(buildPrefabInstance(doc, doc.data, guidDb, transforms));
+  for (const doc of byClass.get(1001) ?? []) {
+    if (doc.data.m_IsPrefabParent === 1 && normalizeFileID(doc.data.m_ParentPrefab) === '0') continue;
+    prefabInstances.push(buildPrefabInstance(doc, doc.data, guidDb, transforms));
+  }
   const prefabByTransform = new Map(
     prefabInstances.filter((pi) => pi.transformFileID).map((pi) => [pi.transformFileID, pi]),
   );

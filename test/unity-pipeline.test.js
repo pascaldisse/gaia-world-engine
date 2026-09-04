@@ -78,3 +78,8 @@ test('§7.8 byte diff includes every added, removed and changed path',()=>{
  writeJSON(path.join(a,'edit.json'),1);writeJSON(path.join(b,'edit.json'),2);
  expect(diffTrees(a,b).map(r=>r.change).sort()).toEqual(['added','changed','removed']);
 });
+test('§7.3 legacy Prefab container is not an unresolved instance',async()=>{
+ const o=setup(direct+'--- !u!1001 &100100000\nPrefab:\n  m_IsPrefabParent: 1\n  m_ParentPrefab: {fileID: 0}\n  m_RootGameObject: {fileID: 1}\n');
+ const r=await composeScene(o.scene,{unityProjectRoot:o.projectRoot,guids:{}},o.outDir);
+ expect(r.ir.documentCount).toBe(3);expect(r.ir.prefabInstances).toHaveLength(0);expect(r.unresolved).toHaveLength(0);
+});

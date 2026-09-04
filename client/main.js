@@ -37,7 +37,7 @@ const overlay = document.getElementById('overlay');
 const crosshairEl = document.getElementById('crosshair');
 const hintEl = document.getElementById('hint');
 
-const { renderer, scene, camera, hemi, sun, post, pixels } = await createRenderer();
+const { renderer, scene, camera, hemi, sun, post, pixels, setCameraSpec, getActiveCamera, getCameraSpec, getPixelTargetSize } = await createRenderer();
 const store = new WorldStore();
 const audio = new AudioEngine(camera);
 const effects = new Effects({ scene, audio });
@@ -58,9 +58,11 @@ const scenes = new Scenes({
   environment,
   onCamera: (spec) => {
     player.rig = spec ?? null;
+    setCameraSpec(spec);
     view.showOwnBody = !!spec;
     syncCrosshair();
   },
+  onLocomotion: (spec) => player.setLocomotion(spec),
 });
 const shading = new Shading({ view, renderer });
 const viewFx = new ViewFx({ scene, view, environment, post });
@@ -192,6 +194,7 @@ const netConfig = {
     // the scene was current before its entities existed (setWorld precedes
     // the snapshot apply) — now that they do, derive its camera rig
     scenes.applyCamera();
+    scenes.applyLocomotion();
     countEl.textContent = store.entities.size;
     // while the title menu is up there is no body in the world — the
     // presence spawns when a level is chosen (and re-spawns on reconnect)
@@ -225,6 +228,7 @@ const netConfig = {
       if (op.id === presenceId && op.component === 'warp' && op.value?.position) applyWarp(op.value);
       // a scene's camera rig edited live — re-derive the active one
       if (op.component === 'camera') scenes.applyCamera();
+      if (op.component === 'locomotion') scenes.applyLocomotion();
     }
     panel.refresh(ops);
     econsole.add(ops, from);
@@ -849,6 +853,9 @@ window.gaia = Object.assign(window.gaia ?? {}, {
   store,
   view,
   rain: makeRain({ store, view }),
+  getActiveCamera,
+  getCameraSpec,
+  getPixelTargetSize,
   scenes,
   gizmos,
   outliner,

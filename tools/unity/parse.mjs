@@ -14,19 +14,6 @@ function usage() {
   process.exit(2);
 }
 
-const args = process.argv.slice(2);
-if (!args[0] || args[0] === '-h' || args[0] === '--help') usage();
-const inputPath = path.resolve(args[0]);
-let guidPath = path.join(OUT_DIR, 'guids.json');
-let outPath = null;
-let fullStdout = false;
-for (let i = 1; i < args.length; i++) {
-  if (args[i] === '--guids') guidPath = path.resolve(args[++i] ?? usage());
-  else if (args[i] === '--out') outPath = path.resolve(args[++i] ?? usage());
-  else if (args[i] === '--stdout') fullStdout = true;
-  else usage();
-}
-
 const ZERO_VEC = { x: 0, y: 0, z: 0 };
 const ONE_VEC = { x: 1, y: 1, z: 1 };
 const ID_QUAT = { x: 0, y: 0, z: 0, w: 1 };
@@ -160,7 +147,7 @@ function classKeyForDoc(parsed, className) {
   return keys.length === 1 ? keys[0] : null;
 }
 
-async function parseFile(scenePath, guidDb) {
+export async function parseFile(scenePath, guidDb) {
   const text = await fs.readFile(scenePath, 'utf8');
   const docsRaw = splitUnityDocuments(text);
   const docs = [];
@@ -335,6 +322,20 @@ async function parseFile(scenePath, guidDb) {
   };
 }
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const args = process.argv.slice(2);
+if (!args[0] || args[0] === '-h' || args[0] === '--help') usage();
+const inputPath = path.resolve(args[0]);
+let guidPath = path.join(OUT_DIR, 'guids.json');
+let outPath = null;
+let fullStdout = false;
+for (let i = 1; i < args.length; i++) {
+  if (args[i] === '--guids') guidPath = path.resolve(args[++i] ?? usage());
+  else if (args[i] === '--out') outPath = path.resolve(args[++i] ?? usage());
+  else if (args[i] === '--stdout') fullStdout = true;
+  else usage();
+}
+
 const guidDb = await loadGuidDb(guidPath);
 const ir = await parseFile(inputPath, guidDb);
 if (!outPath) outPath = path.join(OUT_DIR, `${pathBaseNoExt(inputPath)}.ir.json`);
@@ -342,3 +343,5 @@ await fs.mkdir(path.dirname(outPath), { recursive: true });
 await fs.writeFile(outPath, JSON.stringify(ir, null, 2));
 if (fullStdout) console.log(JSON.stringify(ir, null, 2));
 else console.log(JSON.stringify({ out: outPath, source: ir.source, documentCount: ir.documentCount, strippedDocumentCount: ir.strippedDocumentCount, entityCount: ir.entities.length, prefabInstanceCount: ir.prefabInstances.length, renderableEntityCount: ir.stats.renderableEntities }, null, 2));
+
+}

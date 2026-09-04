@@ -123,3 +123,7 @@ test('§7.8 structural diff distinguishes serialization from actual field change
  expect(jsonDifferences({a:1,b:2},{b:2,a:1})).toEqual([]);
  expect(jsonDifferences({a:[1,2]},{a:[1,3],b:4})).toEqual([{pointer:'/a/1',before:2,after:3},{pointer:'/b',before:undefined,after:4}]);
 });
+test('§7.2 GUID kinds preserve model/material/texture discovery contracts',async()=>{
+ const {assetKind}=await import('../tools/unity/pipeline.mjs');
+ expect(assetKind('palette.PNG')).toBe('texture');expect(assetKind('car.fbx')).toBe('model');expect(assetKind('look.mat')).toBe('material');expect(assetKind('logic.cs')).toBe('script');
+});

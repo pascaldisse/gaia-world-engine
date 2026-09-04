@@ -18,6 +18,12 @@ export function files(dir) {
     return e.isDirectory() ? files(p) : [p];
   });
 }
+export function assetKind(file) {
+ const ext=path.extname(file).slice(1).toLowerCase();
+ if(!ext)return 'folder';
+ for(const [kind,extensions] of Object.entries({scene:['unity'],model:['fbx','obj','dae','blend','glb','gltf'],texture:['png','jpg','jpeg','tga','psd','tif','tiff','exr','hdr'],material:['mat'],script:['cs'],animation:['anim'],animator:['controller','overridecontroller'],audio:['wav','mp3','ogg']}))if(extensions.includes(ext))return kind;
+ return ext;
+}
 const within = (root, p) => p === root || p.startsWith(root + path.sep);
 export function validateInputs(options) {
   for (const key of ['projectRoot', 'scene', 'enginePath', 'engineVersion', 'outDir']) if (!options[key]) throw new Error(`missing ${key}`);
@@ -52,7 +58,7 @@ export function scanGuids(projectRoot, { guidDatabase, packageRoots = [] } = {})
     if (!guid) continue;
     const asset = meta.slice(0, -5), rel = within(projectRoot, asset) ? path.relative(projectRoot, asset) : asset;
     if (guids[guid] && guids[guid].path !== rel) conflicts.push({ guid, paths: [guids[guid].path, rel] });
-    else guids[guid] = { path: rel, kind: path.extname(asset).slice(1) || 'folder' };
+    else guids[guid] = { path: rel, kind: assetKind(asset) };
   }
   if (guidDatabase) {
     if (!fs.existsSync(guidDatabase)) throw new Error(`required GUID database missing: ${guidDatabase}`);

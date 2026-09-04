@@ -92,7 +92,7 @@ export class Player {
     this.vehicle = null;
     this.driveState = null;
     this.drivePose = null;
-    this.locomotion = { ...LOCOMOTION_DEFAULTS };
+    this.setLocomotion();
     // Weapons supply this from their extracted data; it is intentionally local
     // presentation, while the server remains authoritative about equipment.
     this.weaponSpeedMultiplier = 1;
@@ -114,6 +114,10 @@ export class Player {
     });
     document.addEventListener('keydown', (e) => this.keys.add(e.code));
     document.addEventListener('keyup', (e) => this.keys.delete(e.code));
+  }
+
+  setLocomotion(spec = null) {
+    this.locomotion = { ...LOCOMOTION_DEFAULTS, ...spec };
   }
 
   respawn() {

@@ -274,21 +274,8 @@ export class Player {
       const x = this.position.x;
       const z = this.position.z;
       const feet = this.position.y - this.eyeHeight;
-      let groundY = heightAt(x, z);
-      let platformId = null;
-      // analytic collider boxes first (decks, floors), mesh raycast as fallback;
-      // a swimmer can haul up onto a low deck (the hand that pulls you out)
-      const reach = this.swimming ? 2.0 : 0.65;
-      const walk = this.view?.walkableAt(x, z, feet + reach);
-      if (walk && walk.top > groundY) {
-        groundY = walk.top;
-        platformId = walk.id;
-      }
-      const surface = this.view?.surfaceAt(x, z, this.position.y + 0.5);
-      if (surface !== null && surface !== undefined && surface > groundY && surface <= feet + 0.65) {
-        groundY = surface;
-        platformId = null;
-      }
+      // Shared foot/vehicle sampling → identical self/lifecycle exclusions.
+      const { y: groundY, platformId } = this.groundAt(x, z, this.position.y, this.swimming ? 2.0 : 0.65);
 
       const water = this.view?.waterAt?.(x, z);
       const inDeepWater = water && water.level - groundY > 1.15 && feet < water.level - 0.2;
@@ -600,15 +587,24 @@ export class Player {
   }
 
   driveGroundAt(x, z, eyeY) {
+    return this.groundAt(x, z, eyeY);
+  }
+
+  groundAt(x, z, eyeY, walkReach = 0.65) {
+    this._groundExcludeIds ??= new Set();
+    this._groundExcludeIds.clear();
+    this._groundExcludeIds.add(this.view?.ownPresence);
+    if (this.vehicle?.carId) this._groundExcludeIds.add(this.vehicle.carId);
+    const excludeIds = this._groundExcludeIds;
     const feet = eyeY - this.eyeHeight;
     let y = heightAt(x, z);
     let platformId = null;
-    const walk = this.view?.walkableAt(x, z, feet + 0.65);
+    const walk = this.view?.walkableAt(x, z, feet + walkReach, { excludeIds });
     if (walk && walk.top > y) {
       y = walk.top;
       platformId = walk.id;
     }
-    const surface = this.view?.surfaceAt(x, z, eyeY + 0.5);
+    const surface = this.view?.surfaceAt(x, z, eyeY + 0.5, { excludeIds, maxTop: feet + 0.65 });
     if (surface !== null && surface !== undefined && surface > y && surface <= feet + 0.65) {
       y = surface;
       platformId = null;

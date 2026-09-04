@@ -874,8 +874,8 @@ export class View {
         this.buildVersion++;
       })
       .catch(() => {
-        // Keep the placeholder visible and walkable; warmModelSource already
-        // logged the failing src once.
+        // Failure placeholder → visible; ground queries use authored support.
+        // warmModelSource → failing src logged once.
       });
   }
 
@@ -1227,13 +1227,22 @@ export class View {
   // stacked floors work (a switchback above you is not your ground). The id
   // lets the player ride a moving platform. Boxes are entity-relative and
   // yaw-aware.
-  walkableAt(x, z, maxTop = Infinity) {
+  // Ground-query eligibility → identity/lifecycle, never render visibility.
+  // Invisible authored floors remain solid; streamed/dead/detached groups do not.
+  groundEntityEligible(id, group, excludeIds) {
+    const comps = this.store.get(id);
+    return id !== this.ownPresence && !excludeIds?.has(id) && !!comps &&
+      !!group && group.parent === this.scene && !group.userData.hidden && this.isActive(comps);
+  }
+
+  walkableAt(x, z, maxTop = Infinity, { excludeIds } = {}) {
+    if (!Number.isFinite(x) || !Number.isFinite(z) || Number.isNaN(maxTop)) return null;
     let best = null;
     for (const id of this.colliderIds) {
       const boxes = this.store.get(id)?.collider?.boxes;
       if (!boxes) continue;
       const group = this.groups.get(id);
-      if (!group) continue;
+      if (!this.groundEntityEligible(id, group, excludeIds)) continue;
       const yaw = group.rotation.y;
       const cos = Math.cos(yaw);
       const sin = Math.sin(yaw);
@@ -1248,7 +1257,7 @@ export class View {
         const [sx, sy, sz] = box.size ?? [1, 0.2, 1];
         if (Math.abs(lx - bx) > sx / 2 || Math.abs(lz - bz) > sz / 2) continue;
         const top = group.position.y + by + sy / 2;
-        if (top > maxTop) continue;
+        if (!Number.isFinite(top) || top > maxTop) continue;
         if (best === null || top > best.top) best = { top, id };
       }
     }
@@ -1352,15 +1361,17 @@ export class View {
 
   // highest solid mesh surface under (x, z), cast from fromY downward —
   // walkable docks, bridges, platforms without a physics engine
-  surfaceAt(x, z, fromY) {
+  surfaceAt(x, z, fromY, { excludeIds, maxTop = fromY } = {}) {
+    if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(fromY) || Number.isNaN(maxTop)) return null;
     this._down ??= new THREE.Vector3(0, -1, 0);
     this._rayOrigin ??= new THREE.Vector3();
     this._surfaceRay ??= new THREE.Raycaster();
     const candidates = [];
     for (const [id, group] of this.groups) {
       const comps = this.store.get(id);
-      if (!comps?.mesh || comps.terrain) continue;
+      if (!comps?.mesh || comps.terrain || !this.groundEntityEligible(id, group, excludeIds)) continue;
       if (Math.hypot(group.position.x - x, group.position.z - z) > 60) continue;
+      group.updateWorldMatrix(true, true); // motion → current matrices before render
       // solid surfaces only ever come from mesh parts — direct children, so
       // this per-frame hot path never pays a recursive traverse
       for (const child of group.children) {
@@ -1375,7 +1386,13 @@ export class View {
     // loaded GLB meshes sit below them, so recurse only across this already
     // filtered candidate set.
     const hits = this._surfaceRay.intersectObjects(candidates, true);
-    return hits.length ? hits[0].point.y : null;
+    for (const hit of hits) {
+      // Loading/failure boxes describe presentation, not authored support.
+      if (hit.object.userData.kind === 'model-placeholder' || hit.object.userData.solid === false) continue;
+      const y = hit.point.y;
+      if (Number.isFinite(y) && y <= maxTop) return y;
+    }
+    return null;
   }
 
   getGroup(id) {

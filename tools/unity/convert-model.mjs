@@ -1122,8 +1122,6 @@ function readGuidDb(file) {
 
 function inferUnityRoot(args, guidMap) {
   if (args.unityRoot) return args.unityRoot;
-  const boomtown = '/Users/pascaldisse/projects/boomtown-rampage';
-  if (existsSync(path.join(boomtown, 'Assets'))) return boomtown;
   for (const e of guidMap.values()) {
     if (e.path && path.isAbsolute(e.path)) {
       const idx = e.path.split(path.sep).lastIndexOf('Assets');

@@ -13,7 +13,7 @@ const _camTarget = new THREE.Vector3();
 
 // Scene locomotion may override these on its environment entity. Keep these
 // values in one spec so worlds without that component retain engine behavior.
-const LOCOMOTION_DEFAULTS = Object.freeze({ walk: 6, run: 14, backwardFactor: 1 });
+const LOCOMOTION_DEFAULTS = Object.freeze({ walk: 6, run: 14, crouch: 3, backwardFactor: 1 });
 const DEFAULT_VEHICLE_CAMERA_RIG = Object.freeze({ yaw: 0, pitch: -0.22, distance: 8, height: 3.5, damp: 4 });
 
 // ArcadeVP literals and prefab defaults, named here so the live old-spec seam
@@ -204,7 +204,7 @@ export class Player {
     if (!this.keys.has('Space')) this.jumpLocked = false;
 
     const loco = this.locomotion;
-    const speedBase = crouching ? 3 : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? loco.run : loco.walk;
+    const speedBase = crouching ? (loco.crouch ?? LOCOMOTION_DEFAULTS.crouch) : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? loco.run : loco.walk;
     const backward = this.keys.has('KeyS') && !this.keys.has('KeyW');
     const speed = (this.swimming && !flying ? speedBase * 0.4 : speedBase) * (backward ? loco.backwardFactor : 1) * this.weaponSpeedMultiplier;
     // under a rig, movement lives in the rig's fixed frame (the editor's

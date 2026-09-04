@@ -1352,15 +1352,15 @@ export class View {
 
   // highest solid mesh surface under (x, z), cast from fromY downward —
   // walkable docks, bridges, platforms without a physics engine
-  surfaceAt(x, z, fromY) {
+  surfaceAt(x, z, fromY, { exclude = this.ownPresence, maxDistance = 60, maxDrop = 80 } = {}) {
     this._down ??= new THREE.Vector3(0, -1, 0);
     this._rayOrigin ??= new THREE.Vector3();
     this._surfaceRay ??= new THREE.Raycaster();
     const candidates = [];
     for (const [id, group] of this.groups) {
       const comps = this.store.get(id);
-      if (!comps?.mesh || comps.terrain) continue;
-      if (Math.hypot(group.position.x - x, group.position.z - z) > 60) continue;
+      if (id === exclude || !comps?.mesh || comps.terrain || group.userData.hidden || !group.visible) continue;
+      if (Math.hypot(group.position.x - x, group.position.z - z) > maxDistance) continue;
       // solid surfaces only ever come from mesh parts — direct children, so
       // this per-frame hot path never pays a recursive traverse
       for (const child of group.children) {
@@ -1370,7 +1370,7 @@ export class View {
     if (!candidates.length) return null;
     this._rayOrigin.set(x, fromY, z);
     this._surfaceRay.set(this._rayOrigin, this._down);
-    this._surfaceRay.far = 80;
+    this._surfaceRay.far = maxDrop;
     // primitive parts are direct Meshes; model parts are direct Groups whose
     // loaded GLB meshes sit below them, so recurse only across this already
     // filtered candidate set.

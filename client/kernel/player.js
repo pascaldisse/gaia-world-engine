@@ -69,6 +69,7 @@ export class Player {
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
     // bodies in space: vertical velocity (gravity), swim state, ridden platform
     this.vy = 0;
+    this.grounded = false;
     this.swimming = false;
     this.sinking = false;
     this.swimTime = 0;
@@ -125,6 +126,7 @@ export class Player {
     this.pitch = 0;
     this.velocity.set(0, 0, 0);
     this.vy = 0;
+    this.grounded = false;
     this.swimming = false;
     this.sinking = false;
     this.swimTime = 0;
@@ -146,6 +148,7 @@ export class Player {
     if (pitch !== undefined) this.pitch = Math.max(-1.45, Math.min(1.45, pitch));
     this.velocity.set(0, 0, 0);
     this.vy = 0;
+    this.grounded = false;
     this.platform = null;
     this.swimming = false;
     this.sinking = false;
@@ -190,6 +193,7 @@ export class Player {
     const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked);
 
     if (this.vehicle && !flying) {
+      this.grounded = false;
       this.updateDrive(dt, canMove);
       this.applyCameraRig(dt, activeCameraRig(this.rig, true) || DEFAULT_VEHICLE_CAMERA_RIG);
       return;
@@ -201,7 +205,10 @@ export class Player {
     const crouching =
       canMove && !flying && !this.swimming &&
       (this.keys.has('ControlLeft') || this.keys.has('ControlRight') || this.keys.has('KeyC'));
+    const previousEyeHeight = this.eyeHeight;
     this.eyeHeight += ((crouching ? this.eyeCrouch : this.eyeStand) - this.eyeHeight) * Math.min(1, dt * 12);
+    // Grounded eye transition → invariant feet; airborne crouch still tucks legs.
+    if (this.grounded && !flying) this.position.y += this.eyeHeight - previousEyeHeight;
     if (!this.keys.has('Space')) this.jumpLocked = false;
 
     const loco = this.locomotion;
@@ -282,6 +289,7 @@ export class Player {
       const inDeepWater = water && water.level - groundY > 1.15 && feet < water.level - 0.2;
 
       if (inDeepWater) {
+        this.grounded = false;
         if (!this.swimming) {
           this.swimming = true;
           this.sinking = false;
@@ -314,11 +322,13 @@ export class Player {
           this.swimTime = 0;
         }
         if (feet <= groundY + 0.35 && this.vy <= 0) {
+          this.grounded = true;
           // grounded — and Space leaves it: vy 8 against gravity 24 is a
           // ~1.3m arc, Half-Life-sized. The vy<=0 guard above is what lets
           // the jump survive its first frame inside the ground-snap band.
           if (canMove && !flying && this.keys.has('Space') && !this.jumpLocked) {
             this.jumpLocked = true;
+            this.grounded = false;
             this.vy = 8;
             this.position.y += this.vy * dt;
             this.onEvent?.('jump', { x: r2(x), z: r2(z) });
@@ -340,6 +350,7 @@ export class Player {
             this.lastSafe = { x: this.position.x, y: groundY + this.eyeHeight, z: this.position.z };
           }
         } else {
+          this.grounded = false;
           // airborne: gravity (the Fall is just a very long version of this).
           // The ridden platform is KEPT — jumping on the moving ferry must
           // not leave you hanging over the water it just sailed out from under
@@ -348,11 +359,13 @@ export class Player {
           if (this.position.y - this.eyeHeight <= groundY) {
             this.position.y = groundY + this.eyeHeight;
             this.vy = 0;
+            this.grounded = true;
           }
         }
       }
     } else {
       this.vy = 0;
+      this.grounded = false;
       this.platform = null;
       if (this.swimming) {
         this.swimming = false;

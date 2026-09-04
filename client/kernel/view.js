@@ -228,6 +228,11 @@ export class View {
           if (!own.userData.hidden) own.visible = true;
           const pose = this.player.vehicle ? this.player.drivePose : null;
           own.position.copy(pose?.position ?? this.player.position);
+          // Authored model offset → standing-eye frame; crouch changes the eye,
+          // not the feet. Primitive head markers retain eye-following semantics.
+          if (!pose && own.children.some((part) => part.userData.model)) {
+            own.position.y += (this.player.eyeStand ?? this.player.eyeHeight) - this.player.eyeHeight;
+          }
           // glTF model front is +Z; GAIA forward at yaw 0 is -Z (the same
           // convention the path behavior resolves via atan2(dx,dz)) — flip.
           own.rotation.y = (pose?.yaw ?? this.player.bodyYaw) + Math.PI;

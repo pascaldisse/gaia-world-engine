@@ -86,6 +86,42 @@ describe('ground queries — generic scene graph / actual Three raycasts', () =>
     expect(player.groundAt(0, 0, 1.7).y).toBeCloseTo(0.6);
   });
 
+  test('grounded crouch/stand preserves feet; jump and warp clear grounded state', () => {
+    const previous = globalThis.document;
+    globalThis.document = { activeElement: null, addEventListener() {} };
+    try {
+      const { view } = fixture();
+      const player = new Player({ view, camera: new THREE.PerspectiveCamera(), dom: {}, overlay: { addEventListener() {} } });
+      player.position.set(0, 1.7, 0); player.locked = true; player.update(1/60);
+      for (const crouch of [true, false]) {
+        if (crouch) player.keys.add('KeyC'); else player.keys.delete('KeyC');
+        for (let i=0;i<90;i++) { player.update(1/60); expect(player.position.y-player.eyeHeight).toBeCloseTo(0, 9); }
+      }
+      player.keys.add('Space'); player.update(1/60);
+      expect(player.grounded).toBe(false); expect(player.vy).toBe(8);
+      player.grounded = true; player.warpTo({ position: [0, 5, 0] });
+      expect(player.grounded).toBe(false);
+      player.grounded = true; player.respawn(); expect(player.grounded).toBe(false);
+    } finally { globalThis.document = previous; }
+  });
+
+  test('own model follows feet during crouch; primitive head and driven pose unchanged', () => {
+    const { view, add } = fixture();
+    const { group } = add('self', 0.5, { nested: true });
+    const part = group.children[0]; part.userData.model = true;
+    view.ownPresence = 'self'; view.showOwnBody = true;
+    view.player = { position: new THREE.Vector3(0, 1, 0), eyeHeight: 1, eyeStand: 1.7, bodyYaw: 0 };
+    view.update(0);
+    expect(group.position.y).toBeCloseTo(1.7);
+    expect(group.visible).toBe(true); expect(part.userData.solid).toBe(true);
+    part.userData.model = false; view.update(0);
+    expect(group.position.y).toBe(1);
+    part.userData.model = true; view.player.vehicle = {};
+    view.player.drivePose = { position: new THREE.Vector3(0, 2, 0), yaw: 0 };
+    view.update(0);
+    expect(group.position.y).toBe(2);
+  });
+
   test('spawn wisp/scale transients become support only after the real effect completes', () => {
     const { view, store, scene } = fixture();
     view.effects = new Effects({ scene });

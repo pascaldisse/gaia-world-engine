@@ -40,7 +40,7 @@ export function validateInputs(options) {
   const actual = git(['rev-parse', 'HEAD']);
   git(['merge-base', '--is-ancestor', expected, actual]);
   fs.mkdirSync(outDir, { recursive: true });
-  return { ...options, projectRoot, scene, enginePath, outDir, engineRevision: actual, engineBaseRevision: expected, engineVersionPolicy: 'configured revision must be ancestor of HEAD', unityVersion: fs.readFileSync(path.join(projectRoot, 'ProjectSettings/ProjectVersion.txt'), 'utf8').trim() };
+  return { ...options, projectRoot, scene, enginePath, outDir, engineRevision: actual, engineBaseRevision: expected, engineWorktreeStatus: git(['status', '--porcelain']), sceneSha256: createHash('sha256').update(fs.readFileSync(scene)).digest('hex'), engineVersionPolicy: 'configured revision must be ancestor of HEAD', unityVersion: fs.readFileSync(path.join(projectRoot, 'ProjectSettings/ProjectVersion.txt'), 'utf8').trim() };
 }
 
 export function scanGuids(projectRoot, { guidDatabase, packageRoots = [] } = {}) {
@@ -100,7 +100,7 @@ export function diffTrees(baseline, output) {
 
 export async function runPipeline(options, hooks = {}) {
   const context = validateInputs(options);
-  const report = { status: 'running', inputs: { ...context }, stages: [] };
+  const report = { countBasis: 'input scene IR; stage-specific counts in result.json', status: 'running', inputs: { ...context }, stages: [] };
   let counts = { documents: 0, directEntities: 0, prefabInstances: 0, unresolved: 0 };
   const persist = () => writeJSON(path.join(context.outDir, 'report.json'), report);
   for (let i=0; i<STAGES.length; i++) {
@@ -144,4 +144,12 @@ export async function runPipeline(options, hooks = {}) {
   // Mutable context → omit runtime payloads from root report.
   report.inputs = { ...context, db: undefined, ir: undefined };
   persist(); return report;
+}
+
+export function jsonDifferences(before, after, pointer = '') {
+  if (Object.is(before, after)) return [];
+  const object = value => value !== null && typeof value === 'object';
+  if (!object(before) || !object(after) || Array.isArray(before) !== Array.isArray(after)) return [{ pointer: pointer || '/', before, after }];
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return keys.flatMap(key => jsonDifferences(before[key], after[key], `${pointer}/${key.replaceAll('~','~0').replaceAll('/','~1')}`));
 }

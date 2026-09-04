@@ -118,3 +118,8 @@ test('§7.8 audit reports missing assets, prefabs, scenes and invalid GLBs',asyn
  expect(r.errors.map(e=>e.kind).sort()).toEqual(['invalid-glb','missing-asset','missing-prefab','missing-required-file','missing-scene']);
  expect(r.counts.entities).toBe(1);expect(r.capabilities.runtime).toBe('UNVERIFIED');
 });
+test('§7.8 structural diff distinguishes serialization from actual field changes',async()=>{
+ const {jsonDifferences}=await import('../tools/unity/pipeline.mjs');
+ expect(jsonDifferences({a:1,b:2},{b:2,a:1})).toEqual([]);
+ expect(jsonDifferences({a:[1,2]},{a:[1,3],b:4})).toEqual([{pointer:'/a/1',before:2,after:3},{pointer:'/b',before:undefined,after:4}]);
+});

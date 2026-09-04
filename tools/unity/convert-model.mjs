@@ -49,7 +49,7 @@ function parseArgs(argv) {
 }
 
 function which(name) {
-  const r = spawnSync('bash', ['-lc', `command -v ${shellQuote(name)}`], { encoding: 'utf8' });
+  const r = spawnSync('which', [name], { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 

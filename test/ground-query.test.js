@@ -85,6 +85,16 @@ describe('ground queries — generic scene graph / actual Three raycasts', () =>
     expect(player.groundAt(0, 0, 1.7).y).toBeCloseTo(0.6);
   });
 
+  test('Float32 mesh seam does not erase an analytic platform identity', () => {
+    const { view, add } = fixture();
+    const { mesh } = add('platform', 0.3, { collider: true });
+    mesh.geometry = new THREE.BoxGeometry(4, 0.2, 4); mesh.position.y = 0.2;
+    const player = Object.create(Player.prototype);
+    Object.assign(player, { view, eyeHeight: 1.7 });
+    expect(view.surfaceAt(0, 0, 2)).toBeGreaterThan(0.3);
+    expect(player.groundAt(0, 0, 1.7).platformId).toBe('platform');
+  });
+
   test('nonfinite input/hits never become support', () => {
     const { view, add } = fixture(); add('floor', 0.4, { collider: true });
     expect(view.walkableAt(NaN, 0, 3)).toBeNull();

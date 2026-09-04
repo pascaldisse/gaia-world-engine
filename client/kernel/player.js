@@ -46,6 +46,7 @@ const AVP_MAX_ANGULAR_SPEED = 100;
 const AVP_MOVEMENT_MODE_VELOCITY = 0;
 const AVP_MOVEMENT_MODE_ANGULAR_VELOCITY = 1;
 export const PLAYER_EYE_HEIGHT_DEFAULT_M = 1.7;
+const GROUND_HEIGHT_EPSILON_M = 1e-6; // Float32 mesh ↔ analytic deck seam
 
 export class Player {
   constructor({ camera, dom, overlay, view }) {
@@ -605,7 +606,7 @@ export class Player {
       platformId = walk.id;
     }
     const surface = this.view?.surfaceAt(x, z, eyeY + 0.5, { excludeIds, maxTop: feet + 0.65 });
-    if (surface !== null && surface !== undefined && surface > y && surface <= feet + 0.65) {
+    if (surface !== null && surface !== undefined && surface > y + GROUND_HEIGHT_EPSILON_M && surface <= feet + 0.65) {
       y = surface;
       platformId = null;
     }

@@ -1229,9 +1229,9 @@ export class View {
   // yaw-aware.
   // Ground-query eligibility → identity/lifecycle, never render visibility.
   // Invisible authored floors remain solid; streamed/dead/detached groups do not.
-  groundEntityEligible(id, group, excludeIds) {
+  groundEntityEligible(id, group, excludeIds, exclude = this.ownPresence) {
     const comps = this.store.get(id);
-    return id !== this.ownPresence && !excludeIds?.has(id) && !!comps &&
+    return id !== exclude && !excludeIds?.has(id) && !!comps &&
       !!group && group.parent === this.scene && !group.userData.hidden && this.isActive(comps);
   }
 
@@ -1361,7 +1361,7 @@ export class View {
 
   // highest solid mesh surface under (x, z), cast from fromY downward —
   // walkable docks, bridges, platforms without a physics engine
-  surfaceAt(x, z, fromY, { excludeIds, maxTop = fromY } = {}) {
+  surfaceAt(x, z, fromY, { exclude = this.ownPresence, excludeIds, maxTop = fromY, maxDistance = 60, maxDrop = 80 } = {}) {
     if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(fromY) || Number.isNaN(maxTop)) return null;
     this._down ??= new THREE.Vector3(0, -1, 0);
     this._rayOrigin ??= new THREE.Vector3();
@@ -1369,8 +1369,8 @@ export class View {
     const candidates = [];
     for (const [id, group] of this.groups) {
       const comps = this.store.get(id);
-      if (!comps?.mesh || comps.terrain || !this.groundEntityEligible(id, group, excludeIds)) continue;
-      if (Math.hypot(group.position.x - x, group.position.z - z) > 60) continue;
+      if (id === exclude || !comps?.mesh || comps.terrain || !this.groundEntityEligible(id, group, excludeIds, exclude)) continue;
+      if (Math.hypot(group.position.x - x, group.position.z - z) > maxDistance) continue;
       group.updateWorldMatrix(true, true); // motion → current matrices before render
       // solid surfaces only ever come from mesh parts — direct children, so
       // this per-frame hot path never pays a recursive traverse
@@ -1381,7 +1381,7 @@ export class View {
     if (!candidates.length) return null;
     this._rayOrigin.set(x, fromY, z);
     this._surfaceRay.set(this._rayOrigin, this._down);
-    this._surfaceRay.far = 80;
+    this._surfaceRay.far = maxDrop;
     // primitive parts are direct Meshes; model parts are direct Groups whose
     // loaded GLB meshes sit below them, so recurse only across this already
     // filtered candidate set.

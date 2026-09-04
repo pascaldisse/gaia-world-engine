@@ -13,7 +13,7 @@ const _camTarget = new THREE.Vector3();
 
 // Scene locomotion may override these on its environment entity. Keep these
 // values in one spec so worlds without that component retain engine behavior.
-const LOCOMOTION_DEFAULTS = Object.freeze({ walk: 6, run: 14, backwardFactor: 1 });
+const LOCOMOTION_DEFAULTS = Object.freeze({ walk: 6, run: 14, crouch: 3, backwardFactor: 1 });
 const DEFAULT_VEHICLE_CAMERA_RIG = Object.freeze({ yaw: 0, pitch: -0.22, distance: 8, height: 3.5, damp: 4 });
 
 // ArcadeVP literals and prefab defaults, named here so the live old-spec seam
@@ -46,6 +46,7 @@ const AVP_MAX_ANGULAR_SPEED = 100;
 const AVP_MOVEMENT_MODE_VELOCITY = 0;
 const AVP_MOVEMENT_MODE_ANGULAR_VELOCITY = 1;
 export const PLAYER_EYE_HEIGHT_DEFAULT_M = 1.7;
+const GROUND_HEIGHT_EPSILON_M = 1e-6; // Float32 mesh ↔ analytic deck seam
 
 export class Player {
   constructor({ camera, dom, overlay, view }) {
@@ -68,6 +69,7 @@ export class Player {
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
     // bodies in space: vertical velocity (gravity), swim state, ridden platform
     this.vy = 0;
+    this.grounded = false;
     this.swimming = false;
     this.sinking = false;
     this.swimTime = 0;
@@ -124,6 +126,7 @@ export class Player {
     this.pitch = 0;
     this.velocity.set(0, 0, 0);
     this.vy = 0;
+    this.grounded = false;
     this.swimming = false;
     this.sinking = false;
     this.swimTime = 0;
@@ -145,6 +148,7 @@ export class Player {
     if (pitch !== undefined) this.pitch = Math.max(-1.45, Math.min(1.45, pitch));
     this.velocity.set(0, 0, 0);
     this.vy = 0;
+    this.grounded = false;
     this.platform = null;
     this.swimming = false;
     this.sinking = false;
@@ -189,6 +193,7 @@ export class Player {
     const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked);
 
     if (this.vehicle && !flying) {
+      this.grounded = false;
       this.updateDrive(dt, canMove);
       this.applyCameraRig(dt, activeCameraRig(this.rig, true) || DEFAULT_VEHICLE_CAMERA_RIG);
       return;
@@ -200,11 +205,14 @@ export class Player {
     const crouching =
       canMove && !flying && !this.swimming &&
       (this.keys.has('ControlLeft') || this.keys.has('ControlRight') || this.keys.has('KeyC'));
+    const previousEyeHeight = this.eyeHeight;
     this.eyeHeight += ((crouching ? this.eyeCrouch : this.eyeStand) - this.eyeHeight) * Math.min(1, dt * 12);
+    // Grounded eye transition → invariant feet; airborne crouch still tucks legs.
+    if (this.grounded && !flying) this.position.y += this.eyeHeight - previousEyeHeight;
     if (!this.keys.has('Space')) this.jumpLocked = false;
 
     const loco = this.locomotion;
-    const speedBase = crouching ? 3 : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? loco.run : loco.walk;
+    const speedBase = crouching ? (loco.crouch ?? LOCOMOTION_DEFAULTS.crouch) : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? loco.run : loco.walk;
     const backward = this.keys.has('KeyS') && !this.keys.has('KeyW');
     const speed = (this.swimming && !flying ? speedBase * 0.4 : speedBase) * (backward ? loco.backwardFactor : 1) * this.weaponSpeedMultiplier;
     // under a rig, movement lives in the rig's fixed frame (the editor's
@@ -274,26 +282,14 @@ export class Player {
       const x = this.position.x;
       const z = this.position.z;
       const feet = this.position.y - this.eyeHeight;
-      let groundY = heightAt(x, z);
-      let platformId = null;
-      // analytic collider boxes first (decks, floors), mesh raycast as fallback;
-      // a swimmer can haul up onto a low deck (the hand that pulls you out)
-      const reach = this.swimming ? 2.0 : 0.65;
-      const walk = this.view?.walkableAt(x, z, feet + reach);
-      if (walk && walk.top > groundY) {
-        groundY = walk.top;
-        platformId = walk.id;
-      }
-      const surface = this.view?.surfaceAt(x, z, this.position.y + 0.5);
-      if (surface !== null && surface !== undefined && surface > groundY && surface <= feet + 0.65) {
-        groundY = surface;
-        platformId = null;
-      }
+      // Shared foot/vehicle sampling → identical self/lifecycle exclusions.
+      const { y: groundY, platformId } = this.groundAt(x, z, this.position.y, this.swimming ? 2.0 : 0.65);
 
       const water = this.view?.waterAt?.(x, z);
       const inDeepWater = water && water.level - groundY > 1.15 && feet < water.level - 0.2;
 
       if (inDeepWater) {
+        this.grounded = false;
         if (!this.swimming) {
           this.swimming = true;
           this.sinking = false;
@@ -326,11 +322,13 @@ export class Player {
           this.swimTime = 0;
         }
         if (feet <= groundY + 0.35 && this.vy <= 0) {
+          this.grounded = true;
           // grounded — and Space leaves it: vy 8 against gravity 24 is a
           // ~1.3m arc, Half-Life-sized. The vy<=0 guard above is what lets
           // the jump survive its first frame inside the ground-snap band.
           if (canMove && !flying && this.keys.has('Space') && !this.jumpLocked) {
             this.jumpLocked = true;
+            this.grounded = false;
             this.vy = 8;
             this.position.y += this.vy * dt;
             this.onEvent?.('jump', { x: r2(x), z: r2(z) });
@@ -352,6 +350,7 @@ export class Player {
             this.lastSafe = { x: this.position.x, y: groundY + this.eyeHeight, z: this.position.z };
           }
         } else {
+          this.grounded = false;
           // airborne: gravity (the Fall is just a very long version of this).
           // The ridden platform is KEPT — jumping on the moving ferry must
           // not leave you hanging over the water it just sailed out from under
@@ -360,11 +359,13 @@ export class Player {
           if (this.position.y - this.eyeHeight <= groundY) {
             this.position.y = groundY + this.eyeHeight;
             this.vy = 0;
+            this.grounded = true;
           }
         }
       }
     } else {
       this.vy = 0;
+      this.grounded = false;
       this.platform = null;
       if (this.swimming) {
         this.swimming = false;
@@ -600,16 +601,25 @@ export class Player {
   }
 
   driveGroundAt(x, z, eyeY) {
+    return this.groundAt(x, z, eyeY);
+  }
+
+  groundAt(x, z, eyeY, walkReach = 0.65) {
+    this._groundExcludeIds ??= new Set();
+    this._groundExcludeIds.clear();
+    this._groundExcludeIds.add(this.view?.ownPresence);
+    if (this.vehicle?.carId) this._groundExcludeIds.add(this.vehicle.carId);
+    const excludeIds = this._groundExcludeIds;
     const feet = eyeY - this.eyeHeight;
     let y = heightAt(x, z);
     let platformId = null;
-    const walk = this.view?.walkableAt(x, z, feet + 0.65);
+    const walk = this.view?.walkableAt(x, z, feet + walkReach, { excludeIds });
     if (walk && walk.top > y) {
       y = walk.top;
       platformId = walk.id;
     }
-    const surface = this.view?.surfaceAt(x, z, eyeY + 0.5);
-    if (surface !== null && surface !== undefined && surface > y && surface <= feet + 0.65) {
+    const surface = this.view?.surfaceAt(x, z, eyeY + 0.5, { excludeIds, maxTop: feet + 0.65 });
+    if (surface !== null && surface !== undefined && surface > y + GROUND_HEIGHT_EPSILON_M && surface <= feet + 0.65) {
       y = surface;
       platformId = null;
     }

@@ -10,6 +10,48 @@ export class Hud {
     this.showing = false; // banner guard: not re-triggerable while up
     this.buildStars();
     this.buildBanner();
+    this.buildCountdown();
+  }
+
+  // Generic countdown readout: a world that puts a `countdown`
+  // ({label, endsAt}) component on the presence gets a mission timer.
+  buildCountdown() {
+    this.countdownEl = document.createElement('div');
+    Object.assign(this.countdownEl.style, {
+      position: 'fixed',
+      top: '12px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      display: 'none',
+      color: '#e8f0ff',
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+      fontSize: '20px',
+      letterSpacing: '2px',
+      textShadow: '0 1px 4px rgba(0, 0, 0, 0.85)',
+      zIndex: '15',
+      pointerEvents: 'none',
+      userSelect: 'none',
+    });
+    document.body.appendChild(this.countdownEl);
+    this.countdown = null;
+    setInterval(() => this.renderCountdown(), 250);
+  }
+
+  // {label, endsAt} — endsAt is server epoch seconds (Date.now()/1000)
+  setCountdown(countdown) {
+    this.countdown = countdown?.endsAt ? countdown : null;
+    this.renderCountdown();
+  }
+
+  renderCountdown() {
+    if (!this.countdownEl) return;
+    if (!this.countdown) { this.countdownEl.style.display = 'none'; return; }
+    const remain = Math.max(0, this.countdown.endsAt - Date.now() / 1000);
+    const mm = String(Math.floor(remain / 60)).padStart(2, '0');
+    const ss = String(Math.floor(remain % 60)).padStart(2, '0');
+    this.countdownEl.textContent = `${this.countdown.label ?? ''} ${mm}:${ss}`.trim();
+    this.countdownEl.style.color = remain <= 10 ? '#ff6b57' : '#e8f0ff';
+    this.countdownEl.style.display = 'block';
   }
 
   buildStars() {

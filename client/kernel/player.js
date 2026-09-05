@@ -42,6 +42,7 @@ const AVP_DEFAULT_INTERPOLATE = 1;
 const AVP_DEFAULT_BODY_MASS = 1;
 const AVP_DEFAULT_BODY_ANGULAR_DRAG = 40;
 const AVP_PHYSICS_GRAVITY_Y = -20;
+// Unity ProjectSettings/DynamicsManager.asset m_DefaultMaxAngularSpeed.
 const AVP_MAX_ANGULAR_SPEED = 100;
 const AVP_MOVEMENT_MODE_VELOCITY = 0;
 const AVP_MOVEMENT_MODE_ANGULAR_VELOCITY = 1;
@@ -457,6 +458,21 @@ export class Player {
     const radius = spec.rigidbody?.sphereRadius ?? AVP_DEFAULT_SPHERE_RADIUS;
     const bodyMass = spec.carBodyRigidbody?.mass ?? AVP_DEFAULT_BODY_MASS;
     const bodyAngularDrag = spec.carBodyRigidbody?.angularDrag ?? AVP_DEFAULT_BODY_ANGULAR_DRAG;
+    // SOURCE-ADDITIVE APPROXIMATION: Rigidbody.AddTorque integrates through
+    // inertia, not mass. Unity computes the implicit tensor from its attached
+    // MeshCollider; that runtime tensor is not serialized. Approximate I_y
+    // from the imported hull AABB as m(w²+l²)/12. Reject malformed imported
+    // dimensions/tensors so steering can never inject Infinity/NaN.
+    const validPositive = (value) => Number.isFinite(value) && value > 0;
+    const safeBodyMass = validPositive(bodyMass) ? bodyMass : AVP_DEFAULT_BODY_MASS;
+    const hullSize = spec.collider?.size;
+    const width = hullSize?.[0];
+    const length = hullSize?.[2];
+    const computedYawInertia = validPositive(width) && validPositive(length)
+      ? safeBodyMass * (width ** 2 + length ** 2) / 12
+      : safeBodyMass;
+    const explicitYawInertia = spec.carBodyRigidbody?.inertiaTensor?.[1];
+    const bodyYawInertia = validPositive(explicitYawInertia) ? explicitYawInertia : computedYawInertia;
     const SteeringInput = state.steeringInput;
     const AccelerationInput = state.accelerationInput;
     const BrakeInput = state.brakeInput;
@@ -497,10 +513,10 @@ export class Player {
       // FixedUpdate grounded forward/reverse branches both AddTorque to carBody.
       if (AccelerationInput > AVP_INPUT_DEADZONE || localForwardVelocity > AVP_MOVING_THRESHOLD) {
         const torque = SteeringInput * sign * turn * AVP_TORQUE_SCALE * TurnMultiplyer;
-        state.bodyAngularVelocity += torque / bodyMass * dt;
+        state.bodyAngularVelocity += torque / bodyYawInertia * dt;
       } else if (AccelerationInput < -AVP_INPUT_DEADZONE || localForwardVelocity < -AVP_MOVING_THRESHOLD) {
         const torque = SteeringInput * sign * turn * AVP_TORQUE_SCALE * TurnMultiplyer;
-        state.bodyAngularVelocity += torque / bodyMass * dt;
+        state.bodyAngularVelocity += torque / bodyYawInertia * dt;
       }
 
       // FixedUpdate normal brakelogic: FreezeRotationX while braking.
@@ -546,7 +562,7 @@ export class Player {
         // FixedUpdate airborne turnlogic and AddTorque (no velocity sign).
         const TurnMultiplyer = evaluateCurve(spec.turnCurve, MaxSpeed !== 0 ? carVelocityMagnitude / MaxSpeed : 0, 0);
         const torque = SteeringInput * turn * AVP_TORQUE_SCALE * TurnMultiplyer;
-        state.bodyAngularVelocity += torque / bodyMass * dt;
+        state.bodyAngularVelocity += torque / bodyYawInertia * dt;
       }
 
       // FixedUpdate airborne upright MoveRotation Slerp(... Vector3.up, 0.02).
@@ -565,7 +581,12 @@ export class Player {
     state.sphereAngularVelocity = applyAngularDrag(state.sphereAngularVelocity, sphereAngularDrag, dt);
     state.bodyAngularVelocity = applyAngularDrag(state.bodyAngularVelocity, bodyAngularDrag, dt);
     state.sphereAngularVelocity = Math.max(-AVP_MAX_ANGULAR_SPEED, Math.min(AVP_MAX_ANGULAR_SPEED, state.sphereAngularVelocity));
-    state.bodyAngularVelocity = Math.max(-AVP_MAX_ANGULAR_SPEED, Math.min(AVP_MAX_ANGULAR_SPEED, state.bodyAngularVelocity));
+    // Optional authored tuning may lower this, but the untuned default is the
+    // source project's 100rad/s Rigidbody maximum — no invented game tuning.
+    const maxYawRate = Number.isFinite(spec.maxYawRate) && spec.maxYawRate > 0
+      ? Math.min(spec.maxYawRate, AVP_MAX_ANGULAR_SPEED)
+      : AVP_MAX_ANGULAR_SPEED;
+    state.bodyAngularVelocity = Math.max(-maxYawRate, Math.min(maxYawRate, state.bodyAngularVelocity));
 
     if (grounded && movementMode === AVP_MOVEMENT_MODE_ANGULAR_VELOCITY) {
       // GAIA seam — PhysX sphere/ground contact turns right-axis angular

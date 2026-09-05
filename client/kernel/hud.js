@@ -93,6 +93,7 @@ export class Hud {
     this.scoreEl = row(this.vitalsEl, 'score');
     this.weaponNameEl = row(this.weaponEl, 'weapon');
     this.ammoEl = row(this.weaponEl, 'ammo');
+    this.reserveEl = row(this.weaponEl, 'reserve');
     this.reloadEl = row(this.weaponEl, 'reloading');
     this.statsEl.appendChild(this.vitalsEl);
     this.statsEl.appendChild(this.weaponEl);
@@ -142,8 +143,10 @@ export class Hud {
     const hasReload = show(this.reloadEl, weapon?.name && weapon.reloading ? 'RELOADING' : null);
     const hasAmmo = show(this.ammoEl, weapon?.name && !weapon.reloading && finite(weapon.ammo)
       ? `AMMO  ${finite(weapon.maxAmmo) ? `${weapon.ammo}/${weapon.maxAmmo}` : weapon.ammo}` : null);
+    const hasReserve = show(this.reserveEl, weapon?.name && finite(weapon.ammo) && finite(weapon.reserve)
+      ? `RESERVE  ${weapon.reserve === -1 ? '∞' : weapon.reserve}` : null);
     const left = hasHealth || hasArmor || hasScore;
-    const right = hasWeapon || hasReload || hasAmmo;
+    const right = hasWeapon || hasReload || hasAmmo || hasReserve;
     setDisplay(this.vitalsEl, left ? 'flex' : 'none');
     setDisplay(this.weaponEl, right ? 'flex' : 'none');
     setDisplay(this.statsEl, !suppressed && (left || right) ? 'flex' : 'none');

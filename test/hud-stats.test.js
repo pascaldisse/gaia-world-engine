@@ -104,7 +104,7 @@ describe('Hud core stats DOM', () => {
     expect(hud.vitalsEl.style.textOverflow).toBeUndefined();
     expect(hud.vitalsEl.style.whiteSpace).toBeUndefined();
     expect(hud.vitalsEl.children.map((el) => el.dataset.field)).toEqual(['health', 'armor', 'score']);
-    expect(hud.weaponEl.children.map((el) => el.dataset.field)).toEqual(['weapon', 'ammo', 'reloading']);
+    expect(hud.weaponEl.children.map((el) => el.dataset.field)).toEqual(['weapon', 'ammo', 'reserve', 'reloading']);
     expect(hud.starsEl.style.top).toBe('12px');
     expect(hud.countdownEl.style.top).toBe('12px');
     expect(hud.bannerEl.style.zIndex).toBe('25');
@@ -141,4 +141,19 @@ describe('Hud core stats DOM', () => {
     expect(hud.countdownTimer).toBeNull();
     expect(hud.bannerTimer).toBeNull();
   });
+});
+
+test('finite inventory reserve has its own row, including zero; generic worlds stay unchanged', () => {
+  hud.setStats({ weapon: { name: 'Revolver', ammo: 5, maxAmmo: 6, reserve: 154 } });
+  expect(hud.reserveEl.textContent).toBe('RESERVE  154');
+  expect(hud.ammoEl.textContent).toBe('AMMO  5/6');
+  const writes = hud.reserveEl.textWrites + hud.reserveEl.styleWrites;
+  hud.setStats({ weapon: { name: 'Revolver', ammo: 5, maxAmmo: 6, reserve: 154 } });
+  expect(hud.reserveEl.textWrites + hud.reserveEl.styleWrites).toBe(writes);
+  hud.setStats({ weapon: { name: 'Revolver', ammo: 1, reserve: 0 } });
+  expect(hud.reserveEl.textContent).toBe('RESERVE  0');
+  hud.setStats({ weapon: { name: 'Revolver', ammo: 1, reserve: -1 } });
+  expect(hud.reserveEl.textContent).toBe('RESERVE  ∞');
+  hud.setStats({ weapon: { name: 'Revolver', ammo: 1 } });
+  expect(hud.reserveEl.style.display).toBe('none');
 });

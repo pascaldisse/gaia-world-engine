@@ -73,12 +73,24 @@ export class Hud {
     });
     this.vitalsEl = document.createElement('div');
     this.weaponEl = document.createElement('div');
-    this.weaponEl.style.textAlign = 'right';
     for (const el of [this.vitalsEl, this.weaponEl]) Object.assign(el.style, {
-      minWidth: '0', maxWidth: 'min(46vw, 320px)', padding: '7px 9px',
-      background: 'rgba(6,10,18,.72)', borderRadius: '4px',
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      boxSizing: 'border-box', minWidth: '0', width: 'min(44vw, 22rem)',
+      maxWidth: '44vw', padding: '7px 9px', background: 'rgba(6,10,18,.72)',
+      borderRadius: '4px', display: 'none', flexDirection: 'column', gap: '3px',
     });
+    const row = (parent, field) => {
+      const el = document.createElement('div');
+      el.dataset.field = field;
+      Object.assign(el.style, { display: 'none', justifyContent: 'space-between', gap: '8px' });
+      parent.appendChild(el);
+      return el;
+    };
+    this.healthEl = row(this.vitalsEl, 'health');
+    this.armorEl = row(this.vitalsEl, 'armor');
+    this.scoreEl = row(this.vitalsEl, 'score');
+    this.weaponNameEl = row(this.weaponEl, 'weapon');
+    this.ammoEl = row(this.weaponEl, 'ammo');
+    this.reloadEl = row(this.weaponEl, 'reloading');
     this.statsEl.appendChild(this.vitalsEl);
     this.statsEl.appendChild(this.weaponEl);
     document.body.appendChild(this.statsEl);
@@ -107,25 +119,27 @@ export class Hud {
     const healthMax = health?.max ?? (finite(healthCurrent) ? HUD_DEFAULT_HEALTH_MAX : null);
     const armorCurrent = armor?.current;
     const armorMax = armor?.max ?? (finite(armorCurrent) ? HUD_DEFAULT_ARMOR_MAX : null);
-    const left = [];
-    if (finite(healthCurrent) && finite(healthMax) && healthMax > 0) left.push(`HEALTH ${healthCurrent}/${healthMax}`);
-    if (finite(armorCurrent) && finite(armorMax) && armorMax > 0) left.push(`ARMOR ${armorCurrent}/${armorMax}`);
+    const show = (el, text) => {
+      el.textContent = text ?? '';
+      el.style.display = text === null ? 'none' : 'flex';
+      return text !== null;
+    };
+    const hasHealth = show(this.healthEl, finite(healthCurrent) && finite(healthMax) && healthMax > 0
+      ? `HEALTH  ${healthCurrent}/${healthMax}` : null);
+    const hasArmor = show(this.armorEl, finite(armorCurrent) && finite(armorMax) && armorMax > 0
+      ? `ARMOR  ${armorCurrent}/${armorMax}` : null);
     const scoreValue = score?.value ?? score;
     // Original ScoreView renders the score with a trailing dollar sign.
-    if (finite(scoreValue)) left.push(`${scoreValue}$`);
-    const right = [];
-    if (weapon?.name) {
-      right.push(String(weapon.name).toUpperCase());
-      if (weapon.reloading) right.push('RELOADING');
-      else if (finite(weapon.ammo)) {
-        right.push(finite(weapon.maxAmmo) ? `${weapon.ammo}/${weapon.maxAmmo}` : `${weapon.ammo}`);
-      }
-    }
-    this.vitalsEl.textContent = left.join('  ·  ');
-    this.weaponEl.textContent = right.join('  ·  ');
-    this.vitalsEl.style.display = left.length ? 'block' : 'none';
-    this.weaponEl.style.display = right.length ? 'block' : 'none';
-    this.statsEl.style.display = !suppressed && (left.length || right.length) ? 'flex' : 'none';
+    const hasScore = show(this.scoreEl, finite(scoreValue) ? `SCORE  ${scoreValue}$` : null);
+    const hasWeapon = show(this.weaponNameEl, weapon?.name ? String(weapon.name).toUpperCase() : null);
+    const hasReload = show(this.reloadEl, weapon?.name && weapon.reloading ? 'RELOADING' : null);
+    const hasAmmo = show(this.ammoEl, weapon?.name && !weapon.reloading && finite(weapon.ammo)
+      ? `AMMO  ${finite(weapon.maxAmmo) ? `${weapon.ammo}/${weapon.maxAmmo}` : weapon.ammo}` : null);
+    const left = hasHealth || hasArmor || hasScore;
+    const right = hasWeapon || hasReload || hasAmmo;
+    this.vitalsEl.style.display = left ? 'flex' : 'none';
+    this.weaponEl.style.display = right ? 'flex' : 'none';
+    this.statsEl.style.display = !suppressed && (left || right) ? 'flex' : 'none';
   }
 
   buildStars() {

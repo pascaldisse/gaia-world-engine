@@ -153,7 +153,9 @@ export class Player {
   }
 
   controlsActive() {
-    return !this.frozen && !this.controlsPaused && !this.editorMode;
+    // `locked=true` remains the documented programmatic activation seam used
+    // by agent/player tests. Every lifecycle pause clears it below.
+    return !this.frozen && !this.editorMode && (!this.controlsPaused || this.locked);
   }
 
   inputActive() {
@@ -169,12 +171,16 @@ export class Player {
 
   resumeControls() {
     if (!this.activateControls()) return false;
-    if (!this.pointerAimDeclared()) this.dom?.requestPointerLock?.();
+    if (!this.pointerAimDeclared()) {
+      if (document.pointerLockElement === this.dom) this.locked = true;
+      else this.dom?.requestPointerLock?.();
+    }
     return true;
   }
 
   pauseControls() {
     this.controlsPaused = true;
+    this.locked = false;
     this.aimHeld = false;
     this.keys.clear();
     this.syncOverlay();

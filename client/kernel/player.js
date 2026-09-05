@@ -259,6 +259,7 @@ export class Player {
 
   update(dt) {
     if (this.frozen) {
+      if (!this.controlsPaused || this.keys.size || this.aimHeld) this.pauseControls();
       this.camera.position.copy(this.position);
       this.euler.set(this.pitch, this.yaw, 0);
       this.camera.quaternion.setFromEuler(this.euler);

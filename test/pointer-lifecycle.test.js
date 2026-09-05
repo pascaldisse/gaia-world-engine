@@ -51,6 +51,15 @@ test('frozen title rejects overlay activation, movement and pointer aim', () => 
   player.syncOverlay(); expect(overlay.style.display).toBe('flex');
 });
 
+test('entering frozen state clears already-live controls on update', () => {
+  const { player } = makePlayer();
+  player.activateControls(); player.keys.add('KeyW'); player.aimHeld = true;
+  player.frozen = true; player.update(1 / 60);
+  expect(player.controlsPaused).toBe(true);
+  expect(player.keys.size).toBe(0);
+  expect(player.aimHeld).toBe(false);
+});
+
 test('New Game activation; Escape pauses; overlay click resumes pointer aim without lock', () => {
   const { player, overlay, dom } = makePlayer({ menu: true });
   player.frozen = false; delete overlay.dataset.menu; // applyLevel lifecycle

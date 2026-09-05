@@ -157,12 +157,13 @@ test('first click coordinates aim body and first shot identically while strafing
 });
 
 test('BUSTED blocks movement/equip/fire even while arrest health remains positive', () => {
-  const { player, dom } = makePlayer(); player.activateControls(); player.keys.add('KeyW');
+  const { player, dom, overlay } = makePlayer(); player.activateControls(); player.keys.add('KeyW');
   const { weapons, sent } = makeWeapons(player, dom);
   const hud = new Hud({ presenceId: 'p1', player, send: (ops) => sent.push(...ops), bannerDurationMs: 1000 });
   weapons.firing = true; player.aimHeld = true;
   hud.busted();
   expect(player.inputBlocks.has('hud-gameover')).toBe(true);
+  expect(overlay.style.display).toBe('none');
   expect(player.inputActive()).toBe(false);
   expect(player.keys.size).toBe(0);
   expect(weapons.firing).toBe(false); expect(player.aimHeld).toBe(false);
@@ -191,15 +192,26 @@ test('banner timer removes only its block and neither pauses nor steals pointer 
 
 test('Escape/blur pause during banner survives timer release', async () => {
   for (const pause of ['escape', 'blur']) {
-    const { player } = makePlayer(); player.activateControls();
+    const { player, overlay } = makePlayer(); player.activateControls();
     const hud = new Hud({ presenceId: 'p1', player, send() {}, bannerDurationMs: 5 });
     hud.busted();
     if (pause === 'escape') doc.emit('keydown', { code: 'Escape' }); else win.emit('blur');
+    expect(overlay.style.display, pause).toBe('none');
     await Bun.sleep(15);
+    expect(overlay.style.display, pause).toBe('flex');
     expect(player.inputBlocks.size, pause).toBe(0);
     expect(player.controlsPaused, pause).toBe(true);
     expect(player.controlsActive(), pause).toBe(false);
     hud.dispose();
+  }
+});
+
+test('transient blocks do not hide frozen title or game menu', () => {
+  for (const menu of [false, true]) {
+    const { player, overlay } = makePlayer({ menu });
+    player.frozen = true;
+    player.addInputBlock('cutscene');
+    expect(overlay.style.display).toBe('flex');
   }
 });
 

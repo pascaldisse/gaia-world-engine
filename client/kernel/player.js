@@ -208,7 +208,9 @@ export class Player {
   // visible cursor is not itself evidence that play is active.
   syncOverlay() {
     if (!this.overlay) return;
-    const live = this.editorMode || this.inputActive();
+    // Transient blockers own their presentation; resume card waits for release.
+    const blocked = !this.frozen && this.inputBlocks.size > 0;
+    const live = this.editorMode || this.inputActive() || blocked;
     if (!this.overlay.dataset?.menu) this.overlay.style.display = live ? 'none' : 'flex';
   }
 

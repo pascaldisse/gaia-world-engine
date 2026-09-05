@@ -119,9 +119,13 @@ export class Hud {
     const healthMax = health?.max ?? (finite(healthCurrent) ? HUD_DEFAULT_HEALTH_MAX : null);
     const armorCurrent = armor?.current;
     const armorMax = armor?.max ?? (finite(armorCurrent) ? HUD_DEFAULT_ARMOR_MAX : null);
+    const setDisplay = (el, value) => {
+      if (el.style.display !== value) el.style.display = value;
+    };
     const show = (el, text) => {
-      el.textContent = text ?? '';
-      el.style.display = text === null ? 'none' : 'flex';
+      const nextText = text ?? '';
+      if (el.textContent !== nextText) el.textContent = nextText;
+      setDisplay(el, text === null ? 'none' : 'flex');
       return text !== null;
     };
     const hasHealth = show(this.healthEl, finite(healthCurrent) && finite(healthMax) && healthMax > 0
@@ -137,9 +141,9 @@ export class Hud {
       ? `AMMO  ${finite(weapon.maxAmmo) ? `${weapon.ammo}/${weapon.maxAmmo}` : weapon.ammo}` : null);
     const left = hasHealth || hasArmor || hasScore;
     const right = hasWeapon || hasReload || hasAmmo;
-    this.vitalsEl.style.display = left ? 'flex' : 'none';
-    this.weaponEl.style.display = right ? 'flex' : 'none';
-    this.statsEl.style.display = !suppressed && (left || right) ? 'flex' : 'none';
+    setDisplay(this.vitalsEl, left ? 'flex' : 'none');
+    setDisplay(this.weaponEl, right ? 'flex' : 'none');
+    setDisplay(this.statsEl, !suppressed && (left || right) ? 'flex' : 'none');
   }
 
   buildStars() {

@@ -2,7 +2,18 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Hud, HUD_DEFAULT_ARMOR_MAX, HUD_DEFAULT_HEALTH_MAX } from '../client/kernel/hud.js';
 
 class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.style = {}; this.dataset = {}; this.children = []; this.textContent = ''; this.parentNode = null; }
+  constructor(tag) {
+    this.tagName = tag.toUpperCase();
+    this.styleWrites = 0;
+    this.style = new Proxy({}, { set: (target, key, value) => { this.styleWrites += 1; target[key] = value; return true; } });
+    this.dataset = {};
+    this.children = [];
+    this._textContent = '';
+    this.textWrites = 0;
+    this.parentNode = null;
+  }
+  get textContent() { return this._textContent; }
+  set textContent(value) { this.textWrites += 1; this._textContent = value; }
   appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
   remove() { if (!this.parentNode) return; this.parentNode.children = this.parentNode.children.filter((child) => child !== this); this.parentNode = null; }
 }
@@ -97,6 +108,29 @@ describe('Hud core stats DOM', () => {
     expect(hud.starsEl.style.top).toBe('12px');
     expect(hud.countdownEl.style.top).toBe('12px');
     expect(hud.bannerEl.style.zIndex).toBe('25');
+  });
+
+  test('unchanged frame performs zero text-node or display-style writes', () => {
+    const stats = {
+      health: { hp: 73, max: 100 }, armor: { current: 20, max: 100 },
+      weapon: { name: 'Shotgun', ammo: 4, maxAmmo: 8 }, score: { value: 50 },
+    };
+    hud.setStats(stats, { mounted: true });
+    const elements = [
+      hud.statsEl, hud.vitalsEl, hud.weaponEl, hud.healthEl, hud.armorEl,
+      hud.scoreEl, hud.weaponNameEl, hud.ammoEl, hud.reloadEl,
+    ];
+    const writes = () => elements.reduce((sum, el) => sum + el.textWrites + el.styleWrites, 0);
+    const before = writes();
+    hud.setStats(structuredClone(stats), { mounted: true });
+    expect(writes()).toBe(before);
+
+    const textBefore = elements.reduce((sum, el) => sum + el.textWrites, 0);
+    const styleBefore = elements.reduce((sum, el) => sum + el.styleWrites, 0);
+    hud.setStats({ ...stats, weapon: { ...stats.weapon, ammo: 3 } }, { mounted: true });
+    expect(elements.reduce((sum, el) => sum + el.textWrites, 0) - textBefore).toBe(1);
+    expect(elements.reduce((sum, el) => sum + el.styleWrites, 0) - styleBefore).toBe(0);
+    expect(hud.ammoEl.textContent).toBe('AMMO  3/8');
   });
 
   test('dispose clears timers and removes every owned DOM node', () => {

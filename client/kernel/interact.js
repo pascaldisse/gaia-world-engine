@@ -4,6 +4,7 @@ import { matchesWhen } from '../../shared/ops.js';
 import { pointToInteractDistance } from '../../shared/collider.js';
 import { r2 } from '../../shared/num.js';
 import { heightAt } from './terrain.js';
+import { isTyping } from './dom.js';
 
 // Always-on hands: look at a thing, E to grab, scroll to push/pull, E to drop.
 // A carry is a stream of merge ops — every other client (and agent) sees it live.
@@ -40,7 +41,7 @@ export class Interact {
     this.target = new THREE.Vector3();
 
     document.addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyE' || !this.player.locked || this.player.editorMode) return;
+      if (e.code !== 'KeyE' || !this.inputActive()) return;
       if (this.player.vehicle) this.carExit();
       else if (this.holding) this.drop();
       else if (this.usable) this.use(this.usable);
@@ -49,6 +50,14 @@ export class Interact {
     document.addEventListener('wheel', (e) => {
       if (this.holding) this.dist = Math.min(30, Math.max(1.5, this.dist - Math.sign(e.deltaY) * 0.8));
     });
+  }
+
+  inputActive() {
+    // Shared lifecycle supports unlocked pointer-aim and preserves the legacy
+    // locked seam for generic players/tests that predate Player.inputActive().
+    const active = this.player.inputActive?.()
+      ?? (!this.player.editorMode && this.player.locked);
+    return active && !isTyping();
   }
 
   pick() {
@@ -161,7 +170,7 @@ export class Interact {
   }
 
   update(dt, now) {
-    if (!this.player.locked || this.player.editorMode) {
+    if (!this.inputActive()) {
       if (this.holding) this.drop();
       this.setHover(null);
       this.usable = null;

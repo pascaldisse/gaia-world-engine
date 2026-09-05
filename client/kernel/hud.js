@@ -4,14 +4,17 @@
 
 export const HUD_DEFAULT_HEALTH_MAX = 100;
 export const HUD_DEFAULT_ARMOR_MAX = 100;
+export const HUD_BANNER_DURATION_MS = 3000;
+const HUD_GAMEOVER_INPUT_BLOCK = 'hud-gameover';
 
 const finite = (value) => Number.isFinite(value);
 
 export class Hud {
-  constructor({ presenceId, send, player }) {
+  constructor({ presenceId, send, player, bannerDurationMs = HUD_BANNER_DURATION_MS }) {
     this.presenceId = presenceId;
     this.send = send;
     this.player = player;
+    this.bannerDurationMs = bannerDurationMs;
     this.showing = false; // banner guard: not re-triggerable while up
     this.buildStars();
     this.buildBanner();
@@ -215,14 +218,19 @@ export class Hud {
   showBanner(text) {
     if (this.showing) return; // guard: ignore re-triggers while up
     this.showing = true;
+    this.player?.addInputBlock?.(HUD_GAMEOVER_INPUT_BLOCK);
     this.bannerTextEl.textContent = text;
     this.bannerEl.style.display = 'flex';
     this.bannerTimer = setTimeout(() => {
-      this.respawn();
-      this.bannerEl.style.display = 'none';
-      this.showing = false;
-      this.bannerTimer = null;
-    }, 3000);
+      try {
+        this.respawn();
+      } finally {
+        this.player?.removeInputBlock?.(HUD_GAMEOVER_INPUT_BLOCK);
+        this.bannerEl.style.display = 'none';
+        this.showing = false;
+        this.bannerTimer = null;
+      }
+    }, this.bannerDurationMs);
   }
 
   // OG: an arrest holds a 3s gameover delay before BUSTED shows, while death
@@ -239,6 +247,8 @@ export class Hud {
   dispose() {
     if (this.countdownTimer) clearInterval(this.countdownTimer);
     if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    this.player?.removeInputBlock?.(HUD_GAMEOVER_INPUT_BLOCK);
+    this.showing = false;
     this.countdownTimer = null;
     this.bannerTimer = null;
     for (const el of [this.statsEl, this.starsEl, this.countdownEl, this.bannerEl]) el?.remove?.();

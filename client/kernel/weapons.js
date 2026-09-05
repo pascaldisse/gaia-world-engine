@@ -67,6 +67,7 @@ export class Weapons {
     };
     // focus loss must never leave the trigger stuck down (pointerup can be missed)
     this.onPointerCancel = () => this.releaseTrigger();
+    this.onInputBlock = () => this.releaseTrigger();
     this.onBlur = () => this.releaseTrigger();
     this.onVisibility = () => { if (document.hidden) this.releaseTrigger(); };
     domElement?.addEventListener('pointerdown', this.onPointerDown);
@@ -77,6 +78,7 @@ export class Weapons {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('blur', this.onBlur);
     document.addEventListener('visibilitychange', this.onVisibility);
+    this.player.inputBlockListeners?.add(this.onInputBlock);
     fetch(WEAPONS_URL).then((r) => r.ok ? r.json() : Promise.reject(new Error(`GET ${WEAPONS_URL}: ${r.status}`)))
       .then((data) => { this.list = data.weapons ?? []; this.byName = new Map(this.list.map((w) => [w.name, w])); })
       .catch((err) => console.warn('[gaia] weapon data unavailable', err));
@@ -177,5 +179,6 @@ export class Weapons {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('blur', this.onBlur);
     document.removeEventListener('visibilitychange', this.onVisibility);
+    this.player.inputBlockListeners?.delete(this.onInputBlock);
   }
 }

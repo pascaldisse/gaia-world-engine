@@ -2,6 +2,7 @@ import { test, expect, beforeEach, afterEach } from 'bun:test';
 import * as THREE from 'three/webgpu';
 import { Player } from '../client/kernel/player.js';
 import { Weapons } from '../client/kernel/weapons.js';
+import { Hud } from '../client/kernel/hud.js';
 
 class Events {
   constructor() { this.listeners = new Map(); }
@@ -9,12 +10,20 @@ class Events {
   removeEventListener(type, fn) { this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn)); }
   emit(type, event = {}) { for (const fn of this.listeners.get(type) ?? []) fn({ type, preventDefault() {}, stopPropagation() {}, ...event }); }
 }
+class Node extends Events {
+  constructor() { super(); this.style = {}; this.dataset = {}; this.children = []; this.textContent = ''; this.parentNode = null; }
+  appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this); this.parentNode = null; }
+}
 
 let prevWin, prevDoc, prevFetch, win, doc;
 beforeEach(() => {
   prevWin = globalThis.window; prevDoc = globalThis.document; prevFetch = globalThis.fetch;
   win = new Events(); doc = new Events();
-  Object.assign(doc, { activeElement: null, hidden: false, pointerLockElement: null });
+  Object.assign(doc, {
+    activeElement: null, hidden: false, pointerLockElement: null,
+    body: new Node(), createElement: () => new Node(),
+  });
   globalThis.window = win; globalThis.document = doc;
   globalThis.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ weapons: [] }) });
 });
@@ -145,6 +154,63 @@ test('first click coordinates aim body and first shot identically while strafing
   expect(Math.abs(aimedYaw)).toBeGreaterThan(0.1);
   expect(player.position.z).toBeLessThan(0); // strafing/movement remains independent
   win.emit('pointerup', { button: 0 }); weapons.dispose();
+});
+
+test('BUSTED blocks movement/equip/fire even while arrest health remains positive', () => {
+  const { player, dom } = makePlayer(); player.activateControls(); player.keys.add('KeyW');
+  const { weapons, sent } = makeWeapons(player, dom);
+  const hud = new Hud({ presenceId: 'p1', player, send: (ops) => sent.push(...ops), bannerDurationMs: 1000 });
+  weapons.firing = true; player.aimHeld = true;
+  hud.busted();
+  expect(player.inputBlocks.has('hud-gameover')).toBe(true);
+  expect(player.inputActive()).toBe(false);
+  expect(player.keys.size).toBe(0);
+  expect(weapons.firing).toBe(false); expect(player.aimHeld).toBe(false);
+  weapons.update();
+  const beforeInput = sent.length;
+  weapons.equip('Revolver'); weapons.reload(); weapons.fire();
+  expect(sent.length).toBe(beforeInput);
+  expect(sent.some((op) => ['equip', 'reload', 'fire'].includes(op.op))).toBe(false);
+  hud.dispose(); weapons.dispose();
+});
+
+test('banner timer removes only its block and neither pauses nor steals pointer lock', async () => {
+  const { player, dom } = makePlayer(); player.activateControls();
+  const sent = []; const hud = new Hud({ presenceId: 'p1', player, send: (ops) => sent.push(...ops), bannerDurationMs: 5 });
+  hud.wasted();
+  expect(player.controlsActive()).toBe(false);
+  await Bun.sleep(20);
+  expect(hud.showing).toBe(false);
+  expect(player.inputBlocks.size).toBe(0);
+  expect(player.controlsPaused).toBe(false);
+  expect(player.controlsActive()).toBe(true);
+  expect(dom.lockRequests).toBe(0);
+  expect(sent.some((op) => op.component === 'warp')).toBe(true);
+  hud.dispose();
+});
+
+test('Escape/blur pause during banner survives timer release', async () => {
+  for (const pause of ['escape', 'blur']) {
+    const { player } = makePlayer(); player.activateControls();
+    const hud = new Hud({ presenceId: 'p1', player, send() {}, bannerDurationMs: 5 });
+    hud.busted();
+    if (pause === 'escape') doc.emit('keydown', { code: 'Escape' }); else win.emit('blur');
+    await Bun.sleep(15);
+    expect(player.inputBlocks.size, pause).toBe(0);
+    expect(player.controlsPaused, pause).toBe(true);
+    expect(player.controlsActive(), pause).toBe(false);
+    hud.dispose();
+  }
+});
+
+test('disposing a showing HUD removes only its block and cancels respawn', async () => {
+  const { player } = makePlayer(); player.activateControls();
+  const sent = []; const hud = new Hud({ presenceId: 'p1', player, send: (ops) => sent.push(...ops), bannerDurationMs: 5 });
+  hud.wasted(); player.pauseControls(); hud.dispose();
+  expect(player.inputBlocks.size).toBe(0);
+  expect(player.controlsPaused).toBe(true);
+  await Bun.sleep(15);
+  expect(sent).toEqual([]);
 });
 
 test('idle cursor motion does not rotate source body; driving blocks fire', () => {

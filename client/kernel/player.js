@@ -66,6 +66,8 @@ export class Player {
     // Event-driven gameplay lifecycle. Pointer-aim does not use pointer lock,
     // so lock state alone cannot represent pause/title/focus loss.
     this.controlsPaused = true;
+    this.inputBlocks = new Set();
+    this.inputBlockListeners = new Set();
     this.aimHeld = false;
     this.editorMode = false;
     this.flyActive = false;
@@ -154,8 +156,24 @@ export class Player {
 
   controlsActive() {
     // `locked=true` remains the documented programmatic activation seam used
-    // by agent/player tests. Every lifecycle pause clears it below.
-    return !this.frozen && !this.editorMode && (!this.controlsPaused || this.locked);
+    // by agent/player tests. Independent blockers never mutate pause/lock.
+    return !this.frozen && !this.editorMode && this.inputBlocks.size === 0
+      && (!this.controlsPaused || this.locked);
+  }
+
+  addInputBlock(reason) {
+    if (!reason) return;
+    const added = !this.inputBlocks.has(reason);
+    this.inputBlocks.add(reason);
+    this.keys.clear();
+    this.aimHeld = false;
+    if (added) for (const listener of this.inputBlockListeners) listener(reason);
+    this.syncOverlay();
+  }
+
+  removeInputBlock(reason) {
+    this.inputBlocks.delete(reason);
+    this.syncOverlay();
   }
 
   inputActive() {

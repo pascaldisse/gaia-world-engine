@@ -43,6 +43,10 @@ const AVP_DEFAULT_BODY_MASS = 1;
 const AVP_DEFAULT_BODY_ANGULAR_DRAG = 40;
 const AVP_PHYSICS_GRAVITY_Y = -20;
 const AVP_MAX_ANGULAR_SPEED = 100;
+// The port has one scalar yaw DOF instead of PhysX's sphere + hinge + hull
+// contact system. Keep that reduced DOF inside the established arcade-driving
+// envelope; raw AddTorque otherwise integrates 9–21 radians per input second.
+const AVP_DEFAULT_MAX_YAW_RATE = 2.2;
 const AVP_MOVEMENT_MODE_VELOCITY = 0;
 const AVP_MOVEMENT_MODE_ANGULAR_VELOCITY = 1;
 export const PLAYER_EYE_HEIGHT_DEFAULT_M = 1.7;
@@ -574,7 +578,8 @@ export class Player {
     state.sphereAngularVelocity = applyAngularDrag(state.sphereAngularVelocity, sphereAngularDrag, dt);
     state.bodyAngularVelocity = applyAngularDrag(state.bodyAngularVelocity, bodyAngularDrag, dt);
     state.sphereAngularVelocity = Math.max(-AVP_MAX_ANGULAR_SPEED, Math.min(AVP_MAX_ANGULAR_SPEED, state.sphereAngularVelocity));
-    state.bodyAngularVelocity = Math.max(-AVP_MAX_ANGULAR_SPEED, Math.min(AVP_MAX_ANGULAR_SPEED, state.bodyAngularVelocity));
+    const maxYawRate = spec.maxYawRate ?? AVP_DEFAULT_MAX_YAW_RATE;
+    state.bodyAngularVelocity = Math.max(-maxYawRate, Math.min(maxYawRate, state.bodyAngularVelocity));
 
     if (grounded && movementMode === AVP_MOVEMENT_MODE_ANGULAR_VELOCITY) {
       // GAIA seam — PhysX sphere/ground contact turns right-axis angular

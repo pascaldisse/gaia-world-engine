@@ -32,6 +32,7 @@ function withPlayer(run, rig = null) {
     const overlay = { addEventListener() {}, dataset: {}, style: {} };
     const player = new Player({ camera, dom, overlay, view: undefined });
     if (rig) player.rig = rig;
+    player.activateControls();
     run(player, camera);
   } finally {
     globalThis.document = prev;
@@ -95,6 +96,7 @@ test('under aim rig, bodyYaw follows the cursor while strafing (aim != movement)
     // cursor to the WEST (-X) => aim yaw ~ +PI/2
     player.pointerClient = pixelOf(camera, px - 40, 0, pz);
     player.keys = new Set(['KeyW']); // strafe NORTH (movement -Z)
+    player.aimHeld = true;
     for (let i = 0; i < 40; i++) player.update(1 / 60);
     // moved north (canMove worked without lock)
     expect(player.position.z).toBeLessThan(pz - 0.05);
@@ -130,6 +132,7 @@ test('authoritative fire yaw (bodyYaw) equals the rendered aim after update', ()
     player.locked = false;
     player.pointerClient = pixelOf(camera, px + 30, 0, pz - 12);
     player.keys = new Set(['KeyD']); // strafe while aiming
+    player.aimHeld = true;
     for (let i = 0; i < 20; i++) player.update(1 / 60);
     // weapons.fire() sends yaw: player.bodyYaw; it must equal the live aim
     const aim = player.pointerAimYaw();

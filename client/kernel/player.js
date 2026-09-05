@@ -63,6 +63,10 @@ export class Player {
     this.velocity = new THREE.Vector3();
     this.keys = new Set();
     this.locked = false;
+    // Event-driven gameplay lifecycle. Pointer-aim does not use pointer lock,
+    // so lock state alone cannot represent pause/title/focus loss.
+    this.controlsPaused = true;
+    this.aimHeld = false;
     this.editorMode = false;
     this.flyActive = false;
     this.flyLatched = false;
@@ -107,18 +111,23 @@ export class Player {
     // while a title menu is live (overlay.dataset.menu), entering the world
     // is the menu's job — a background click must not skip level setup
     overlay.addEventListener('click', () => {
-      if (!overlay.dataset.menu) dom.requestPointerLock();
+      if (overlay.dataset.menu || this.frozen) return;
+      this.resumeControls();
     });
     document.addEventListener('pointerlockchange', () => {
+      const wasLocked = this.locked;
       this.locked = document.pointerLockElement === dom;
+      if (this.locked) this.controlsPaused = false;
+      else if (wasLocked && !this.pointerAimDeclared()) this.pauseControls();
       this.syncOverlay();
     });
     // focus loss must never leave the body sprinting or the trigger stuck: drop
     // every held key when the window/tab loses focus (keyup can be missed).
     // Weapons clears its own `firing` the same way (see weapons.js).
     this._releaseKeys = () => this.keys.clear();
-    if (typeof window !== 'undefined') window.addEventListener('blur', this._releaseKeys);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) this.keys.clear(); });
+    this._pauseForFocusLoss = () => this.pauseControls();
+    if (typeof window !== 'undefined') window.addEventListener('blur', this._pauseForFocusLoss);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.pauseControls(); });
     document.addEventListener('mousemove', (e) => {
       // pointer-aim rigs need the live cursor PIXEL even when unlocked / under a
       // rig, so capture it before the pointer-lock look guards below.
@@ -128,7 +137,10 @@ export class Player {
       this.yaw -= e.movementX * 0.0022;
       this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * 0.0022));
     });
-    document.addEventListener('keydown', (e) => this.keys.add(e.code));
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape' && !this.editorMode) { this.pauseControls(); return; }
+      if (this.editorMode || this.inputActive()) this.keys.add(e.code);
+    });
     document.addEventListener('keyup', (e) => this.keys.delete(e.code));
   }
 
@@ -136,12 +148,43 @@ export class Player {
     this.locomotion = { ...LOCOMOTION_DEFAULTS, ...spec };
   }
 
-  // The pause/menu overlay hides whenever controls are live: pointer-locked
-  // (FPS), in the editor, OR under a visible-cursor pointer-aim rig. Callable
-  // when the rig changes (the game calls it from onCamera), not only on lock.
+  pointerAimDeclared() {
+    return !this.editorMode && this.rig?.aim === 'pointer';
+  }
+
+  controlsActive() {
+    return !this.frozen && !this.controlsPaused && !this.editorMode;
+  }
+
+  inputActive() {
+    return this.controlsActive() && (this.locked || this.pointerAimDeclared());
+  }
+
+  activateControls() {
+    if (this.frozen) return false;
+    this.controlsPaused = false;
+    this.syncOverlay();
+    return true;
+  }
+
+  resumeControls() {
+    if (!this.activateControls()) return false;
+    if (!this.pointerAimDeclared()) this.dom?.requestPointerLock?.();
+    return true;
+  }
+
+  pauseControls() {
+    this.controlsPaused = true;
+    this.aimHeld = false;
+    this.keys.clear();
+    this.syncOverlay();
+  }
+
+  // The pause/menu overlay follows explicit lifecycle state. Pointer-aim's
+  // visible cursor is not itself evidence that play is active.
   syncOverlay() {
     if (!this.overlay) return;
-    const live = this.locked || this.editorMode || this.pointerAimActive();
+    const live = this.editorMode || this.inputActive();
     if (!this.overlay.dataset?.menu) this.overlay.style.display = live ? 'none' : 'flex';
   }
 
@@ -154,11 +197,11 @@ export class Player {
   // visible-cursor pointer-aim rig (top-down games do NOT lock the pointer, so
   // WASD movement and weapon fire must not require the lock). Editor excluded.
   pointerAimActive() {
-    return !this.editorMode && this.rig?.aim === 'pointer';
+    return this.controlsActive() && this.pointerAimDeclared();
   }
 
   pointerAimYaw(rig = this.rig) {
-    if (!rig || rig.aim !== 'pointer' || this.editorMode) return null;
+    if (!rig || rig.aim !== 'pointer' || !this.controlsActive()) return null;
     const p = this.pointerClient;
     const rect = this.dom?.getBoundingClientRect?.();
     if (!p || !this.camera || !rect) return null;
@@ -246,7 +289,7 @@ export class Player {
       }
     }
 
-    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked || this.pointerAimActive());
+    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.inputActive());
 
     if (this.vehicle && !flying) {
       this.grounded = false;
@@ -309,7 +352,9 @@ export class Player {
     // fixed and the body either aims at the pointer (opt-in `aim: 'pointer'`)
     // or turns toward wherever it is actually going.
     if (rig) {
-      const aimYaw = this.pointerAimYaw(rig);
+      // Unity MouseLook rotates the source/body while firing; merely moving a
+      // visible cursor must not continuously turn an idle body.
+      const aimYaw = this.aimHeld ? this.pointerAimYaw(rig) : null;
       if (aimYaw !== null) {
         // aim is INDEPENDENT of strafing: the body faces the cursor, WASD only
         // translates. bodyYaw is what renders AND what the weapon fires along,

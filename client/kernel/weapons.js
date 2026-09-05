@@ -39,10 +39,21 @@ export class Weapons {
 
     // The OG PcMotionInput fires from mouse button 0. Weapon choice is its UI,
     // so GAIA supplies ordered number/scroll selection over the extracted table.
-    this.onPointerDown = (e) => { if (e.button === 0 && !isTyping()) this.firing = true; };
-    this.onPointerUp = (e) => { if (e.button === 0) this.firing = false; };
-    // controls are live under pointer-lock OR a visible-cursor pointer-aim rig
-    const live = () => this.player.locked || this.player.pointerAimActive?.();
+    this.onPointerDown = (e) => {
+      if (e.button !== 0 || !this.controlsActive() || isTyping()) return;
+      // First shot must use this click, not a stale prior mousemove.
+      if (Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+        this.player.pointerClient = { x: e.clientX, y: e.clientY };
+      }
+      this.firing = true;
+      this.player.aimHeld = true;
+    };
+    this.onPointerUp = (e) => {
+      if (e.button !== 0) return;
+      this.firing = false;
+      this.player.aimHeld = false;
+    };
+    const live = () => this.controlsActive();
     this.onWheel = (e) => {
       if (!live() || isTyping() || !this.list.length) return;
       e.preventDefault();
@@ -55,18 +66,36 @@ export class Weapons {
       if (e.code.startsWith('Digit') && n >= 1 && n <= 9) { e.preventDefault(); this.equipIndex(n - 1); }
     };
     // focus loss must never leave the trigger stuck down (pointerup can be missed)
-    this.onBlur = () => { this.firing = false; };
+    this.onBlur = () => this.releaseTrigger();
+    this.onVisibility = () => { if (document.hidden) this.releaseTrigger(); };
     domElement?.addEventListener('pointerdown', this.onPointerDown);
-    domElement?.addEventListener('pointerup', this.onPointerUp);
     domElement?.addEventListener('wheel', this.onWheel, { passive: false });
+    // Release may happen outside the canvas; window owns the terminal edge.
+    window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('pointercancel', this.onPointerUp);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('blur', this.onBlur);
+    document.addEventListener('visibilitychange', this.onVisibility);
     fetch(WEAPONS_URL).then((r) => r.ok ? r.json() : Promise.reject(new Error(`GET ${WEAPONS_URL}: ${r.status}`)))
       .then((data) => { this.list = data.weapons ?? []; this.byName = new Map(this.list.map((w) => [w.name, w])); })
       .catch((err) => console.warn('[gaia] weapon data unavailable', err));
   }
 
   setPresence(id) { this.presence = id; }
+
+  ownEntity() { return this.presence ? this.store.get(this.presence) : null; }
+  controlsActive() {
+    const health = this.ownEntity()?.health;
+    const alive = !health || (health.hp ?? health.max ?? 0) > 0;
+    const playerActive = this.player.inputActive?.()
+      ?? this.player.controlsActive?.()
+      ?? (!this.player.frozen && !this.player.editorMode && (this.player.locked || this.player.pointerAimActive?.()));
+    return alive && playerActive;
+  }
+  releaseTrigger() {
+    this.firing = false;
+    this.player.aimHeld = false;
+  }
 
   ownWeapon() { return this.presence ? this.store.get(this.presence)?.weapon ?? null : null; }
   animationFor(name) { return WEAPON_ANIMATIONS[name] ?? EMPTY; }
@@ -78,19 +107,19 @@ export class Weapons {
     this.equipIndex((Math.max(index, 0) + direction + this.list.length) % this.list.length);
   }
   equip(name) {
-    if (!this.byName.has(name) || !this.presence) return;
+    if (!this.controlsActive() || !this.byName.has(name) || !this.presence) return;
     this.send([{ op: 'equip', by: this.presence, weapon: name }]);
   }
   reload() {
     const weapon = this.ownWeapon();
-    if (!weapon || !this.presence) return;
+    if (!this.controlsActive() || !weapon || !this.presence) return;
     this.send([{ op: 'reload', by: this.presence }]);
     const seconds = this.byName.get(weapon.name)?.realodTime ?? 0;
     this.play('reload', weapon.name, seconds);
   }
   fire() {
     const weapon = this.ownWeapon();
-    if (!weapon || !this.presence || this.player.vehicle) return;
+    if (!this.controlsActive() || !weapon || !this.presence || this.player.vehicle) return;
     const now = performance.now() / 1000;
     const spec = this.byName.get(weapon.name);
     if (now < this.nextFireAt) return;
@@ -110,15 +139,17 @@ export class Weapons {
   }
 
   update() {
+    const controlsActive = this.controlsActive();
     // The Set is the testable input path used by player movement; listeners
-    // above provide the real DOM path. Edge-detect so held digit/R keys fire once.
+    // above provide the real DOM path. Edge-detect only while controls live.
     for (const code of ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'KeyR']) {
-      const down = this.player.keys.has(code);
+      const down = controlsActive && this.player.keys.has(code);
       if (down && !this.handledKeys.has(code)) {
         if (code === 'KeyR') this.reload(); else this.equipIndex(Number(code.slice(5)) - 1);
       }
       if (down) this.handledKeys.add(code); else this.handledKeys.delete(code);
     }
+    if (!controlsActive) this.releaseTrigger();
     const weapon = this.ownWeapon();
     const name = weapon?.name;
     this.player.weaponSpeedMultiplier = this.byName.get(name)?.speedPenaltyMultiplier ?? 1;
@@ -130,7 +161,7 @@ export class Weapons {
       if (name) this.play('fire', name, Math.max(this.byName.get(name)?.fireRate ?? 0.12, 0.12));
     }
     // fire under pointer-lock (FPS) OR a visible-cursor pointer-aim rig (top-down)
-    if (this.firing && (this.player.locked || this.player.pointerAimActive?.()) && !isTyping()) this.fire();
+    if (this.firing && controlsActive && !isTyping()) this.fire();
     if (this.returnIdleAt && performance.now() / 1000 >= this.returnIdleAt) {
       this.returnIdleAt = 0;
       if (name) this.idle(name);
@@ -139,9 +170,11 @@ export class Weapons {
 
   dispose() {
     this.domElement?.removeEventListener('pointerdown', this.onPointerDown);
-    this.domElement?.removeEventListener('pointerup', this.onPointerUp);
     this.domElement?.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerUp);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('blur', this.onBlur);
+    document.removeEventListener('visibilitychange', this.onVisibility);
   }
 }

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { World } from './world.js';
 import { Sense } from './sense.js';
@@ -50,7 +50,7 @@ try {
   prefabs = [];
 }
 if (fs.existsSync(prefabsDir)) {
-  for (const f of fs.readdirSync(prefabsDir).filter((n) => n.endsWith('.json'))) {
+  for (const f of fs.readdirSync(prefabsDir, { recursive: true }).filter((n) => n.endsWith('.json')).sort()) {
     try {
       const prefab = JSON.parse(fs.readFileSync(path.join(prefabsDir, f), 'utf8'));
       const idx = prefabs.findIndex((p) => p.name === prefab.name);
@@ -345,7 +345,10 @@ function sceneDoc(comps) {
   return out;
 }
 
-function applyAndBroadcast(ops, from, { dev = false } = {}) {
+let runtime = null;
+const runtimeAuthority = Symbol('world-runtime');
+function applyAndBroadcast(ops, from, { dev = false, authority = null } = {}) {
+  if (runtime && authority !== runtimeAuthority) ops = runtime.filterOps?.(ops) ?? ops;
   if (ops.some((op) => op.op === 'reset')) {
     ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
   }
@@ -484,6 +487,8 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const q = Object.fromEntries(url.searchParams);
   try {
+    const handled = await runtime?.request?.(req, url);
+    if (handled !== undefined) return json(res, handled);
     if (req.method === 'GET' && url.pathname === '/world') {
       return json(res, { ...world.snapshot(), world: worldMeta, materials });
     }
@@ -688,6 +693,11 @@ function describe(op) {
 
 // GAIA_HOST: bind address — default loopback (own machine only); set
 // GAIA_HOST=0.0.0.0 explicitly to expose on the LAN. (Pascal-approved 08-09.)
+if (process.env.GAIA_WORLD_RUNTIME) {
+  const module = await import(pathToFileURL(path.resolve(process.env.GAIA_WORLD_RUNTIME)).href);
+  runtime = await module.createRuntime({ world, worldDir, apply: ops => applyAndBroadcast(ops, 'simulation', { authority: runtimeAuthority }) });
+  runtime.start?.();
+}
 const HOST = process.env.GAIA_HOST || '127.0.0.1';
 server.listen(PORT, HOST, () => {
   console.log(`[gaia] world server on http://localhost:${PORT} (ws + http + sense + act)`);

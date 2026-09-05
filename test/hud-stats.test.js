@@ -44,11 +44,13 @@ describe('Hud core stats DOM', () => {
     expect(hud.statsEl.style.display).toBe('none');
   });
 
-  test('death and respawn values update without stale state', () => {
+  test('death, respawn and over-max authoritative values update without stale state or HUD formulas', () => {
     hud.setStats({ health: { hp: 0, max: 100 } });
     expect(hud.vitalsEl.textContent).toBe('HEALTH 0/100');
     hud.setStats({ health: { hp: 100, max: 100 } });
     expect(hud.vitalsEl.textContent).toBe('HEALTH 100/100');
+    hud.setStats({ health: { hp: 125, max: 100 } });
+    expect(hud.vitalsEl.textContent).toBe('HEALTH 125/100');
   });
 
   test('reload replaces ammo readout; null ammo never invents a count', () => {

@@ -6,7 +6,6 @@ export const HUD_DEFAULT_HEALTH_MAX = 100;
 export const HUD_DEFAULT_ARMOR_MAX = 100;
 
 const finite = (value) => Number.isFinite(value);
-const bounded = (value, max) => Math.max(0, Math.min(max, value));
 
 export class Hud {
   constructor({ presenceId, send, player }) {
@@ -109,8 +108,8 @@ export class Hud {
     const armorCurrent = armor?.current;
     const armorMax = armor?.max ?? (finite(armorCurrent) ? HUD_DEFAULT_ARMOR_MAX : null);
     const left = [];
-    if (finite(healthCurrent) && finite(healthMax) && healthMax > 0) left.push(`HEALTH ${bounded(healthCurrent, healthMax)}/${healthMax}`);
-    if (finite(armorCurrent) && finite(armorMax) && armorMax > 0) left.push(`ARMOR ${bounded(armorCurrent, armorMax)}/${armorMax}`);
+    if (finite(healthCurrent) && finite(healthMax) && healthMax > 0) left.push(`HEALTH ${healthCurrent}/${healthMax}`);
+    if (finite(armorCurrent) && finite(armorMax) && armorMax > 0) left.push(`ARMOR ${armorCurrent}/${armorMax}`);
     const scoreValue = score?.value ?? score;
     // Original ScoreView renders the score with a trailing dollar sign.
     if (finite(scoreValue)) left.push(`${scoreValue}$`);

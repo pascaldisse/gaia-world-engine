@@ -457,6 +457,15 @@ export class Player {
     const radius = spec.rigidbody?.sphereRadius ?? AVP_DEFAULT_SPHERE_RADIUS;
     const bodyMass = spec.carBodyRigidbody?.mass ?? AVP_DEFAULT_BODY_MASS;
     const bodyAngularDrag = spec.carBodyRigidbody?.angularDrag ?? AVP_DEFAULT_BODY_ANGULAR_DRAG;
+    // Rigidbody.AddTorque integrates through the body's inertia tensor, not
+    // through mass. Unity computes that tensor from attached colliders when no
+    // explicit tensor is serialized. The import retains the hull AABB, so use
+    // the box's yaw inertia I_y=m(w²+l²)/12 as the deterministic seam.
+    const hullSize = spec.collider?.size;
+    const computedYawInertia = Array.isArray(hullSize)
+      ? bodyMass * (hullSize[0] ** 2 + hullSize[2] ** 2) / 12
+      : bodyMass;
+    const bodyYawInertia = spec.carBodyRigidbody?.inertiaTensor?.[1] ?? computedYawInertia;
     const SteeringInput = state.steeringInput;
     const AccelerationInput = state.accelerationInput;
     const BrakeInput = state.brakeInput;
@@ -497,10 +506,10 @@ export class Player {
       // FixedUpdate grounded forward/reverse branches both AddTorque to carBody.
       if (AccelerationInput > AVP_INPUT_DEADZONE || localForwardVelocity > AVP_MOVING_THRESHOLD) {
         const torque = SteeringInput * sign * turn * AVP_TORQUE_SCALE * TurnMultiplyer;
-        state.bodyAngularVelocity += torque / bodyMass * dt;
+        state.bodyAngularVelocity += torque / bodyYawInertia * dt;
       } else if (AccelerationInput < -AVP_INPUT_DEADZONE || localForwardVelocity < -AVP_MOVING_THRESHOLD) {
         const torque = SteeringInput * sign * turn * AVP_TORQUE_SCALE * TurnMultiplyer;
-        state.bodyAngularVelocity += torque / bodyMass * dt;
+        state.bodyAngularVelocity += torque / bodyYawInertia * dt;
       }
 
       // FixedUpdate normal brakelogic: FreezeRotationX while braking.
@@ -546,7 +555,7 @@ export class Player {
         // FixedUpdate airborne turnlogic and AddTorque (no velocity sign).
         const TurnMultiplyer = evaluateCurve(spec.turnCurve, MaxSpeed !== 0 ? carVelocityMagnitude / MaxSpeed : 0, 0);
         const torque = SteeringInput * turn * AVP_TORQUE_SCALE * TurnMultiplyer;
-        state.bodyAngularVelocity += torque / bodyMass * dt;
+        state.bodyAngularVelocity += torque / bodyYawInertia * dt;
       }
 
       // FixedUpdate airborne upright MoveRotation Slerp(... Vector3.up, 0.02).

@@ -32,6 +32,13 @@ sun.shadow.camera.right = 120;
 sun.shadow.camera.top = 120;
 sun.shadow.camera.bottom = -120;
 sun.shadow.camera.far = 400;
+// Without a depth/normal bias the 2048-tap shadow map (texel ~0.12 m over the
+// 240 m frustum) self-shadows every large up-facing surface: flat building
+// roofs seen straight-down go fully black (top-down city read as solid black
+// occluders). A small negative depth bias plus a world-space normal offset
+// clears the acne while keeping contact shadows. Generic default for any world.
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.4;
 scene.add(sun);
 function applyProjection() {
 const aspect = window.innerWidth / window.innerHeight;

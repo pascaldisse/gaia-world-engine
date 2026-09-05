@@ -202,10 +202,12 @@ export class View {
     if (eased && this.instancedModels) this.instancedModels.markDirty();
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
-      this.hide(this.hideQueue.shift());
+      const id = this.hideQueue.shift();
+      if (!this.isActive(this.store.get(id))) this.hide(id);
     }
     while (this.showQueue.length && performance.now() < deadline) {
-      this.show(this.showQueue.shift());
+      const id = this.showQueue.shift();
+      if (this.isActive(this.store.get(id))) this.show(id);
     }
     // builds are weighted by mesh-part count: each part attached this frame
     // costs the NEXT render first-draw setup (render object, bind groups,
@@ -498,6 +500,11 @@ export class View {
     if (!group || !components) return;
     const value = components[name];
     switch (name) {
+      case 'scene':
+        if (this.isActive(components)) {
+          if (group.userData.hidden) this.showQueue.push(id);
+        } else if (!group.userData.hidden) this.hideQueue.push(id);
+        break;
       case 'transform':
       case 'ground':
         if (!this.suppressed.has(id)) this.applyTransform(id);

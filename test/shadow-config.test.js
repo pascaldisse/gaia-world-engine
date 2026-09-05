@@ -37,6 +37,28 @@ test('shadowSpec: enabled:false authors a shadowless sun', () => {
   expect(shadowSpec({ enabled: false }).enabled).toBe(false);
 });
 
+test('shadowSpec: a positive sub-1 mapSize clamps to >=1, never rounds to 0', () => {
+  expect(shadowSpec({ mapSize: 0.1 }).mapSize).toBe(1);
+  expect(shadowSpec({ mapSize: 0.9 }).mapSize).toBe(1);
+  expect(shadowSpec({ mapSize: 1.4 }).mapSize).toBe(1);
+  expect(shadowSpec({ mapSize: 1023.6 }).mapSize).toBe(1024);
+  // non-positive still falls back to the default
+  expect(shadowSpec({ mapSize: 0 }).mapSize).toBe(SHADOW_DEFAULTS.mapSize);
+  expect(shadowSpec({ mapSize: -8 }).mapSize).toBe(SHADOW_DEFAULTS.mapSize);
+});
+
+test('shadowSpec: far must stay strictly past near (no degenerate frustum)', () => {
+  // far<=near supplied -> default far (which is > near)
+  expect(shadowSpec({ near: 10, far: 5 }).far).toBe(SHADOW_DEFAULTS.far);
+  expect(shadowSpec({ near: 10, far: 10 }).far).toBe(SHADOW_DEFAULTS.far);
+  // near larger than the default far -> push just past near
+  const s = shadowSpec({ near: 900, far: 100 });
+  expect(s.near).toBe(900);
+  expect(s.far).toBeGreaterThan(s.near);
+  // a valid far is kept
+  expect(shadowSpec({ near: 1, far: 250 }).far).toBe(250);
+});
+
 // --- applyShadow mutates a real light --------------------------------------
 
 test('applyShadow writes the resolved spec onto a DirectionalLight shadow', () => {

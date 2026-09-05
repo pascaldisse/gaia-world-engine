@@ -30,12 +30,20 @@ export const SHADOW_DEFAULTS = Object.freeze({
 // coerce every field to a sane value. Never mutates the input.
 export function shadowSpec(spec = null) {
   const s = spec && typeof spec === 'object' ? spec : {};
+  const near = posNum(s.near, SHADOW_DEFAULTS.near);
+  // far must stay strictly past near or the shadow frustum is degenerate; a
+  // supplied far that isn't (e.g. far<=near) falls back to the default, and if
+  // even that would collide with an unusually large near we push just past it.
+  let far = posNum(s.far, SHADOW_DEFAULTS.far);
+  if (far <= near) far = SHADOW_DEFAULTS.far > near ? SHADOW_DEFAULTS.far : near + 1;
   return {
     enabled: s.enabled === undefined ? SHADOW_DEFAULTS.enabled : !!s.enabled,
+    // a positive-but-sub-1 mapSize (0.1) rounds to 0 and yields a broken 0×0
+    // shadow map — clamp the rounded value to at least one texel.
     mapSize: posInt(s.mapSize, SHADOW_DEFAULTS.mapSize),
     radius: posNum(s.radius, SHADOW_DEFAULTS.radius),
-    near: posNum(s.near, SHADOW_DEFAULTS.near),
-    far: posNum(s.far, SHADOW_DEFAULTS.far),
+    near,
+    far,
     bias: Number.isFinite(s.bias) ? s.bias : SHADOW_DEFAULTS.bias,
     normalBias: Number.isFinite(s.normalBias) && s.normalBias >= 0 ? s.normalBias : SHADOW_DEFAULTS.normalBias,
   };
@@ -63,4 +71,5 @@ export function applyShadow(light, spec = null) {
 }
 
 function posNum(v, d) { return Number.isFinite(v) && v > 0 ? v : d; }
-function posInt(v, d) { return Number.isFinite(v) && v > 0 ? Math.round(v) : d; }
+// positive integer of at least 1: a sub-1 positive (0.1) must not round to 0.
+function posInt(v, d) { return Number.isFinite(v) && v > 0 ? Math.max(1, Math.round(v)) : d; }

@@ -66,13 +66,14 @@ export class Weapons {
       if (e.code.startsWith('Digit') && n >= 1 && n <= 9) { e.preventDefault(); this.equipIndex(n - 1); }
     };
     // focus loss must never leave the trigger stuck down (pointerup can be missed)
+    this.onPointerCancel = () => this.releaseTrigger();
     this.onBlur = () => this.releaseTrigger();
     this.onVisibility = () => { if (document.hidden) this.releaseTrigger(); };
     domElement?.addEventListener('pointerdown', this.onPointerDown);
     domElement?.addEventListener('wheel', this.onWheel, { passive: false });
     // Release may happen outside the canvas; window owns the terminal edge.
     window.addEventListener('pointerup', this.onPointerUp);
-    window.addEventListener('pointercancel', this.onPointerUp);
+    window.addEventListener('pointercancel', this.onPointerCancel);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('blur', this.onBlur);
     document.addEventListener('visibilitychange', this.onVisibility);
@@ -172,7 +173,7 @@ export class Weapons {
     this.domElement?.removeEventListener('pointerdown', this.onPointerDown);
     this.domElement?.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('pointerup', this.onPointerUp);
-    window.removeEventListener('pointercancel', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerCancel);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('blur', this.onBlur);
     document.removeEventListener('visibilitychange', this.onVisibility);

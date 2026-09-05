@@ -109,6 +109,9 @@ test('window pointerup and hidden visibility clear firing outside canvas', () =>
   win.emit('pointerup', { button: 0 });
   expect(weapons.firing).toBe(false); expect(player.aimHeld).toBe(false);
   dom.emit('pointerdown', { button: 0, clientX: 121, clientY: 81 });
+  win.emit('pointercancel', { button: -1 });
+  expect(weapons.firing).toBe(false); expect(player.aimHeld).toBe(false);
+  dom.emit('pointerdown', { button: 0, clientX: 121, clientY: 81 });
   doc.hidden = true; doc.emit('visibilitychange');
   expect(weapons.firing).toBe(false); expect(player.aimHeld).toBe(false);
   weapons.dispose();

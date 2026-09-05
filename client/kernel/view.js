@@ -7,6 +7,7 @@ import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
 import { hasMotion } from '../../shared/motion.js';
+import { planarYaw } from '../../shared/collider.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { InstancedModels } from './instanced-models.js';
 import { resolveRainBones } from './rain-body.js';
@@ -1251,7 +1252,7 @@ export class View {
       if (!boxes) continue;
       const group = this.groups.get(id);
       if (!this.groundEntityEligible(id, group, excludeIds)) continue;
-      const yaw = group.rotation.y;
+      const yaw = planarYaw(group.rotation);
       const cos = Math.cos(yaw);
       const sin = Math.sin(yaw);
       const wx = x - group.position.x;
@@ -1263,7 +1264,10 @@ export class View {
         if (box.blocker) continue;
         const [bx, by, bz] = box.position ?? [0, 0, 0];
         const [sx, sy, sz] = box.size ?? [1, 0.2, 1];
-        if (Math.abs(lx - bx) > sx / 2 || Math.abs(lz - bz) > sz / 2) continue;
+        const boxYaw = planarYaw(box.rotation);
+        const c = Math.cos(boxYaw), s = Math.sin(boxYaw);
+        const dx = lx - bx, dz = lz - bz;
+        if (Math.abs(dx * c - dz * s) > sx / 2 || Math.abs(dx * s + dz * c) > sz / 2) continue;
         const top = group.position.y + by + sy / 2;
         if (!Number.isFinite(top) || top > maxTop) continue;
         if (best === null || top > best.top) best = { top, id };
@@ -1297,7 +1301,7 @@ export class View {
       if (!boxes) continue;
       const group = this.groups.get(id);
       if (!group) continue;
-      const groupYaw = group.rotation.y;
+      const groupYaw = planarYaw(group.rotation);
       const groupCos = Math.cos(groupYaw);
       const groupSin = Math.sin(groupYaw);
       // Collider boxes live in entity-local coordinates. Mirror/non-uniform
@@ -1313,7 +1317,7 @@ export class View {
         if (!box.blocker) continue;
         const [bx, by, bz] = box.position ?? [0, 0, 0];
         const [sx, sy, sz] = box.size ?? [1, 1, 1];
-        const boxYaw = box.rotation?.[1] ?? 0;
+        const boxYaw = planarYaw(box.rotation);
         const boxCos = Math.cos(boxYaw);
         const boxSin = Math.sin(boxYaw);
         const top = group.position.y + by * scaleY + sy * absY / 2;

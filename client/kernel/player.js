@@ -54,6 +54,7 @@ export class Player {
   constructor({ camera, dom, overlay, view }) {
     this.camera = camera;
     this.dom = dom; // the render canvas — pointer aim reads its client rect
+    this.overlay = overlay; // pause/menu card — hidden while controls are live
     this.pointerClient = null; // last cursor pixel {x,y} (pointer-aim rigs)
     this.view = view;
     this.yaw = 0;
@@ -110,8 +111,14 @@ export class Player {
     });
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === dom;
-      overlay.style.display = this.locked || this.editorMode ? 'none' : 'flex';
+      this.syncOverlay();
     });
+    // focus loss must never leave the body sprinting or the trigger stuck: drop
+    // every held key when the window/tab loses focus (keyup can be missed).
+    // Weapons clears its own `firing` the same way (see weapons.js).
+    this._releaseKeys = () => this.keys.clear();
+    if (typeof window !== 'undefined') window.addEventListener('blur', this._releaseKeys);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.keys.clear(); });
     document.addEventListener('mousemove', (e) => {
       // pointer-aim rigs need the live cursor PIXEL even when unlocked / under a
       // rig, so capture it before the pointer-lock look guards below.
@@ -127,6 +134,15 @@ export class Player {
 
   setLocomotion(spec = null) {
     this.locomotion = { ...LOCOMOTION_DEFAULTS, ...spec };
+  }
+
+  // The pause/menu overlay hides whenever controls are live: pointer-locked
+  // (FPS), in the editor, OR under a visible-cursor pointer-aim rig. Callable
+  // when the rig changes (the game calls it from onCamera), not only on lock.
+  syncOverlay() {
+    if (!this.overlay) return;
+    const live = this.locked || this.editorMode || this.pointerAimActive();
+    if (!this.overlay.dataset?.menu) this.overlay.style.display = live ? 'none' : 'flex';
   }
 
   // Opt-in pointer aim: yaw toward the cursor's ground projection, or null when

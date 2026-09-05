@@ -41,21 +41,26 @@ export class Weapons {
     // so GAIA supplies ordered number/scroll selection over the extracted table.
     this.onPointerDown = (e) => { if (e.button === 0 && !isTyping()) this.firing = true; };
     this.onPointerUp = (e) => { if (e.button === 0) this.firing = false; };
+    // controls are live under pointer-lock OR a visible-cursor pointer-aim rig
+    const live = () => this.player.locked || this.player.pointerAimActive?.();
     this.onWheel = (e) => {
-      if (!this.player.locked || isTyping() || !this.list.length) return;
+      if (!live() || isTyping() || !this.list.length) return;
       e.preventDefault();
       this.cycle(e.deltaY > 0 ? 1 : -1);
     };
     this.onKeyDown = (e) => {
-      if (!this.player.locked || isTyping()) return;
+      if (!live() || isTyping()) return;
       if (e.code === 'KeyR') { e.preventDefault(); this.reload(); return; }
       const n = Number(e.code.slice(5));
       if (e.code.startsWith('Digit') && n >= 1 && n <= 9) { e.preventDefault(); this.equipIndex(n - 1); }
     };
+    // focus loss must never leave the trigger stuck down (pointerup can be missed)
+    this.onBlur = () => { this.firing = false; };
     domElement?.addEventListener('pointerdown', this.onPointerDown);
     domElement?.addEventListener('pointerup', this.onPointerUp);
     domElement?.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('blur', this.onBlur);
     fetch(WEAPONS_URL).then((r) => r.ok ? r.json() : Promise.reject(new Error(`GET ${WEAPONS_URL}: ${r.status}`)))
       .then((data) => { this.list = data.weapons ?? []; this.byName = new Map(this.list.map((w) => [w.name, w])); })
       .catch((err) => console.warn('[gaia] weapon data unavailable', err));
@@ -137,5 +142,6 @@ export class Weapons {
     this.domElement?.removeEventListener('pointerup', this.onPointerUp);
     this.domElement?.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('blur', this.onBlur);
   }
 }

@@ -307,7 +307,7 @@ export const SCHEMA = {
     },
   },
   camera: {
-    doc: 'how the current scene is SEEN — put it on the scene\'s environment entity. mode "side" is the fixed-frame 2.5D rig: the view holds a fixed yaw/pitch and follows the body from distance/height, WASD moves in the fixed frame (the mouse steers nothing), your own presence mesh renders and turns toward its movement, the carried light rides the body, and E picks the nearest usable interactable around the body instead of a look-ray. Scenes without a camera stay first-person; the editor always keeps the free camera',
+    doc: 'how the current scene is SEEN — put it on the scene\'s environment entity. mode "side" is the fixed-frame 2.5D rig: the view holds a fixed yaw/pitch and follows the body from distance/height, WASD moves in the fixed frame, your own presence mesh renders, the carried light rides the body, and E picks the nearest usable interactable around the body instead of a look-ray. By default the mouse steers nothing and the body turns toward its movement; a side rig may instead declare aim:"pointer" for OPT-IN top-down mouse aiming (the body faces the cursor\'s ground projection, WASD only strafes, and the weapon fires along that same yaw). Scenes without a camera stay first-person; the editor always keeps the free camera',
     default: { mode: 'side', yaw: 1.5708, pitch: -0.14, distance: 14, height: 3.5, damp: 5 },
     fields: {
       mode: { doc: 'rig kind ("first" = explicit default)', enum: ['first', 'side'] },
@@ -317,6 +317,7 @@ export const SCHEMA = {
       height: { doc: 'camera lift above the body eye (meters)', range: [-5, 30] },
       lookAhead: { doc: 'lead the body in its movement direction (meters at walk speed)', range: [0, 10] },
       damp: { doc: 'follow smoothing (higher = tighter on the rails)', range: [1, 20] },
+      aim: { doc: 'how the body/weapon aim under this rig. omitted/"movement" = the body turns toward where it moves (no independent aim). "pointer" = OPT-IN top-down mouse aim (Boomtown/DotsCity PcMotionInput/PlayerShootMouseTargetProvider): the client projects the cursor through the actual camera onto a horizontal plane at the body ROOT and faces the body there, INDEPENDENT of WASD strafing; the weapon fires along that same authoritative yaw so the rendered body and shot agree. A pointer rig runs with a VISIBLE cursor and NO pointer lock — the game client owns cursor visibility and the pointer-lock lifecycle. first-person rigs ignore this', enum: ['movement', 'pointer'] },
     },
   },
   warp: {

@@ -2,6 +2,12 @@
 // Builds its own DOM (fixed elements appended to <body>) rather than reusing
 // index.html markup, so it stays a drop-in kernel object like weapons/panel.
 
+export const HUD_DEFAULT_HEALTH_MAX = 100;
+export const HUD_DEFAULT_ARMOR_MAX = 100;
+
+const finite = (value) => Number.isFinite(value);
+const bounded = (value, max) => Math.max(0, Math.min(max, value));
+
 export class Hud {
   constructor({ presenceId, send, player }) {
     this.presenceId = presenceId;
@@ -11,6 +17,7 @@ export class Hud {
     this.buildStars();
     this.buildBanner();
     this.buildCountdown();
+    this.buildStats();
   }
 
   // Generic countdown readout: a world that puts a `countdown`
@@ -34,7 +41,7 @@ export class Hud {
     });
     document.body.appendChild(this.countdownEl);
     this.countdown = null;
-    setInterval(() => this.renderCountdown(), 250);
+    this.countdownTimer = setInterval(() => this.renderCountdown(), 250);
   }
 
   // {label, endsAt} — endsAt is server epoch seconds (Date.now()/1000)
@@ -52,6 +59,74 @@ export class Hud {
     this.countdownEl.textContent = `${this.countdown.label ?? ''} ${mm}:${ss}`.trim();
     this.countdownEl.style.color = remain <= 10 ? '#ff6b57' : '#e8f0ff';
     this.countdownEl.style.display = 'block';
+  }
+
+  buildStats() {
+    this.statsEl = document.createElement('div');
+    this.statsEl.dataset.gaiaHud = 'stats';
+    Object.assign(this.statsEl.style, {
+      position: 'fixed', inset: 'auto 12px 12px 12px', display: 'none',
+      alignItems: 'end', justifyContent: 'space-between', gap: '12px',
+      zIndex: '15', pointerEvents: 'none', userSelect: 'none',
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+      color: '#f4f7ff', fontSize: 'clamp(12px, 2.6vw, 16px)',
+      textShadow: '0 1px 4px rgba(0,0,0,.95)',
+    });
+    this.vitalsEl = document.createElement('div');
+    this.weaponEl = document.createElement('div');
+    this.weaponEl.style.textAlign = 'right';
+    for (const el of [this.vitalsEl, this.weaponEl]) Object.assign(el.style, {
+      minWidth: '0', maxWidth: 'min(46vw, 320px)', padding: '7px 9px',
+      background: 'rgba(6,10,18,.72)', borderRadius: '4px',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    });
+    this.statsEl.appendChild(this.vitalsEl);
+    this.statsEl.appendChild(this.weaponEl);
+    document.body.appendChild(this.statsEl);
+    this.stats = null;
+    this.statsContext = {};
+  }
+
+  // Normalized authoritative view model. Callers map their ECS components;
+  // this object never calculates armor, ammo capacity, score, or currency.
+  setStats(stats, context = {}) {
+    this.stats = stats && typeof stats === 'object' ? stats : null;
+    this.statsContext = context ?? {};
+    this.renderStats();
+  }
+
+  renderStats() {
+    if (!this.statsEl) return;
+    const context = this.statsContext ?? {};
+    const suppressed = context.title || context.frozen || context.editor
+      || this.player?.frozen || this.player?.editorMode;
+    const health = this.stats?.health;
+    const armor = this.stats?.armor;
+    const weapon = this.stats?.weapon;
+    const score = this.stats?.score;
+    const healthCurrent = health?.current ?? health?.hp;
+    const healthMax = health?.max ?? (finite(healthCurrent) ? HUD_DEFAULT_HEALTH_MAX : null);
+    const armorCurrent = armor?.current;
+    const armorMax = armor?.max ?? (finite(armorCurrent) ? HUD_DEFAULT_ARMOR_MAX : null);
+    const left = [];
+    if (finite(healthCurrent) && finite(healthMax) && healthMax > 0) left.push(`HEALTH ${bounded(healthCurrent, healthMax)}/${healthMax}`);
+    if (finite(armorCurrent) && finite(armorMax) && armorMax > 0) left.push(`ARMOR ${bounded(armorCurrent, armorMax)}/${armorMax}`);
+    const scoreValue = score?.value ?? score;
+    // Original ScoreView renders the score with a trailing dollar sign.
+    if (finite(scoreValue)) left.push(`${scoreValue}$`);
+    const right = [];
+    if (weapon?.name) {
+      right.push(String(weapon.name).toUpperCase());
+      if (weapon.reloading) right.push('RELOADING');
+      else if (finite(weapon.ammo)) {
+        right.push(finite(weapon.maxAmmo) ? `${weapon.ammo}/${weapon.maxAmmo}` : `${weapon.ammo}`);
+      }
+    }
+    this.vitalsEl.textContent = left.join('  ·  ');
+    this.weaponEl.textContent = right.join('  ·  ');
+    this.vitalsEl.style.display = left.length ? 'block' : 'none';
+    this.weaponEl.style.display = right.length ? 'block' : 'none';
+    this.statsEl.style.display = !suppressed && (left.length || right.length) ? 'flex' : 'none';
   }
 
   buildStars() {
@@ -125,10 +200,11 @@ export class Hud {
     this.showing = true;
     this.bannerTextEl.textContent = text;
     this.bannerEl.style.display = 'flex';
-    setTimeout(() => {
+    this.bannerTimer = setTimeout(() => {
       this.respawn();
       this.bannerEl.style.display = 'none';
       this.showing = false;
+      this.bannerTimer = null;
     }, 3000);
   }
 
@@ -141,6 +217,16 @@ export class Hud {
 
   wasted(hp0Time) {
     this.showBanner('WASTED');
+  }
+
+  dispose() {
+    if (this.countdownTimer) clearInterval(this.countdownTimer);
+    if (this.bannerTimer) clearTimeout(this.bannerTimer);
+    this.countdownTimer = null;
+    this.bannerTimer = null;
+    for (const el of [this.statsEl, this.starsEl, this.countdownEl, this.bannerEl]) el?.remove?.();
+    this.statsEl = this.starsEl = this.countdownEl = this.bannerEl = null;
+    this.starEls = [];
   }
 
   respawn() {

@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { applyShadow, shadowSpec } from './shadow-config.js';
 
 // World mood as data: fog, sky, sun, exposure, bloom — all patchable live.
 // Falls back to the kernel defaults when the component is removed.
@@ -47,6 +48,17 @@ export class Environment {
         color: `#${sun.color.getHexString()}`,
         intensity: sun.intensity,
         position: [sun.position.x, sun.position.y, sun.position.z],
+        // captured from the live sun (renderer.js configured it via
+        // applyShadow) so a scene that declares no shadow keeps engine defaults
+        shadow: shadowSpec({
+          enabled: sun.castShadow,
+          mapSize: sun.shadow?.mapSize?.x,
+          radius: sun.shadow?.camera?.right,
+          near: sun.shadow?.camera?.near,
+          far: sun.shadow?.camera?.far,
+          bias: sun.shadow?.bias,
+          normalBias: sun.shadow?.normalBias,
+        }),
       },
       bloom: { strength: 0.35, radius: 0.4, threshold: 0.85 },
       ambient: { color: '#b8c6e6', intensity: 0 },
@@ -96,6 +108,10 @@ export class Environment {
     this.sun.color.set(sun.color);
     this.sun.intensity = sun.intensity;
     this.sun.position.set(...sun.position);
+    // authored shadow override (env `sun.shadow`); absent -> engine defaults.
+    // applyShadow is idempotent for equal specs, so re-applying every load is
+    // free (no castShadow toggle / no map resize -> no pipeline recompile).
+    applyShadow(this.sun, sun.shadow);
     const ambient = { ...this.defaults.ambient, ...(p.ambient ?? {}) };
     this.ambient.color.set(ambient.color);
     this.lightScale = p.lightScale ?? 1;

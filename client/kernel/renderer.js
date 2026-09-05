@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { pass, texture } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { cameraSpec } from './camera-config.js';
+import { applyShadow } from './shadow-config.js';
 export async function createRenderer() {
 const renderer = new THREE.WebGPURenderer({ antialias: true });
 await renderer.init();
@@ -25,20 +26,11 @@ const hemi = new THREE.HemisphereLight('#8fb3ff', '#2c241a', 0.6);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight('#ffe2b0', 1.2);
 sun.position.set(60, 90, 30);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -120;
-sun.shadow.camera.right = 120;
-sun.shadow.camera.top = 120;
-sun.shadow.camera.bottom = -120;
-sun.shadow.camera.far = 400;
-// Without a depth/normal bias the 2048-tap shadow map (texel ~0.12 m over the
-// 240 m frustum) self-shadows every large up-facing surface: flat building
-// roofs seen straight-down go fully black (top-down city read as solid black
-// occluders). A small negative depth bias plus a world-space normal offset
-// clears the acne while keeping contact shadows. Generic default for any world.
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.4;
+// Shadow map + bias defaults live in shadow-config.js (SHADOW_DEFAULTS). The
+// bias/normalBias are load-bearing: without them the sun shadow self-shadows
+// flat roofs and the top-down city renders as black occluders. Worlds override
+// per-field through the environment `sun.shadow` declaration.
+applyShadow(sun);
 scene.add(sun);
 function applyProjection() {
 const aspect = window.innerWidth / window.innerHeight;

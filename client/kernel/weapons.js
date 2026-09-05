@@ -124,7 +124,8 @@ export class Weapons {
       // server acceptance is authoritative; mirror remote/synthetic fires too
       if (name) this.play('fire', name, Math.max(this.byName.get(name)?.fireRate ?? 0.12, 0.12));
     }
-    if (this.firing && this.player.locked && !isTyping()) this.fire();
+    // fire under pointer-lock (FPS) OR a visible-cursor pointer-aim rig (top-down)
+    if (this.firing && (this.player.locked || this.player.pointerAimActive?.()) && !isTyping()) this.fire();
     if (this.returnIdleAt && performance.now() / 1000 >= this.returnIdleAt) {
       this.returnIdleAt = 0;
       if (name) this.idle(name);

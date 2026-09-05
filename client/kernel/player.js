@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { activeCameraRig } from './camera-config.js';
+import { aimYawFromPointer } from './aim.js';
 import { heightAt } from './terrain.js';
 import { isTyping } from './dom.js';
 import { r2 } from '../../shared/num.js';
@@ -52,6 +53,8 @@ const GROUND_HEIGHT_EPSILON_M = 1e-6; // Float32 mesh ↔ analytic deck seam
 export class Player {
   constructor({ camera, dom, overlay, view }) {
     this.camera = camera;
+    this.dom = dom; // the render canvas — pointer aim reads its client rect
+    this.pointerClient = null; // last cursor pixel {x,y} (pointer-aim rigs)
     this.view = view;
     this.yaw = 0;
     this.pitch = 0;
@@ -110,6 +113,9 @@ export class Player {
       overlay.style.display = this.locked || this.editorMode ? 'none' : 'flex';
     });
     document.addEventListener('mousemove', (e) => {
+      // pointer-aim rigs need the live cursor PIXEL even when unlocked / under a
+      // rig, so capture it before the pointer-lock look guards below.
+      if (Number.isFinite(e.clientX)) this.pointerClient = { x: e.clientX, y: e.clientY };
       if (!this.locked) return;
       if (this.rig && !this.editorMode) return; // the rig owns the frame
       this.yaw -= e.movementX * 0.0022;
@@ -121,6 +127,35 @@ export class Player {
 
   setLocomotion(spec = null) {
     this.locomotion = { ...LOCOMOTION_DEFAULTS, ...spec };
+  }
+
+  // Opt-in pointer aim: yaw toward the cursor's ground projection, or null when
+  // the active rig does not declare `aim: 'pointer'` (or the inputs aren't ready
+  // — no cursor yet, editor, headless test without a canvas rect). The aim
+  // plane is the body ROOT (feet), the GAIA analog of the Unity player
+  // provider's `Plane(up, (0, sourcePosition.y, 0))`.
+  // Controls are live either under pointer-lock (generic FPS) OR under a
+  // visible-cursor pointer-aim rig (top-down games do NOT lock the pointer, so
+  // WASD movement and weapon fire must not require the lock). Editor excluded.
+  pointerAimActive() {
+    return !this.editorMode && this.rig?.aim === 'pointer';
+  }
+
+  pointerAimYaw(rig = this.rig) {
+    if (!rig || rig.aim !== 'pointer' || this.editorMode) return null;
+    const p = this.pointerClient;
+    const rect = this.dom?.getBoundingClientRect?.();
+    if (!p || !this.camera || !rect) return null;
+    const feet = this.position.y - this.eyeHeight;
+    const res = aimYawFromPointer({
+      camera: this.camera,
+      rect,
+      clientX: p.x,
+      clientY: p.y,
+      from: { x: this.position.x, y: feet, z: this.position.z },
+      planeY: feet,
+    });
+    return res ? res.yaw : null;
   }
 
   respawn() {
@@ -195,7 +230,7 @@ export class Player {
       }
     }
 
-    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked);
+    const canMove = !isTyping() && (this.editorMode ? this.flyActive || this.flyLatched : this.locked || this.pointerAimActive());
 
     if (this.vehicle && !flying) {
       this.grounded = false;
@@ -255,14 +290,23 @@ export class Player {
     this.position.addScaledVector(this.velocity, dt);
 
     // the body faces the way it looks — except under a rig, where the look is
-    // fixed and the body turns toward wherever it is actually going
+    // fixed and the body either aims at the pointer (opt-in `aim: 'pointer'`)
+    // or turns toward wherever it is actually going.
     if (rig) {
-      const vx = this.velocity.x;
-      const vz = this.velocity.z;
-      if (vx * vx + vz * vz > 0.25) {
-        const want = Math.atan2(-vx, -vz);
-        const d = Math.atan2(Math.sin(want - this.bodyYaw), Math.cos(want - this.bodyYaw));
-        this.bodyYaw += d * Math.min(1, dt * 10);
+      const aimYaw = this.pointerAimYaw(rig);
+      if (aimYaw !== null) {
+        // aim is INDEPENDENT of strafing: the body faces the cursor, WASD only
+        // translates. bodyYaw is what renders AND what the weapon fires along,
+        // so the rendered body and the authoritative fire yaw always agree.
+        this.bodyYaw = aimYaw;
+      } else {
+        const vx = this.velocity.x;
+        const vz = this.velocity.z;
+        if (vx * vx + vz * vz > 0.25) {
+          const want = Math.atan2(-vx, -vz);
+          const d = Math.atan2(Math.sin(want - this.bodyYaw), Math.cos(want - this.bodyYaw));
+          this.bodyYaw += d * Math.min(1, dt * 10);
+        }
       }
     } else {
       this.bodyYaw = this.yaw;

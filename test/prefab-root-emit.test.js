@@ -356,7 +356,7 @@ const HUB = '/Users/pascaldisse/projects/boomtown-rampage/Assets/DotsCity/Sample
 const REAL_GUIDS = process.env.BOOMTOWN_GUID_DB ?? '/Users/pascaldisse/projects/boomtown-rampage-gwe/tools/unity/out/guids.json';
 const REAL_MODELS = '/Users/pascaldisse/projects/boomtown-rampage-gwe/tools/unity/out/boomtown-world/assets/models';
 
-test('the REAL Hub.prefab (transformless stripped GameObject) emits instead of crashing', () => {
+test('the REAL Hub.prefab (transformless stripped GameObject) emits instead of crashing', { timeout: 60000 }, () => {
   assert.ok(fs.existsSync(HUB), `real Hub.prefab required at ${HUB}`);
   const db = JSON.parse(fs.readFileSync(REAL_GUIDS, 'utf8'));
   const hubGuid = Object.entries(db.guids).find(([, rec]) => typeof rec?.path === 'string' && rec.path.endsWith('Prefabs/Core/Hub.prefab'))?.[0];

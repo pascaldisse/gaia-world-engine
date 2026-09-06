@@ -673,6 +673,22 @@ function renderMeshCollider(entity) {
   }
   return null;
 }
+// COLLIDER LAYER PROVENANCE. A Unity collider answers a physics query only if its
+// GameObject's layer is in the query mask, and that layer belongs to the GO that
+// OWNS the collider -- not to the prefab root, which is frequently a different
+// layer (a building root on Environment holding parts on a hittable layer, or the
+// reverse). Emitting a root layer would be a guess, so every box carries the layer
+// of the entity the collider was read from, and nothing carries a layer we did not
+// read. Layer NAMES are project data (ProjectSettings/TagManager) and stay out of
+// the geometry: this is the raw index, exactly as Unity serialized it.
+function sourceLayer(entity) {
+  const layer = Number(entity?.layer);
+  return Number.isInteger(layer) && layer >= 0 && layer < 32 ? layer : null;
+}
+function withLayer(box, layer) {
+  return layer === null ? box : { ...box, layer };
+}
+
 function meshColliderBoxes(c, { walkable = false } = {}) {
   if (!colliderPolicy.meshAabb || colliderPolicy.meshMaxBoxes < 1) return [];
   const model = ensureModel(c.mesh);
@@ -716,23 +732,25 @@ function placeColliderBoxes(boxes, unityTransform) {
 function colliderBoxes(entity, localTransform = null) {
   const boxes = [];
   let meshBoxes = 0;
+  // the layer of the GameObject that OWNS these colliders (never a root guess)
+  const layer = sourceLayer(entity);
   for (const c of entity.components?.colliders ?? []) {
     if (c.enabled === false || c.isTrigger) continue;
     if (c.kind === 'BoxCollider' && c.size) {
-      boxes.push({ size: unitySizeToGaia(c.size), position: unityVecToGaiaLocal(c.center), blocker: true });
+      boxes.push(withLayer({ size: unitySizeToGaia(c.size), position: unityVecToGaiaLocal(c.center), blocker: true }, layer));
     } else if (c.kind === 'SphereCollider' && c.radius != null) {
       const r = Math.abs(num(c.radius, 0.5));
-      boxes.push({ size: roundVec([r * 2, r * 2, r * 2]), position: unityVecToGaiaLocal(c.center), blocker: true });
+      boxes.push(withLayer({ size: roundVec([r * 2, r * 2, r * 2]), position: unityVecToGaiaLocal(c.center), blocker: true }, layer));
     } else if (c.kind === 'CapsuleCollider') {
       const r = Math.abs(num(c.radius, 0.5));
       const h = Math.abs(num(c.height, r * 2));
       const dir = Number(c.direction ?? 1); // 0=x, 1=y, 2=z
       const size = dir === 0 ? [h, r * 2, r * 2] : dir === 2 ? [r * 2, r * 2, h] : [r * 2, h, r * 2];
-      boxes.push({ size: roundVec(size), position: unityVecToGaiaLocal(c.center), blocker: true });
+      boxes.push(withLayer({ size: roundVec(size), position: unityVecToGaiaLocal(c.center), blocker: true }, layer));
     } else if (c.kind === 'MeshCollider' && meshBoxes < colliderPolicy.meshMaxBoxes) {
       const next = meshColliderBoxes(c, { walkable: sameMeshRef(c.mesh, entity.components?.meshFilter?.mesh) });
       meshBoxes += next.length;
-      boxes.push(...next);
+      boxes.push(...next.map((box) => withLayer(box, layer)));
     }
   }
   return placeColliderBoxes(boxes.slice(0, colliderPolicy.maxBoxes), localTransform);

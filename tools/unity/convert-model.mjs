@@ -610,14 +610,14 @@ function readVertexComponent(buf, at, fmt) {
   if (fmt === 5) return buf.readInt16LE(at) / 32767;   // SNorm16
   return buf.readUInt8(at);
 }
-function splitAssetMeshDocs(text) {
+export function splitAssetMeshDocs(text) {
   const docs = new Map();
   const re = /--- !u!43 &(-?\d+)[^\n]*\r?\nMesh:\r?\n([\s\S]*?)(?=\r?\n--- !u!|\s*$)/g;
   let m;
   while ((m = re.exec(text))) docs.set(String(m[1]), m[2]);
   return docs;
 }
-function decodeUnityMeshBody(body) {
+export function decodeUnityMeshBody(body) {
   const indexFormat = Number(body.match(/m_IndexFormat:\s*(\d+)/)?.[1] ?? 0); // 0=uint16,1=uint32
   const subs = [...body.matchAll(/firstByte:\s*(\d+)\s*\r?\n\s*indexCount:\s*(\d+)/g)]
     .map((x) => ({ firstByte: +x[1], indexCount: +x[2] }));
@@ -661,11 +661,12 @@ function decodeUnityMeshBody(body) {
   if (!normals.length) normals.push(...computeFlatNormals(positions, indices));
   return { positions, normals, uvs, indices, textureUri: null };
 }
-function meshFromUnityAsset(assetFile, targetFileID = null) {
+export function meshFromUnityAsset(assetFile, targetFileID = null) {
   const text = readFileSync(assetFile, 'utf8');
   const docs = splitAssetMeshDocs(text);
   if (!docs.size) throw new Error(`no serialized Mesh (class 43) in ${assetFile}`);
   const want = targetFileID != null ? String(targetFileID) : null;
+  if (want && !docs.has(want)) throw new Error(`serialized mesh ${want} missing from ${assetFile}`);
   let body = (want && docs.has(want)) ? docs.get(want) : null;
   if (!body) body = docs.get('4300000') ?? docs.values().next().value; // single-mesh fallback
   return decodeUnityMeshBody(body);
@@ -690,7 +691,7 @@ function computeFlatNormals(positions, indices) {
   return normals;
 }
 
-function writeSimpleGlb(file, mesh) {
+export function writeSimpleGlb(file, mesh) {
   const chunks = [];
   const bufferViews = [];
   const accessors = [];

@@ -1,3 +1,4 @@
+import { readPrefabLibrary } from './prefab-library.js';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,24 +44,7 @@ try {
 // small context loads); a legacy single prefabs.json list still reads in.
 const prefabsFile = path.join(worldDir, 'prefabs.json');
 const prefabsDir = path.join(worldDir, 'prefabs');
-let prefabs = [];
-try {
-  prefabs = JSON.parse(fs.readFileSync(prefabsFile, 'utf8'));
-} catch {
-  prefabs = [];
-}
-if (fs.existsSync(prefabsDir)) {
-  for (const f of fs.readdirSync(prefabsDir).filter((n) => n.endsWith('.json'))) {
-    try {
-      const prefab = JSON.parse(fs.readFileSync(path.join(prefabsDir, f), 'utf8'));
-      const idx = prefabs.findIndex((p) => p.name === prefab.name);
-      if (idx >= 0) prefabs[idx] = prefab;
-      else prefabs.push(prefab);
-    } catch {
-      console.warn(`[gaia] unreadable prefab: ${f}`);
-    }
-  }
-}
+let prefabs = readPrefabLibrary(worldDir);
 
 // ---- material library: named looks, referenced by mesh parts as data ----
 // world/materials.json — `{"obsidian": {color, roughness, …}}`. A part says
@@ -347,6 +331,7 @@ function sceneDoc(comps) {
 
 function applyAndBroadcast(ops, from, { dev = false } = {}) {
   if (ops.some((op) => op.op === 'reset')) {
+    prefabs = readPrefabLibrary(worldDir);
     ops = ops.flatMap((op) => (op.op === 'reset' ? expandReset(op) : [op]));
   }
   // scene ops target the world file, not an entity — peel them off, apply,
@@ -690,5 +675,5 @@ function describe(op) {
 // GAIA_HOST=0.0.0.0 explicitly to expose on the LAN. (Pascal-approved 08-09.)
 const HOST = process.env.GAIA_HOST || '127.0.0.1';
 server.listen(PORT, HOST, () => {
-  console.log(`[gaia] world server on http://localhost:${PORT} (ws + http + sense + act)`);
+  console.log(`[gaia] world server on http://localhost:${server.address()?.port ?? PORT} (ws + http + sense + act)`);
 });

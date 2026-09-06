@@ -222,3 +222,125 @@ test('editing a DEPENDENCY prefab invalidates the cache too (not just the main f
   emit();
   assert.equal(JSON.parse(fs.readFileSync(cacheFile, 'utf8')).marker, undefined, 'missing dependency -> re-parsed');
 });
+
+// ---- externally owned prefabs (policy.externalPrefabGuids) ------------------
+// A container prefab holding TWO instances of the same visual prefab, one of
+// which the GAME owns and emits itself. The importer must drop exactly that one
+// and keep the other -- otherwise the game's dynamic body and the importer's
+// static twin sit in the same place, and consuming the dynamic one leaves a grey
+// box behind (the live TempObjects case: 4 game pickups + 1 message box).
+const NL2 = String.fromCharCode(10);
+function writeContainerProject() {
+  const root = path.join(tmp, 'external');
+  const assets = path.join(root, 'Assets');
+  fs.mkdirSync(assets, { recursive: true });
+  const OWNED = 'dddd1111dddd1111dddd1111dddd1111';
+  const KEPT = 'eeee2222eeee2222eeee2222eeee2222';
+  const CONTAINER = 'ffff3333ffff3333ffff3333ffff3333';
+  const leaf = (name) => [
+    '--- !u!1 &100', 'GameObject:', '  serializedVersion: 6',
+    '  m_Component:', '  - component: {fileID: 101}', '  - component: {fileID: 102}', '  - component: {fileID: 103}',
+    `  m_Name: ${name}`, '  m_IsActive: 1',
+    '--- !u!4 &101', 'Transform:', '  m_GameObject: {fileID: 100}',
+    '  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}', '  m_LocalPosition: {x: 0, y: 0, z: 0}',
+    '  m_LocalScale: {x: 1, y: 1, z: 1}', '  m_Children: []', '  m_Father: {fileID: 0}',
+    '--- !u!33 &102', 'MeshFilter:', '  m_GameObject: {fileID: 100}',
+    '  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}',
+    '--- !u!23 &103', 'MeshRenderer:', '  m_GameObject: {fileID: 100}', '  m_Enabled: 1', '  m_CastShadows: 1',
+    '  m_Materials:', `  - {fileID: 2100000, guid: ${MATERIAL_GUID}, type: 2}`,
+  ];
+  const write = (name, lines) => fs.writeFileSync(path.join(assets, name), ['%YAML 1.1', '%TAG !u! tag:unity3d.com,2011:', ...lines, ''].join(NL2));
+  write('Owned.prefab', leaf('OwnedBox'));
+  write('Kept.prefab', leaf('KeptBox'));
+  write('Probe.mat', ['--- !u!21 &2100000', 'Material:', '  serializedVersion: 8', '  m_Name: ProbeMat',
+    '  m_SavedProperties:', '    serializedVersion: 3', '    m_TexEnvs: []', '    m_Floats: []', '    m_Colors: []']);
+  const nested = (fileID, guid, x) => [
+    `--- !u!1001 &${fileID}`, 'PrefabInstance:', '  m_ObjectHideFlags: 0', '  serializedVersion: 2',
+    '  m_Modification:', '    serializedVersion: 3', '    m_TransformParent: {fileID: 501}',
+    '    m_Modifications:',
+    `    - target: {fileID: 101, guid: ${guid}, type: 3}`, '      propertyPath: m_LocalPosition.x', `      value: ${x}`,
+    '      objectReference: {fileID: 0}',
+    '    m_RemovedComponents: []',
+    `  m_SourcePrefab: {fileID: 100100000, guid: ${guid}, type: 3}`,
+  ];
+  write('Container.prefab', [
+    '--- !u!1 &500', 'GameObject:', '  serializedVersion: 6', '  m_Component:', '  - component: {fileID: 501}',
+    '  m_Name: Container', '  m_IsActive: 1',
+    '--- !u!4 &501', 'Transform:', '  m_GameObject: {fileID: 500}',
+    '  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}', '  m_LocalPosition: {x: 0, y: 0, z: 0}',
+    '  m_LocalScale: {x: 1, y: 1, z: 1}', '  m_Children: []', '  m_Father: {fileID: 0}',
+    ...nested(600, OWNED, 3),
+    ...nested(601, KEPT, 9),
+  ]);
+  write('Scene.unity', [
+    '--- !u!1001 &700', 'PrefabInstance:', '  m_ObjectHideFlags: 0', '  serializedVersion: 2',
+    '  m_Modification:', '    serializedVersion: 3', '    m_TransformParent: {fileID: 0}',
+    '    m_Modifications:',
+    `    - target: {fileID: 501, guid: ${CONTAINER}, type: 3}`, '      propertyPath: m_LocalPosition.z', '      value: 0',
+    '      objectReference: {fileID: 0}',
+    '    m_RemovedComponents: []',
+    `  m_SourcePrefab: {fileID: 100100000, guid: ${CONTAINER}, type: 3}`,
+  ]);
+  const guidPath = path.join(root, 'guids.json');
+  fs.writeFileSync(guidPath, JSON.stringify({
+    unityProjectRoot: root,
+    guids: {
+      [OWNED]: { path: 'Assets/Owned.prefab', kind: 'prefab' },
+      [KEPT]: { path: 'Assets/Kept.prefab', kind: 'prefab' },
+      [CONTAINER]: { path: 'Assets/Container.prefab', kind: 'prefab' },
+      [MATERIAL_GUID]: { path: 'Assets/Probe.mat', kind: 'material' },
+    },
+  }, null, 2));
+  return { root, assets, guidPath, scene: path.join(assets, 'Scene.unity'), OWNED, KEPT };
+}
+
+test('externalPrefabGuids removes ONLY the game-owned prefab; its siblings stay', () => {
+  const container = writeContainerProject();
+  const ir = path.join(container.root, 'scene.ir.json');
+  run(NODE, [path.join(repo, 'tools/unity/parse.mjs'), container.scene, '--guids', container.guidPath, '--out', ir]);
+
+  const emitInto = (worldOut, policyFile) => {
+    const args = [path.join(repo, 'tools/unity/emit.mjs'), ir, worldOut, '--guids', container.guidPath,
+      '--cache-dir', path.join(container.root, `cache-${path.basename(worldOut)}`), '--reuse-models'];
+    if (policyFile) args.push('--policy', policyFile);
+    // emit logs progress lines before its JSON summary
+    const result = run(NODE, args);
+    // emit prints several JSON blocks AND trailing log lines: take the last
+    // brace-delimited block that parses
+    const NLC = String.fromCharCode(10);
+    const lines = result.stdout.split(NLC);
+    for (let close = lines.length - 1; close >= 0; close--) {
+      if (lines[close] !== '}') continue;
+      for (let open = close; open >= 0; open--) {
+        if (lines[open] !== '{') continue;
+        try { return JSON.parse(lines.slice(open, close + 1).join(NLC)); } catch { /* keep scanning */ }
+      }
+    }
+    throw new Error(`no JSON summary in emit stdout:${NLC}${result.stdout}`);
+  };
+  const partsOf = (worldOut) => {
+    const dir = path.join(worldOut, 'prefabs');
+    const files = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
+    const file = files.find((n) => n.startsWith('Container'));
+    assert.ok(file, `no Container prefab emitted (${files.join(', ')})`);
+    const doc = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+    return doc.components.mesh?.parts ?? [];
+  };
+
+  // BEFORE: the importer emits both boxes -- the duplicate a game body would shadow
+  const before = emitInto(path.join(container.root, 'world-plain'));
+  assert.equal(partsOf(path.join(container.root, 'world-plain')).length, 2);
+  assert.equal(before.externalPrefabSkips, 0);
+  assert.deepEqual(before.externalPrefabGuids, []);
+
+  // AFTER: only the game-owned one disappears
+  const policyFile = path.join(container.root, 'policy.json');
+  fs.writeFileSync(policyFile, JSON.stringify({ externalPrefabGuids: [container.OWNED.toUpperCase()] }));
+  const after = emitInto(path.join(container.root, 'world-owned'), policyFile);
+  const parts = partsOf(path.join(container.root, 'world-owned'));
+  assert.equal(parts.length, 1, 'exactly one box survives');
+  assert.deepEqual(parts[0].position, [9, 0, 0], 'the SIBLING is the one that stayed');
+  assert.ok(after.externalPrefabSkips >= 1, 'the skip is reported, not silent');
+  assert.deepEqual(after.externalPrefabGuids, [container.OWNED], 'guid matching is case-insensitive');
+  assert.equal(fs.readdirSync(path.join(container.root, 'world-owned', 'prefabs')).some((n) => n.startsWith('Owned')), false);
+});

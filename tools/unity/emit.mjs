@@ -786,9 +786,31 @@ const PREFAB_DESCENT_DEPTH = policy.prefabDescentDepth ?? 8;
 // The proxy is placed on exactly the same ROOT-RELATIVE basis as the prefab it
 // stands in for: no extra authored transform is introduced anywhere.
 const PREFAB_VISUAL_PROXY = new Map(Object.entries(policy.visualProxies ?? {}));
+
+// EXTERNALLY OWNED PREFABS (policy.externalPrefabGuids, default none).
+// A game may own certain source prefabs itself -- it emits its own entities for
+// them, with behaviour the generic importer knows nothing about. The importer
+// must then NOT emit a second, static copy of the same geometry: two bodies in
+// one place look fine until the game's copy is consumed and the importer's grey
+// twin stays behind. Listed guids are skipped WHEREVER they are instantiated
+// (as a scene instance, and as a nested instance inside another prefab), and
+// nothing else in the containing prefab is affected.
+const EXTERNAL_PREFAB_GUIDS = new Set(
+  (policy.externalPrefabGuids ?? []).map((guid) => String(guid).toLowerCase()).filter(Boolean),
+);
+let externalPrefabSkips = 0;
+function isExternallyOwned(source) {
+  const guid = source?.guid ? String(source.guid).toLowerCase() : null;
+  return Boolean(guid && EXTERNAL_PREFAB_GUIDS.has(guid));
+}
 const emittedPrefabs = new Map();
 function ensurePrefabForSource(source) {
   if (!source?.path) return null;
+  if (isExternallyOwned(source)) {
+    externalPrefabSkips++;
+    console.warn(`[emit] prefab ${path.basename(source.path)} is game-owned (externalPrefabGuids) — not emitted`);
+    return null;
+  }
   const proxy = PREFAB_VISUAL_PROXY.get(path.basename(source.path, path.extname(source.path)).toLowerCase());
   if (proxy) {
     const proxyPath = path.join(path.dirname(source.path), `${proxy}.prefab`);
@@ -880,6 +902,12 @@ function collectPrefabParts(source, parentMatrix, depth, ancestors, acc) {
   }
   for (const pi of pir.prefabInstances ?? []) {
     if (pi.active === false) continue;
+    // a game-owned prefab contributes NO geometry here either: the game emits it
+    // (everything else in this prefab is untouched)
+    if (isExternallyOwned(pi.source)) {
+      externalPrefabSkips++;
+      continue;
+    }
     const matrix = m4Mul(parentMatrix, rootRelativeMatrix(pi.transform));
     collectPrefabParts(pi.source, matrix, depth + 1, childAncestors, acc);
     if (acc.parts.length > MAX_PREFAB_MESH_PARTS + 4) return;
@@ -1297,6 +1325,9 @@ const summary = {
   directEntities,
   prefabInstances,
   duplicateEntities,
+  // geometry deliberately NOT emitted because the game owns those prefabs
+  externalPrefabSkips,
+  externalPrefabGuids: [...EXTERNAL_PREFAB_GUIDS],
   prefabs: emittedPrefabs.size,
   prefabsWithMesh: prefabComponents.filter((c) => c.mesh).length,
   prefabsWithCollider: prefabComponents.filter((c) => c.collider).length,

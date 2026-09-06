@@ -10,10 +10,11 @@ const HUD_GAMEOVER_INPUT_BLOCK = 'hud-gameover';
 const finite = (value) => Number.isFinite(value);
 
 export class Hud {
-  constructor({ presenceId, send, player, bannerDurationMs = HUD_BANNER_DURATION_MS }) {
+  constructor({ presenceId, send, player, bannerDurationMs = HUD_BANNER_DURATION_MS, now = () => Date.now() / 1000 }) {
     this.presenceId = presenceId;
     this.send = send;
     this.player = player;
+    this.now = now;
     this.bannerDurationMs = bannerDurationMs;
     this.showing = false; // banner guard: not re-triggerable while up
     this.buildStars();
@@ -46,7 +47,7 @@ export class Hud {
     this.countdownTimer = setInterval(() => this.renderCountdown(), 250);
   }
 
-  // {label, endsAt} — endsAt is server epoch seconds (Date.now()/1000)
+  // {label, endsAt} — endsAt shares injected now(); default epoch seconds.
   setCountdown(countdown) {
     this.countdown = countdown?.endsAt ? countdown : null;
     this.renderCountdown();
@@ -55,7 +56,7 @@ export class Hud {
   renderCountdown() {
     if (!this.countdownEl) return;
     if (!this.countdown) { this.countdownEl.style.display = 'none'; return; }
-    const remain = Math.max(0, this.countdown.endsAt - Date.now() / 1000);
+    const remain = Math.max(0, this.countdown.endsAt - this.now());
     const mm = String(Math.floor(remain / 60)).padStart(2, '0');
     const ss = String(Math.floor(remain % 60)).padStart(2, '0');
     this.countdownEl.textContent = `${this.countdown.label ?? ''} ${mm}:${ss}`.trim();

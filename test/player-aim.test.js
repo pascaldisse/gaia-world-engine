@@ -139,3 +139,22 @@ test('authoritative fire yaw (bodyYaw) equals the rendered aim after update', ()
     expect(player.bodyYaw).toBeCloseTo(aim, 6);
   }, AIM_RIG);
 });
+
+test('motion compensation doubles horizontal movement without doubling gravity', () => {
+  const measure = (multiplier) => {
+    let result;
+    withPlayer((player) => {
+      player.position.set(0, 100, 0);
+      player.keys.add('KeyW');
+      player.weaponSpeedMultiplier = 0.5;
+      player.motionSpeedMultiplier = multiplier;
+      for (let i = 0; i < 40; i++) player.update(0.005);
+      result = player.position.clone();
+    }, AIM_RIG);
+    return result;
+  };
+  const normal = measure(1); const compensated = measure(2);
+  expect(normal.z).toBeLessThan(0);
+  expect(compensated.z).toBeCloseTo(normal.z * 2, 7);
+  expect(compensated.y).toBeCloseTo(normal.y, 7);
+});

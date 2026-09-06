@@ -157,3 +157,13 @@ test('finite inventory reserve has its own row, including zero; generic worlds s
   hud.setStats({ weapon: { name: 'Revolver', ammo: 1 } });
   expect(hud.reserveEl.style.display).toBe('none');
 });
+
+test('countdown uses injected simulation seconds instead of wall epoch', () => {
+  let now = 100;
+  hud.dispose();
+  hud = new Hud({ presenceId: 'player', send() {}, player: {}, now: () => now });
+  hud.setCountdown({ label: 'FIGHT', endsAt: 140 });
+  expect(hud.countdownEl.textContent).toBe('FIGHT 00:40');
+  now += 3; hud.renderCountdown();
+  expect(hud.countdownEl.textContent).toBe('FIGHT 00:37');
+});

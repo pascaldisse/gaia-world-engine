@@ -22,8 +22,9 @@ const EMPTY = Object.freeze({ idle: 'EmptyHands' });
 const WEAPONS_URL = '/assets/weapons.json';
 
 export class Weapons {
-  constructor({ store, player, send, domElement }) {
+  constructor({ store, player, send, domElement, now = () => performance.now() / 1000 }) {
     this.store = store;
+    this.now = now;
     this.player = player;
     this.send = send;
     this.domElement = domElement;
@@ -123,7 +124,7 @@ export class Weapons {
   fire() {
     const weapon = this.ownWeapon();
     if (!this.controlsActive() || !weapon || !this.presence || this.player.vehicle) return;
-    const now = performance.now() / 1000;
+    const now = this.now();
     const spec = this.byName.get(weapon.name);
     if (now < this.nextFireAt) return;
     this.nextFireAt = now + (spec?.fireRate ?? 0);
@@ -134,7 +135,7 @@ export class Weapons {
     const clip = this.animationFor(name)[kind];
     if (!clip || !this.presence) return;
     this.send([{ op: 'set', id: this.presence, component: 'animation', value: { clip, loop: 'once', speed: 1, fade: 0.08, auto: this.auto(name) } }]);
-    this.returnIdleAt = performance.now() / 1000 + seconds;
+    this.returnIdleAt = this.now() + seconds;
   }
   idle(name) {
     if (!this.presence) return;
@@ -165,7 +166,7 @@ export class Weapons {
     }
     // fire under pointer-lock (FPS) OR a visible-cursor pointer-aim rig (top-down)
     if (this.firing && controlsActive && !isTyping()) this.fire();
-    if (this.returnIdleAt && performance.now() / 1000 >= this.returnIdleAt) {
+    if (this.returnIdleAt && this.now() >= this.returnIdleAt) {
       this.returnIdleAt = 0;
       if (name) this.idle(name);
     }

@@ -109,6 +109,7 @@ export class Player {
     // Weapons supply this from their extracted data; it is intentionally local
     // presentation, while the server remains authoritative about equipment.
     this.weaponSpeedMultiplier = 1;
+    this.motionSpeedMultiplier = 1;
 
     // while a title menu is live (overlay.dataset.menu), entering the world
     // is the menu's job — a background click must not skip level setup
@@ -340,7 +341,7 @@ export class Player {
     const loco = this.locomotion;
     const speedBase = crouching ? (loco.crouch ?? LOCOMOTION_DEFAULTS.crouch) : this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? loco.run : loco.walk;
     const backward = this.keys.has('KeyS') && !this.keys.has('KeyW');
-    const speed = (this.swimming && !flying ? speedBase * 0.4 : speedBase) * (backward ? loco.backwardFactor : 1) * this.weaponSpeedMultiplier;
+    const speed = (this.swimming && !flying ? speedBase * 0.4 : speedBase) * (backward ? loco.backwardFactor : 1) * this.weaponSpeedMultiplier * this.motionSpeedMultiplier;
     // under a rig, movement lives in the rig's fixed frame (the editor's
     // flythrough and noclip always keep the free first-person frame)
     const rig = this.rig && !this.editorMode && !flying ? this.rig : null;

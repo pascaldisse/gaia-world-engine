@@ -1021,7 +1021,7 @@ export class View {
   // map directly — the same lazy self-heal instancedModels.sync() uses),
   // measures horizontal speed off the owning entity's group for `auto`,
   // then advances the mixer either smoothly or step-quantized.
-  updateAnimatedModels(dt) {
+  updateAnimatedModels(dt, animationMultiplier = () => 1) {
     for (const [id, entry] of this.animatedModels) {
       if (!this.isAttachedToScene(entry.holder)) {
         this.animatedModels.delete(id);
@@ -1040,11 +1040,13 @@ export class View {
         entry.lastPos = { x: p.x, z: p.z, speed };
       }
       this.driveAnimationEntry(entry, speed);
+      const multiplier = animationMultiplier(id);
+      const animationDt = dt * (Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1);
       const step = entry.spec?.step ?? 0;
       if (step <= 0) {
-        entry.mixer.update(dt);
+        entry.mixer.update(animationDt);
       } else {
-        entry.acc += dt;
+        entry.acc += animationDt;
         const q = 1 / step;
         while (entry.acc >= q) {
           entry.mixer.update(q);

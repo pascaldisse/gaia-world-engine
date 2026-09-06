@@ -22,8 +22,9 @@ const EMPTY = Object.freeze({ idle: 'EmptyHands' });
 const WEAPONS_URL = '/assets/weapons.json';
 
 export class Weapons {
-  constructor({ store, player, send, domElement, now = () => performance.now() / 1000 }) {
+  constructor({ store, player, send, domElement, view = null, now = () => performance.now() / 1000 }) {
     this.store = store;
+    this.view = view;
     this.now = now;
     this.player = player;
     this.send = send;
@@ -131,15 +132,25 @@ export class Weapons {
     this.send([{ op: 'fire', by: this.presence, yaw: this.player.bodyYaw }]);
     this.play('fire', weapon.name, Math.max(spec?.fireRate ?? 0.12, 0.12));
   }
+  animationAvailable(clip) {
+    return !!clip && (!this.view || this.view.animatedModels.get(this.presence)?.clips.has(clip) === true);
+  }
+  animationAuto(name) {
+    const auto = this.auto(name);
+    return ['idle', 'walk', 'run'].every(k => this.animationAvailable(auto[k])) ? auto : null;
+  }
   play(kind, name, seconds) {
     const clip = this.animationFor(name)[kind];
-    if (!clip || !this.presence) return;
-    this.send([{ op: 'set', id: this.presence, component: 'animation', value: { clip, loop: 'once', speed: 1, fade: 0.08, auto: this.auto(name) } }]);
+    if (!this.presence || !this.animationAvailable(clip)) return;
+    const base = this.ownEntity()?.animation ?? {};
+    this.send([{ op: 'set', id: this.presence, component: 'animation', value: { ...base, clip, loop: 'once', speed: 1, fade: 0.08, auto: this.animationAuto(name) ?? base.auto } }]);
     this.returnIdleAt = this.now() + seconds;
   }
   idle(name) {
-    if (!this.presence) return;
-    this.send([{ op: 'set', id: this.presence, component: 'animation', value: { auto: this.auto(name), fade: 0.12 } }]);
+    const auto = this.animationAuto(name);
+    if (!this.presence || !auto) return;
+    const { clip, loop, ...base } = this.ownEntity()?.animation ?? {};
+    this.send([{ op: 'set', id: this.presence, component: 'animation', value: { ...base, auto, fade: 0.12 } }]);
   }
 
   update() {
@@ -157,7 +168,12 @@ export class Weapons {
     const weapon = this.ownWeapon();
     const name = weapon?.name;
     this.player.weaponSpeedMultiplier = this.byName.get(name)?.speedPenaltyMultiplier ?? 1;
-    if (name && name !== this.lastWeapon) { this.lastWeapon = name; this.idle(name); }
+    const animationEntry = this.view?.animatedModels.get(this.presence);
+    if (name && (name !== this.lastWeapon || animationEntry !== this.lastAnimationEntry) && (!this.view || animationEntry)) {
+      this.lastWeapon = name;
+      this.lastAnimationEntry = animationEntry;
+      this.idle(name);
+    }
     if (!name) this.lastWeapon = null;
     if (weapon?.lastFire !== undefined && weapon.lastFire !== this.lastFire) {
       this.lastFire = weapon.lastFire;

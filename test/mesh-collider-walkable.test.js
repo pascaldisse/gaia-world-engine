@@ -63,18 +63,18 @@ describe('MeshCollider surfaces — actual Three raycasts (Player unit needs DOM
     expect(position.z).toBeGreaterThan(-29.8);
   });
 
-  test('the FIXED emission is a real surface: solid mesh + non-blocker box, and the player steps on', () => {
+  test('the FIXED emission is a real surface: solid mesh + retained step-aware blocker, and the player steps on', () => {
     const { view } = runtimeFixture(
       { shape: 'model', solid: true },
-      [{ position: [0.000005, 0.002602, 0], size: [19.99999, 0.194796, 20], blocker: false }],
+      [{ position: [0.000005, 0.002602, 0], size: [19.99999, 0.194796, 20], blocker: true, step: true }],
     );
     const top = 0.0026 + 0.195 / 2;
     expect(view.surfaceAt(20, -40, 3)).toBeCloseTo(top, 3);
-    expect(view.walkableAt(20, -40, 3)?.id).toBe('road');
+    expect(view.walkableAt(20, -40, 3)).toBe(null); // no invented AABB floor
     // nothing pushes at the edge any more
     const position = new THREE.Vector3(20, 1.7, -29.8);
     const before = position.z;
-    view.resolveBlockers(position, 1.7);
+    view.resolveBlockers(position, 1.7, null, {stepHeight: .65});
     expect(position.z).toBe(before);
 
     // The controller's own ground query is surfaceAt + walkableAt with a 0.65
@@ -125,7 +125,7 @@ describe('MeshCollider emission — real road prefab, real parse/emit CLIs', () 
     return { emit, components: doc.components, prefabs };
   };
 
-  test('the real road: its MeshCollider IS the rendered mesh -> solid surface, non-blocker support', () => {
+  test('the real road: its MeshCollider IS the rendered mesh -> solid surface, source blocker preserved', () => {
     expect(fs.existsSync(path.join(UNITY, 'Assets/Prefabs/Roads/road.prefab'))).toBe(true);
     expect(roadGuid).toBeTruthy();
     // raw source proof: MeshFilter and MeshCollider name the SAME mesh
@@ -137,19 +137,10 @@ describe('MeshCollider emission — real road prefab, real parse/emit CLIs', () 
     const { components } = emitRoad('road');
     expect(components.mesh.parts[0].solid).toBe(true);
     const box = components.collider.boxes[0];
-    expect(box.blocker).toBe(false);
+    expect(box.blocker).toBe(true);
+    expect(box.step).toBe(true);
     // the live curb: ~0.19 m tall, well inside the controller's 0.65 step reach
     expect(box.size[1]).toBeLessThan(0.65);
-  });
-
-  test('the height rule is policy, not a hidden constant: a lower threshold keeps the blocker', () => {
-    const policyFile = path.join(tmp, 'policy.json');
-    fs.writeFileSync(policyFile, JSON.stringify({ meshColliderWalkableMaxHeight: 0.01 }));
-    const { components } = emitRoad('road-strict', ['--policy', policyFile]);
-    // the mesh match still makes the surface standable ...
-    expect(components.mesh.parts[0].solid).toBe(true);
-    // ... but the AABB is now above the configured walkable height, so it blocks
-    expect(components.collider.boxes[0].blocker).toBe(true);
   });
 
   test('a MeshCollider pointing at a DIFFERENT mesh keeps the AABB blocker and says so', () => {
@@ -175,4 +166,14 @@ describe('MeshCollider emission — real road prefab, real parse/emit CLIs', () 
     expect(components.collider.boxes[0].blocker).toBe(true);
     expect(emit.stderr).toMatch(/MeshCollider mesh differs from the rendered mesh/);
   });
+});
+
+
+test('runtime step reach uses scaled WORLD height; no import-time local-height wall removal',()=>{
+ const {view}=runtimeFixture({shape:'model',solid:true},[{position:[0,0,0],size:[20,.2,20],blocker:true,step:true}]);
+ const p=new THREE.Vector3(20,1.7,-29.8);view.groups.get('road').scale.y=20;
+ view.resolveBlockers(p,1.7,null,{stepHeight:.65});expect(p.z).toBeGreaterThan(-29.8);
+ view.groups.get('road').scale.y=1;p.set(20,1.7,-29.8);
+ view.resolveBlockers(p,1.7,null,{stepHeight:.01});expect(p.z).toBeGreaterThan(-29.8);
+ p.set(20,1.7,-29.8);view.resolveBlockers(p,1.7,null,{stepHeight:.65});expect(p.z).toBe(-29.8);
 });

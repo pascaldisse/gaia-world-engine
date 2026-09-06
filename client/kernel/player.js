@@ -14,6 +14,7 @@ const _camTarget = new THREE.Vector3();
 
 // Scene locomotion may override these on its environment entity. Keep these
 // values in one spec so worlds without that component retain engine behavior.
+export const DEFAULT_STEP_HEIGHT = 0.65;
 const LOCOMOTION_DEFAULTS = Object.freeze({ walk: 6, run: 14, crouch: 3, backwardFactor: 1 });
 const DEFAULT_VEHICLE_CAMERA_RIG = Object.freeze({ yaw: 0, pitch: -0.22, distance: 8, height: 3.5, damp: 4 });
 
@@ -415,13 +416,13 @@ export class Player {
         return;
       }
 
-      this.view?.resolveBlockers?.(this.position, this.eyeHeight);
+      this.view?.resolveBlockers?.(this.position, this.eyeHeight, null, { stepHeight: this.grounded ? DEFAULT_STEP_HEIGHT : 0 });
 
       const x = this.position.x;
       const z = this.position.z;
       const feet = this.position.y - this.eyeHeight;
       // Shared foot/vehicle sampling → identical self/lifecycle exclusions.
-      const { y: groundY, platformId } = this.groundAt(x, z, this.position.y, this.swimming ? 2.0 : 0.65);
+      const { y: groundY, platformId } = this.groundAt(x, z, this.position.y, this.swimming ? 2.0 : DEFAULT_STEP_HEIGHT);
 
       const water = this.view?.waterAt?.(x, z);
       const inDeepWater = water && water.level - groundY > 1.15 && feet < water.level - 0.2;
@@ -739,7 +740,7 @@ export class Player {
     this.position.y += this.vy * dt;
 
     // GAIA seam — PhysX hull collisions become blocker push + into-wall clip.
-    this.view?.resolveBlockers?.(this.position, this.eyeHeight, this.velocity);
+    this.view?.resolveBlockers?.(this.position, this.eyeHeight, this.velocity, { stepHeight: DEFAULT_STEP_HEIGHT });
 
     // GAIA seam — resolve the sphere/ground contact against GAIA ground data.
     const resolvedGround = this.driveGroundAt(this.position.x, this.position.z, this.position.y);
@@ -762,7 +763,7 @@ export class Player {
     return this.groundAt(x, z, eyeY);
   }
 
-  groundAt(x, z, eyeY, walkReach = 0.65) {
+  groundAt(x, z, eyeY, walkReach = DEFAULT_STEP_HEIGHT) {
     this._groundExcludeIds ??= new Set();
     this._groundExcludeIds.clear();
     this._groundExcludeIds.add(this.view?.ownPresence);
@@ -776,8 +777,8 @@ export class Player {
       y = walk.top;
       platformId = walk.id;
     }
-    const surface = this.view?.surfaceAt(x, z, eyeY + 0.5, { excludeIds, maxTop: feet + 0.65 });
-    if (surface !== null && surface !== undefined && surface > y + GROUND_HEIGHT_EPSILON_M && surface <= feet + 0.65) {
+    const surface = this.view?.surfaceAt(x, z, eyeY + 0.5, { excludeIds, maxTop: feet + DEFAULT_STEP_HEIGHT });
+    if (surface !== null && surface !== undefined && surface > y + GROUND_HEIGHT_EPSILON_M && surface <= feet + DEFAULT_STEP_HEIGHT) {
       y = surface;
       platformId = null;
     }

@@ -1301,7 +1301,7 @@ export class View {
 
   // blocker boxes (`blocker: true` in a collider) push a body out
   // horizontally — cave walls, railings. Mutates `position` in place.
-  resolveBlockers(position, eyeHeight, velocity = null) {
+  resolveBlockers(position, eyeHeight, velocity = null, { stepHeight = 0 } = {}) {
     const feet = position.y - eyeHeight;
     const head = position.y + 0.2;
     const r = 0.35;
@@ -1332,6 +1332,7 @@ export class View {
         const top = group.position.y + by * scaleY + sy * absY / 2;
         const bottom = group.position.y + by * scaleY - sy * absY / 2;
         if (feet >= top - 0.05 || head <= bottom) continue;
+        if (box.step && Number.isFinite(stepHeight) && stepHeight > 0 && top <= feet + stepHeight) continue;
         const pxWorld = position.x - group.position.x;
         const pzWorld = position.z - group.position.z;
         const gx = (pxWorld * groupCos - pzWorld * groupSin) / scaleX;

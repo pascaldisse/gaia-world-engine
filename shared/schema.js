@@ -194,6 +194,7 @@ export const SCHEMA = {
       size: { doc: 'box [x, y, z] (entity-local)', range: [0.05, 60] },
       position: { doc: 'box center (entity-local)', range: [-30, 30] },
       blocker: { doc: 'true: pushes bodies out (wall); false: stand on top' },
+      step: { doc: 'mesh-backed blocker: controller may step past when its world-space top is within step reach; the solid mesh supplies the actual floor' },
     },
   },
   water: {

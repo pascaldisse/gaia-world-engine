@@ -46,12 +46,7 @@ let guidDbPath = defaultGuidDb;
 let sceneNameOverride = null;
 let mergeWorld = false;
 let reuseModels = false;
-// meshColliderWalkableMaxHeight: a MeshCollider whose mesh IS the rendered mesh
-// and whose AABB is no taller than this is SUPPORT, not a wall. The default is
-// the player's own step reach (client/kernel/player.js groundAt walkReach 0.65):
-// a box the controller could step onto anyway must never be emitted as a blocker,
-// or it becomes an invisible curb the player is pushed off instead of onto.
-const colliderPolicy = { meshAabb: true, meshMinSize: 0.01, meshMaxBoxes: 16, maxBoxes: 32, meshColliderWalkableMaxHeight: 0.65 };
+const colliderPolicy = { meshAabb: true, meshMinSize: 0.01, meshMaxBoxes: 16, maxBoxes: 32 };
 let meshColliderAabbUnresolved = 0;
 let cameraOverridePath = null;
 // Authored GAME declarations (pedestrian appearance, ...) live in a DATA file,
@@ -94,7 +89,6 @@ for (let i = 2; i < args.length; i++) {
 }
 
 const policy = policyPath ? JSON.parse(readFileSync(policyPath, 'utf8')) : {};
-if (Number.isFinite(policy.meshColliderWalkableMaxHeight)) colliderPolicy.meshColliderWalkableMaxHeight = policy.meshColliderWalkableMaxHeight;
 const ir = JSON.parse(readFileSync(irPath, 'utf8'));
 // SCHEMA GATE. An IR produced before the root-relative fix looks perfectly
 // valid -- it just carries the old, double-baked meaning. Emitting from it would
@@ -695,10 +689,9 @@ function meshColliderBoxes(c, { walkable = false } = {}) {
   }
   // The converted GLB is already in GAIA's local frame. Entity transform,
   // including scale, is applied by the runtime rather than baked here.
-  // A flat, mesh-matching collider is SUPPORT (walkableAt uses non-blocker
-  // boxes); anything taller keeps its push-out role.
-  const flat = walkable && size[1] <= colliderPolicy.meshColliderWalkableMaxHeight;
-  return [{ size: roundVec(size), position: roundVec(center), blocker: !flat }];
+  // Keep the authored blocker. Runtime compares WORLD top against this body's step reach.
+  // A local-height heuristic would erase walls on scaled instances and invent flat AABB floors.
+  return [{ size: roundVec(size), position: roundVec(center), blocker: true, ...(walkable ? { step: true } : {}) }];
 }
 function placeColliderBoxes(boxes, unityTransform) {
   if (!unityTransform) return boxes;

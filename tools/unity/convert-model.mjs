@@ -28,12 +28,13 @@ Outputs a models.json manifest and Unity .mat PBR JSON sidecars under <out-dir>/
 }
 
 function parseArgs(argv) {
-  const args = { positional: [], batch: false, outDir: defaultOutDir, unityRoot: null, materials: null, guidDb: defaultGuidDb, textureRoots: [], dryRun: false, meshFileID: null };
+  const args = { positional: [], batch: false, outDir: defaultOutDir, unityRoot: null, materials: null, guidDb: defaultGuidDb, textureRoots: [], dryRun: false, meshFileID: null, strictMesh: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--batch') args.batch = true;
     else if (a === '--mesh-fileid') args.meshFileID = argv[++i] ?? die('--mesh-fileid requires an id');
+    else if (a === '--strict-mesh') args.strictMesh = true;
     else if (a === '--repair-narrowed') args.repairNarrowed = path.resolve(argv[++i] ?? die('--repair-narrowed requires a dir'));
     else if (a === '--out-dir') args.outDir = path.resolve(argv[++i] ?? die('--out-dir requires a path'));
     else if (a === '--unity-root') args.unityRoot = path.resolve(argv[++i] ?? die('--unity-root requires a path'));
@@ -55,7 +56,7 @@ function which(name) {
 
 function shellQuote(s) { return `'${String(s).replaceAll("'", "'\\''")}'`; }
 
-function unityMeshFileID(name) { return signed(xxh64(`Type:Mesh->${name}0`, 0n)); }
+export function unityMeshFileID(name) { return signed(xxh64(`Type:Mesh->${name}0`, 0n)); }
 
 function availableConverters() {
   const out = [];
@@ -270,13 +271,30 @@ function findModelMeshFileIDTarget(json, targetFileID, fidToName = null) {
   return null;
 }
 
-function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null) {
+// `strict` turns the two SILENT FALLBACKS into refusals. Both of them keep the
+// WHOLE model when the requested sub-mesh cannot be proven present, which is how
+// a caller asking for one car body silently receives an entire authoring scene
+// (with that scene's layout offsets baked into the node matrices). A caller that
+// depends on the narrowing must be able to say "prove it or fail".
+export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null, { strict = false } = {}) {
   const glb = readGlbJson(glbFile);
   const json = glb?.json;
   if (String(targetFileID) === '100100000') return false; // prefab-asset handle: whole model IS the target.
-  if (json && (json.meshes || []).length <= 1) return false; // single-mesh model: nothing to narrow.
   const target = json ? findModelMeshFileIDTarget(json, targetFileID, fidToName) : null;
+  if (json && (json.meshes || []).length <= 1) {
+    // single-mesh model: nothing to narrow -- but only harmless if that one mesh
+    // IS the requested one. Under strict, an unprovable match is an error.
+    if (strict && !target) {
+      throw new Error(`convert-model: --mesh-fileid ${targetFileID} is not the single mesh in ${glbFile}`
+        + ` (meshes: ${(json.meshes ?? []).map((m) => m?.name ?? '<unnamed>').join(', ') || 'none'})`);
+    }
+    return false;
+  }
   if (!target) {
+    if (strict) {
+      throw new Error(`convert-model: --mesh-fileid ${targetFileID} did not match any GLB node/mesh name in ${glbFile}`
+        + ` (nodes: ${(json?.nodes ?? []).map((n) => n?.name ?? '<unnamed>').join(', ') || 'none'})`);
+    }
     console.warn(`convert-model: warning: --mesh-fileid ${targetFileID} did not match any GLB node/mesh name in ${glbFile}; keeping whole model`);
     return false;
   }
@@ -961,7 +979,7 @@ function embedSourceMaterialTextures(glbFile, sourceFile, guidMap, unityRoot) {
   };
 }
 
-function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFileID = null, guidMap = null, unityRoot = null, aliases = {}) {
+function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFileID = null, guidMap = null, unityRoot = null, aliases = {}, strictMesh = false) {
   if (!existsSync(inFile)) die(`input model not found: ${inFile}`);
   if (/\.asset$/i.test(inFile)) {
     mkdirSync(path.dirname(outFile), { recursive: true });
@@ -981,7 +999,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
     if (meshFileID != null) {
       const metaFile = inFile + '.meta';
       const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
-      keepOnlyModelMeshFileID(outFile, meshFileID, table);
+      keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh });
     }
     return { converter: 'blender-blend', bin, bytes: statSync(outFile).size, tried: ['blender-blend'], textures, doubleSided };
   }
@@ -1007,7 +1025,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
       if (meshFileID != null) {
         const metaFile = inFile + '.meta';
         const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
-        keepOnlyModelMeshFileID(outFile, meshFileID, table);
+        keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh });
       }
       return { converter: c.kind, bin: c.bin, bytes: statSync(outFile).size, tried: candidates.map(x => x.kind), textures, doubleSided };
     } catch (err) {
@@ -1029,7 +1047,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
     if (meshFileID != null) {
       const metaFile = inFile + '.meta';
       const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
-      keepOnlyModelMeshFileID(outFile, meshFileID, table);
+      keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh });
     }
     return { converter: 'legacy-fbx6100', bin: 'internal', bytes: statSync(outFile).size, tried: [...candidates.map(x => x.kind), 'legacy-fbx6100'], textures, doubleSided };
   } catch (err) {
@@ -1357,7 +1375,7 @@ function main() {
       const inFile = path.resolve(args.positional[0]);
       const outFile = path.resolve(args.positional[1]);
       const textureRoots = discoverTextureRoots(args, [inFile]);
-      const r = convertOne(inFile, outFile, null, textureRoots, args.meshFileID, guidMap, unityRoot, args.textureAliases ? JSON.parse(readFileSync(args.textureAliases, 'utf8')) : {});
+      const r = convertOne(inFile, outFile, null, textureRoots, args.meshFileID, guidMap, unityRoot, args.textureAliases ? JSON.parse(readFileSync(args.textureAliases, 'utf8')) : {}, args.strictMesh);
       console.log(`converted ${inFile} -> ${outFile} with ${r.converter} (${r.bytes} bytes)`);
       if (r.textures?.placeholders) console.warn(`convert-model: placeholders=${r.textures.placeholders}`);
       for (const note of r.textures?.notes ?? []) console.log(`  ${note}`);

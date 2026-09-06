@@ -207,7 +207,8 @@ function buildPrefabInstance(doc, data, guidDb, transformByFile, authoredRoots =
   // not from whichever stripped transform the scene happened to serialize first:
   // a stripped doc may be missing entirely, or may belong to a CHILD.
   const resolved = source?.guid ? authoredRoots.get(String(source.guid).toLowerCase()) ?? null : null;
-  if (source?.guid && !resolved) {
+  const rootUnresolved = Boolean(source?.guid && !resolved);
+  if (rootUnresolved) {
     problems.push(`PrefabInstance ${doc.fileID}: authored root unresolved for ${source.path ?? source.guid}`);
   }
   const rootTarget = resolved?.fileID ?? (strippedSource?.fileID ?? null);
@@ -237,6 +238,7 @@ function buildPrefabInstance(doc, data, guidDb, transformByFile, authoredRoots =
     authoredRoot,
     authoredRootSource: resolved ? { guid: resolved.guid, fileID: resolved.fileID, kind: resolved.kind, path: resolved.source } : null,
     rootTargetFileID: rootTarget,
+    rootUnresolved,
     transform: {
       local: merged.local,
       // which axes the instance actually NAMES (the rest are inherited from the
@@ -261,7 +263,14 @@ function classKeyForDoc(parsed, className) {
   return keys.length === 1 ? keys[0] : null;
 }
 
-export async function parseFile(scenePath, guidDb) {
+// `onUnresolvedRoot`:
+//   'throw'   (default) -- a prefab whose authored root cannot be resolved fails
+//              the parse: emitting from it would place objects at the wrong pose.
+//   'collect' -- record the problems in ir.rootProblems and mark the affected
+//              instances rootUnresolved, for a caller that builds an INSPECTABLE
+//              report and fails on its own terms (tools/unity/pipeline.mjs).
+//              Consumers must still refuse such an IR (emit.mjs does).
+export async function parseFile(scenePath, guidDb, { onUnresolvedRoot = 'throw' } = {}) {
   const text = await fs.readFile(scenePath, 'utf8');
   const docsRaw = splitUnityDocuments(text);
   const docs = [];
@@ -328,7 +337,7 @@ export async function parseFile(scenePath, guidDb) {
   for (const doc of instanceDocs) {
     prefabInstances.push(buildPrefabInstance(doc, doc.data, guidDb, transforms, authoredRoots, problems));
   }
-  if (problems.length) {
+  if (problems.length && onUnresolvedRoot !== 'collect') {
     const shown = problems.slice(0, 10).join('\n  ');
     throw new Error(`parse: ${problems.length} prefab root(s) could not be resolved -- placement would be wrong:\n  ${shown}`
       + (problems.length > 10 ? `\n  ...and ${problems.length - 10} more` : ''));
@@ -504,6 +513,8 @@ export async function parseFile(scenePath, guidDb) {
     version: PARSER_VERSION,
     source: scenePath,
     sourceDependencies,
+    // present (non-empty) only in 'collect' mode: an IR that must NOT be emitted
+    rootProblems: problems,
     sourceKind: path.extname(scenePath).slice(1).toLowerCase(),
     unityProjectRoot: guidDb.unityProjectRoot ?? null,
     documentCount: docs.length,

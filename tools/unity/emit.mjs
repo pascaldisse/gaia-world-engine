@@ -14,6 +14,12 @@ import { PARSER_VERSION } from './parse.mjs';
 // poses). Anything older carries the OLD meaning and must be re-parsed, never
 // silently consumed.
 function assertIRVersion(doc, where) {
+  // An IR parsed in 'collect' mode may carry instances whose authored root could
+  // not be resolved. Their placement is unknown, so emitting is refused outright.
+  if (Array.isArray(doc?.rootProblems) && doc.rootProblems.length) {
+    throw new Error(`emit: ${where} has ${doc.rootProblems.length} unresolved prefab root(s) -- placement would be wrong:\n  `
+      + `${doc.rootProblems.slice(0, 5).join('\n  ')}`);
+  }
   const version = Number(doc?.version ?? 0);
   if (Number.isFinite(version) && version >= PARSER_VERSION) return;
   throw new Error(`emit: IR schema v${doc?.version ?? '?'} at ${where} is older than v${PARSER_VERSION} `

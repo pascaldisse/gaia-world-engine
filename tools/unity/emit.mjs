@@ -46,7 +46,12 @@ let guidDbPath = defaultGuidDb;
 let sceneNameOverride = null;
 let mergeWorld = false;
 let reuseModels = false;
-const colliderPolicy = { meshAabb: true, meshMinSize: 0.01, meshMaxBoxes: 16, maxBoxes: 32 };
+// meshColliderWalkableMaxHeight: a MeshCollider whose mesh IS the rendered mesh
+// and whose AABB is no taller than this is SUPPORT, not a wall. The default is
+// the player's own step reach (client/kernel/player.js groundAt walkReach 0.65):
+// a box the controller could step onto anyway must never be emitted as a blocker,
+// or it becomes an invisible curb the player is pushed off instead of onto.
+const colliderPolicy = { meshAabb: true, meshMinSize: 0.01, meshMaxBoxes: 16, maxBoxes: 32, meshColliderWalkableMaxHeight: 0.65 };
 let meshColliderAabbUnresolved = 0;
 let cameraOverridePath = null;
 // Authored GAME declarations (pedestrian appearance, ...) live in a DATA file,
@@ -89,6 +94,7 @@ for (let i = 2; i < args.length; i++) {
 }
 
 const policy = policyPath ? JSON.parse(readFileSync(policyPath, 'utf8')) : {};
+if (Number.isFinite(policy.meshColliderWalkableMaxHeight)) colliderPolicy.meshColliderWalkableMaxHeight = policy.meshColliderWalkableMaxHeight;
 const ir = JSON.parse(readFileSync(irPath, 'utf8'));
 // SCHEMA GATE. An IR produced before the root-relative fix looks perfectly
 // valid -- it just carries the old, double-baked meaning. Emitting from it would
@@ -616,7 +622,7 @@ function modelPartFromEntity(entity, includeLocalTransform = false) {
   const model = ensureModel(meshRef);
   if (!model) return null;
   const mats = entity.components?.meshRenderer?.materials ?? [];
-  const part = { shape: 'model', src: model.src, solid: false, castShadow: entity.components?.meshRenderer?.castShadows !== 0 };
+  const part = { shape: 'model', src: model.src, solid: Boolean(renderMeshCollider(entity)), castShadow: entity.components?.meshRenderer?.castShadows !== 0 };
   const mat = ensureMaterial(mats[0]);
   if (mat) part.material = mat;
   const placeholder = firstColliderSize(entity) ?? [2, 2, 2];
@@ -651,7 +657,29 @@ function unresolvedMeshColliderAabb(ref, reason) {
   console.warn(`[emit] MeshCollider AABB unresolved for ${ref ?? '<unknown mesh>'}: ${reason}`);
   return [];
 }
-function meshColliderBoxes(c) {
+// Unity's MeshCollider collides with the REAL triangles. When it references the
+// same mesh the MeshRenderer draws, the rendered geometry IS the collision
+// surface, so the emitted model part is marked solid and the engine raycasts the
+// actual mesh (exact, no approximation). A MeshCollider pointing at a DIFFERENT
+// mesh (a low-poly proxy) cannot be served that way: it keeps the AABB blocker,
+// and the mismatch is reported.
+function sameMeshRef(a, b) {
+  if (!a || !b) return false;
+  const guid = (ref) => String(ref.guid ?? '').toLowerCase();
+  return guid(a) === guid(b) && String(a.fileID ?? '') === String(b.fileID ?? '');
+}
+function renderMeshCollider(entity) {
+  const rendered = entity?.components?.meshFilter?.mesh;
+  if (!rendered || entity.components?.meshRenderer?.enabled === false) return null;
+  for (const c of entity.components?.colliders ?? []) {
+    if (c.kind !== 'MeshCollider' || c.enabled === false || c.isTrigger) continue;
+    if (sameMeshRef(c.mesh, rendered)) return c;
+    console.warn(`[emit] MeshCollider mesh differs from the rendered mesh on ${entity.name ?? entity.id}: `
+      + `${c.mesh?.path ?? c.mesh?.guid ?? 'unknown'} != ${rendered.path ?? rendered.guid} — keeping the AABB blocker`);
+  }
+  return null;
+}
+function meshColliderBoxes(c, { walkable = false } = {}) {
   if (!colliderPolicy.meshAabb || colliderPolicy.meshMaxBoxes < 1) return [];
   const model = ensureModel(c.mesh);
   const file = emittedModelFile(model);
@@ -667,7 +695,10 @@ function meshColliderBoxes(c) {
   }
   // The converted GLB is already in GAIA's local frame. Entity transform,
   // including scale, is applied by the runtime rather than baked here.
-  return [{ size: roundVec(size), position: roundVec(center), blocker: true }];
+  // A flat, mesh-matching collider is SUPPORT (walkableAt uses non-blocker
+  // boxes); anything taller keeps its push-out role.
+  const flat = walkable && size[1] <= colliderPolicy.meshColliderWalkableMaxHeight;
+  return [{ size: roundVec(size), position: roundVec(center), blocker: !flat }];
 }
 function placeColliderBoxes(boxes, unityTransform) {
   if (!unityTransform) return boxes;
@@ -706,7 +737,7 @@ function colliderBoxes(entity, localTransform = null) {
       const size = dir === 0 ? [h, r * 2, r * 2] : dir === 2 ? [r * 2, r * 2, h] : [r * 2, h, r * 2];
       boxes.push({ size: roundVec(size), position: unityVecToGaiaLocal(c.center), blocker: true });
     } else if (c.kind === 'MeshCollider' && meshBoxes < colliderPolicy.meshMaxBoxes) {
-      const next = meshColliderBoxes(c);
+      const next = meshColliderBoxes(c, { walkable: sameMeshRef(c.mesh, entity.components?.meshFilter?.mesh) });
       meshBoxes += next.length;
       boxes.push(...next);
     }
@@ -967,7 +998,7 @@ function modelPartFromEntityWorld(entity, world) {
   const model = ensureModel(meshRef);
   if (!model) return null;
   const mats = entity.components?.meshRenderer?.materials ?? [];
-  const part = { shape: 'model', src: model.src, solid: false, castShadow: entity.components?.meshRenderer?.castShadows !== 0 };
+  const part = { shape: 'model', src: model.src, solid: Boolean(renderMeshCollider(entity)), castShadow: entity.components?.meshRenderer?.castShadows !== 0 };
   const mat = ensureMaterial(mats[0]);
   if (mat) part.material = mat;
   part.placeholderSize = firstColliderSize(entity) ?? [2, 2, 2];

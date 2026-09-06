@@ -838,6 +838,7 @@ function ensurePrefabForSource(source) {
       const boxes = [];
       for (const e of pir.entities ?? []) {
         if (e.active === false) continue;
+        if (!(e.components?.colliders?.length)) continue; // nothing to place
         boxes.push(...colliderBoxes(e, rootRelativeTRS(e, `${name} collider`)));
       }
       if (boxes.length) components.collider = { boxes: boxes.slice(0, colliderPolicy.maxBoxes) };
@@ -887,16 +888,26 @@ function collectPrefabParts(source, parentMatrix, depth, ancestors, acc) {
   const childAncestors = new Set(ancestors).add(source.path);
   for (const e of pir.entities ?? []) {
     if (e.active === false) continue;
+    const wantsMesh = Boolean(e.renderable && e.components?.meshFilter && e.components?.meshRenderer?.enabled !== false);
+    const wantsCollider = depth === 0 && (e.components?.colliders?.length ?? 0) > 0;
+    if (!wantsMesh && !wantsCollider) {
+      // A GameObject can legitimately have NO transform: a stripped nested-prefab
+      // placeholder (Hub.prefab #8877336647538198250 is exactly that -- no
+      // components, not renderable). It contributes no geometry, so it is simply
+      // skipped; a pose is never invented for it.
+      if (!acc.light) acc.light = lightComponent(e);
+      continue;
+    }
     // ROOT-RELATIVE: the prefab's own root contributes NOTHING here. Its pose is
     // supplied by whoever instantiates the prefab (a scene PrefabInstance root
     // REPLACES the authored root); baking it in as well displaced every prefab
     // by its authored root offset.
-    const matrix = m4Mul(parentMatrix, rootRelativeMatrix(e.transform));
-    if (e.renderable && e.components?.meshFilter && e.components?.meshRenderer?.enabled !== false) {
+    const matrix = m4Mul(parentMatrix, rootRelativeMatrix(e.transform, `${source.path}#${e.id} (${e.name ?? 'unnamed'})`));
+    if (wantsMesh) {
       const part = modelPartFromEntityWorld(e, matrixToUnityTRS(matrix, `${source.path}#${e.id} mesh`));
       if (part) acc.parts.push(part);
     }
-    if (depth === 0) acc.boxes.push(...colliderBoxes(e, matrixToUnityTRS(matrix, `${source.path}#${e.id} collider`)));
+    if (wantsCollider) acc.boxes.push(...colliderBoxes(e, matrixToUnityTRS(matrix, `${source.path}#${e.id} collider`)));
     if (!acc.light) acc.light = lightComponent(e);
     if (acc.parts.length > MAX_PREFAB_MESH_PARTS + 4) return; // stop early; will be collapsed
   }
@@ -919,15 +930,21 @@ function collectPrefabParts(source, parentMatrix, depth, ancestors, acc) {
 // (parse.mjs). Older IR caches may predate it; those are rebuilt by parse.mjs
 // itself (the cache is keyed on the source mtime), so a missing field here is a
 // hard error rather than a silent fall back to the double-baked world.
-function rootRelativeMatrix(transform) {
-  const matrix = transform?.rootRelative;
+function rootRelativeMatrix(transform, what = 'IR entry') {
+  // An object that CONTRIBUTES geometry or a collider must have a real pose --
+  // never an invented identity. Callers skip transformless non-visual objects
+  // before reaching here (see collectPrefabParts).
+  if (!transform) {
+    throw new Error(`emit: ${what} has NO transform but contributes geometry/colliders — refusing to place it at identity`);
+  }
+  const matrix = transform.rootRelative;
   if (!Array.isArray(matrix) || matrix.length !== 16 || !matrix.every(Number.isFinite)) {
-    throw new Error('emit: IR entry has no rootRelative matrix — re-run tools/unity/parse.mjs (stale prefab IR cache)');
+    throw new Error(`emit: ${what} has no rootRelative matrix — re-run tools/unity/parse.mjs (stale prefab IR cache)`);
   }
   return matrix;
 }
 function rootRelativeTRS(entity, what) {
-  return matrixToUnityTRS(rootRelativeMatrix(entity.transform), what);
+  return matrixToUnityTRS(rootRelativeMatrix(entity.transform, `${what} (${entity.id ?? 'unknown id'})`), what);
 }
 // A mesh part / collider box is a TRS triple in this schema. A matrix carrying
 // SHEAR (a rotated child under a non-uniformly scaled ancestor) has no such
@@ -964,7 +981,7 @@ function massingBoxFromEntities(pir) {
     if (e.active === false || !e.renderable || !e.components?.meshFilter || e.components?.meshRenderer?.enabled === false) continue;
     // root-relative, exactly like the mesh parts: the box must sit in the same
     // frame the instance root places
-    const t = unityToGaiaTransform(rootRelativeTRS(e, 'massing box'));
+    const t = unityToGaiaTransform(rootRelativeTRS(e, `massing box ${pir.source ?? ''}`));
     const c = t.position ?? [0, 0, 0];
     const h = (firstColliderSize(e) ?? [1, 1, 1]).map((v) => Math.abs(v) / 2);
     for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], c[i] - h[i]); max[i] = Math.max(max[i], c[i] + h[i]); }

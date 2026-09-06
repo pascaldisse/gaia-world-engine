@@ -80,7 +80,7 @@ export async function composeScene(scene, db, outDir) {
     if (visiting.has(source)) throw new Error(`prefab cycle: ${source}`);
     if (documents.has(source)) return documents.get(source);
     visiting.add(source);
-    const ir = await parseFile(source, db);
+    const ir = await parseFile(source, db, { onUnresolvedRoot: 'collect' });
     documents.set(source, ir);
     for (const instance of ir.prefabInstances) {
       const ref = instance.source;

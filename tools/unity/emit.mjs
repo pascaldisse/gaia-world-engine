@@ -7,6 +7,24 @@ import { fileURLToPath } from 'node:url';
 import { parseUnityMaterial } from './convert-model.mjs';
 import { unitySubAssetFileID, parseExternalObjectsMaterials, safeBase } from './fileid.mjs';
 import { boxToCenterSize, glbAABB, partsAABB } from './glb-aabb.mjs';
+import { M4_IDENTITY, m4Mul, m4Decompose, m4IsDecomposable } from './prefab-roots.mjs';
+import { PARSER_VERSION } from './parse.mjs';
+
+// The emitter needs IR v2+ (root-relative transforms + authored-root instance
+// poses). Anything older carries the OLD meaning and must be re-parsed, never
+// silently consumed.
+function assertIRVersion(doc, where) {
+  // An IR parsed in 'collect' mode may carry instances whose authored root could
+  // not be resolved. Their placement is unknown, so emitting is refused outright.
+  if (Array.isArray(doc?.rootProblems) && doc.rootProblems.length) {
+    throw new Error(`emit: ${where} has ${doc.rootProblems.length} unresolved prefab root(s) -- placement would be wrong:\n  `
+      + `${doc.rootProblems.slice(0, 5).join('\n  ')}`);
+  }
+  const version = Number(doc?.version ?? 0);
+  if (Number.isFinite(version) && version >= PARSER_VERSION) return;
+  throw new Error(`emit: IR schema v${doc?.version ?? '?'} at ${where} is older than v${PARSER_VERSION} `
+    + '(root-relative prefab transforms). Re-run: node tools/unity/parse.mjs <source> --guids <guids.json> --out <ir.json>');
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,6 +90,11 @@ for (let i = 2; i < args.length; i++) {
 
 const policy = policyPath ? JSON.parse(readFileSync(policyPath, 'utf8')) : {};
 const ir = JSON.parse(readFileSync(irPath, 'utf8'));
+// SCHEMA GATE. An IR produced before the root-relative fix looks perfectly
+// valid -- it just carries the old, double-baked meaning. Emitting from it would
+// silently reproduce the bug, so refuse with the exact command that fixes it.
+// (Prefab IR caches are re-parsed automatically; see parsePrefab.)
+assertIRVersion(ir, irPath);
 const guidDb = existsSync(guidDbPath) ? JSON.parse(readFileSync(guidDbPath, 'utf8')) : { guids: {} };
 const guidMap = normalizeGuidMap(guidDb);
 const unityRoot = ir.unityProjectRoot ?? guidDb.unityProjectRoot ?? inferUnityRoot(guidDb) ?? path.dirname(ir.source ?? '.');
@@ -705,14 +728,43 @@ function lightComponent(entity) {
 }
 function colorObjToHex(c) { return colorToHex([num(c?.r, 1), num(c?.g, 1), num(c?.b, 1), num(c?.a, 1)]); }
 
+// Cached prefab IR is invalid when EITHER the Unity source changed OR the parser
+// schema moved on. mtime alone was not enough: a parser fix leaves every source
+// file untouched, so stale caches kept feeding the old meaning into the emitter
+// until someone deleted them by hand.
+function prefabIRStale(cacheFile, sourceFile) {
+  if (!existsSync(cacheFile)) return 'missing';
+  if (statSync(cacheFile).mtimeMs < statSync(sourceFile).mtimeMs) return 'source is newer';
+  let cached;
+  try { cached = JSON.parse(readFileSync(cacheFile, 'utf8')); }
+  catch { return 'unreadable'; }
+  const version = Number(cached?.version ?? 0);
+  if (!Number.isFinite(version) || version < PARSER_VERSION) return `schema v${cached?.version ?? '?'} < v${PARSER_VERSION}`;
+  // A prefab IR also depends on the prefabs it read for their AUTHORED ROOTS
+  // (variant bases, nested sources). Editing one of those leaves this prefab's
+  // own mtime untouched, so the recorded dependency stamps are checked too.
+  for (const dep of cached.sourceDependencies ?? []) {
+    if (!dep?.path) continue;
+    let current = null;
+    try { current = statSync(dep.path).mtimeMs; } catch { return `dependency missing: ${dep.path}`; }
+    if (dep.mtimeMs == null || current > dep.mtimeMs) return `dependency changed: ${path.basename(dep.path)}`;
+  }
+  return null;
+}
 function parsePrefab(sourcePath) {
   const abs = resolveUnityPath(sourcePath);
   const out = path.join(prefabCacheDir, `${safeSlug(path.basename(sourcePath))}-${shortHash(sourcePath)}.ir.json`);
-  if (!existsSync(out) || statSync(out).mtimeMs < statSync(abs).mtimeMs) {
+  const stale = prefabIRStale(out, abs);
+  if (stale) {
+    if (stale.startsWith('schema')) console.warn(`[emit] re-parsing ${path.basename(sourcePath)}: cached IR ${stale}`);
     const r = spawnSync(process.execPath, [path.join(__dirname, 'parse.mjs'), abs, '--guids', guidDbPath, '--out', out], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`prefab parse failed for ${sourcePath}\n${[r.stdout, r.stderr].filter(Boolean).join('\n')}`);
   }
-  return JSON.parse(readFileSync(out, 'utf8'));
+  const parsed = JSON.parse(readFileSync(out, 'utf8'));
+  // belt and braces: a re-parse that still produces an old schema is a broken
+  // toolchain, not something to emit from
+  assertIRVersion(parsed, out);
+  return parsed;
 }
 
 function prefabNameForSource(source) {
@@ -725,12 +777,14 @@ function prefabNameForSource(source) {
 const MAX_PREFAB_MESH_PARTS = policy.maxPrefabMeshParts ?? 96;
 const PREFAB_DESCENT_DEPTH = policy.prefabDescentDepth ?? 8;
 
-// RayFire pre-fractured prefabs render ASSEMBLED before play — hundreds of
-// shard meshes baked into .asset files we can't (and shouldn't) convert.
-// Instead of collapsing them to an untextured massing box, emit the intact
-// sibling prefab's visual in their place. Keyed by prefab basename
-// (lowercase, extension stripped); value is the intact sibling's basename
-// in the SAME directory.
+// RayFire pre-fractured prefabs render ASSEMBLED before play, as hundreds of
+// separate shard meshes. The converter CAN read those serialized meshes now, but
+// emitting hundreds of nodes per building (times dozens of instances) is a
+// runtime cost, not a fidelity gain — so the intact sibling prefab's visual is
+// emitted in their place. Keyed by prefab basename (lowercase, extension
+// stripped); value is the intact sibling's basename in the SAME directory.
+// The proxy is placed on exactly the same ROOT-RELATIVE basis as the prefab it
+// stands in for: no extra authored transform is introduced anywhere.
 const PREFAB_VISUAL_PROXY = new Map(Object.entries(policy.visualProxies ?? {}));
 const emittedPrefabs = new Map();
 function ensurePrefabForSource(source) {
@@ -760,7 +814,10 @@ function ensurePrefabForSource(source) {
       const box = massingBoxFromEntities(pir);
       if (box) components.mesh = { parts: [box] };
       const boxes = [];
-      for (const e of pir.entities ?? []) { if (e.active !== false) boxes.push(...colliderBoxes(e, e.transform?.world)); }
+      for (const e of pir.entities ?? []) {
+        if (e.active === false) continue;
+        boxes.push(...colliderBoxes(e, rootRelativeTRS(e, `${name} collider`)));
+      }
       if (boxes.length) components.collider = { boxes: boxes.slice(0, colliderPolicy.maxBoxes) };
       console.warn(`[emit] prefab ${name}: ${renderCount} renderable meshes -> massing box (no conversion)`);
       emittedPrefabs.set(name, components);
@@ -770,7 +827,7 @@ function ensurePrefabForSource(source) {
   }
 
   const acc = { parts: [], boxes: [], light: null };
-  collectPrefabParts(source, U_IDENTITY, 0, new Set(), acc);
+  collectPrefabParts(source, M4_IDENTITY, 0, new Set(), acc);
   const components = { transform: { position: [0, 0, 0] } };
   if (acc.parts.length > MAX_PREFAB_MESH_PARTS) {
     const box = massingBoxFromParts(acc.parts);
@@ -790,14 +847,14 @@ function ensurePrefabForSource(source) {
 // variants and nested prefab instances (DotsCity wraps visual prefabs in logic
 // wrappers). `parentWorld` is the accumulated Unity-space transform; `ancestors`
 // is the current path chain (cycle guard); depth is capped.
-function collectPrefabParts(source, parentWorld, depth, ancestors, acc) {
+function collectPrefabParts(source, parentMatrix, depth, ancestors, acc) {
   if (!source?.path || depth > PREFAB_DESCENT_DEPTH) return;
   if (ancestors.has(source.path)) return; // cycle
   if (source.kind === 'model' || /\.(fbx|glb|gltf|asset|blend)$/i.test(source.path)) {
     const model = ensureModel(source);
     if (model?.src) {
       const part = { shape: 'model', src: model.src, solid: false, placeholderSize: [2, 2, 2] };
-      Object.assign(part, unityToGaiaTransform(parentWorld));
+      Object.assign(part, unityToGaiaTransform(matrixToUnityTRS(parentMatrix, `${source.path} model part`)));
       acc.parts.push(part);
     }
     return;
@@ -808,21 +865,51 @@ function collectPrefabParts(source, parentWorld, depth, ancestors, acc) {
   const childAncestors = new Set(ancestors).add(source.path);
   for (const e of pir.entities ?? []) {
     if (e.active === false) continue;
-    const world = uCompose(parentWorld, e.transform?.world);
+    // ROOT-RELATIVE: the prefab's own root contributes NOTHING here. Its pose is
+    // supplied by whoever instantiates the prefab (a scene PrefabInstance root
+    // REPLACES the authored root); baking it in as well displaced every prefab
+    // by its authored root offset.
+    const matrix = m4Mul(parentMatrix, rootRelativeMatrix(e.transform));
     if (e.renderable && e.components?.meshFilter && e.components?.meshRenderer?.enabled !== false) {
-      const part = modelPartFromEntityWorld(e, world);
+      const part = modelPartFromEntityWorld(e, matrixToUnityTRS(matrix, `${source.path}#${e.id} mesh`));
       if (part) acc.parts.push(part);
     }
-    if (depth === 0) acc.boxes.push(...colliderBoxes(e, world));
+    if (depth === 0) acc.boxes.push(...colliderBoxes(e, matrixToUnityTRS(matrix, `${source.path}#${e.id} collider`)));
     if (!acc.light) acc.light = lightComponent(e);
     if (acc.parts.length > MAX_PREFAB_MESH_PARTS + 4) return; // stop early; will be collapsed
   }
   for (const pi of pir.prefabInstances ?? []) {
     if (pi.active === false) continue;
-    const world = uCompose(parentWorld, pi.transform?.world);
-    collectPrefabParts(pi.source, world, depth + 1, childAncestors, acc);
+    const matrix = m4Mul(parentMatrix, rootRelativeMatrix(pi.transform));
+    collectPrefabParts(pi.source, matrix, depth + 1, childAncestors, acc);
     if (acc.parts.length > MAX_PREFAB_MESH_PARTS + 4) return;
   }
+}
+
+// --- root-relative helpers ---------------------------------------------------
+// The IR carries an EXACT root-relative matrix built from the raw local chain
+// (parse.mjs). Older IR caches may predate it; those are rebuilt by parse.mjs
+// itself (the cache is keyed on the source mtime), so a missing field here is a
+// hard error rather than a silent fall back to the double-baked world.
+function rootRelativeMatrix(transform) {
+  const matrix = transform?.rootRelative;
+  if (!Array.isArray(matrix) || matrix.length !== 16 || !matrix.every(Number.isFinite)) {
+    throw new Error('emit: IR entry has no rootRelative matrix — re-run tools/unity/parse.mjs (stale prefab IR cache)');
+  }
+  return matrix;
+}
+function rootRelativeTRS(entity, what) {
+  return matrixToUnityTRS(rootRelativeMatrix(entity.transform), what);
+}
+// A mesh part / collider box is a TRS triple in this schema. A matrix carrying
+// SHEAR (a rotated child under a non-uniformly scaled ancestor) has no such
+// representation: refuse loudly instead of emitting a plausible wrong pose.
+function matrixToUnityTRS(matrix, what) {
+  if (!m4IsDecomposable(matrix)) {
+    throw new Error(`emit: ${what} needs a SHEARED transform (non-uniform ancestor scale + rotated child). `
+      + 'The mesh-part schema is TRS-only: bake the shear into the model or extend the schema — this emitter will not approximate it.');
+  }
+  return m4Decompose(matrix);
 }
 
 function modelPartFromEntityWorld(entity, world) {
@@ -847,7 +934,9 @@ function massingBoxFromEntities(pir) {
   let min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (const e of pir.entities ?? []) {
     if (e.active === false || !e.renderable || !e.components?.meshFilter || e.components?.meshRenderer?.enabled === false) continue;
-    const t = unityToGaiaTransform(e.transform?.world ?? {});
+    // root-relative, exactly like the mesh parts: the box must sit in the same
+    // frame the instance root places
+    const t = unityToGaiaTransform(rootRelativeTRS(e, 'massing box'));
     const c = t.position ?? [0, 0, 0];
     const h = (firstColliderSize(e) ?? [1, 1, 1]).map((v) => Math.abs(v) / 2);
     for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], c[i] - h[i]); max[i] = Math.max(max[i], c[i] + h[i]); }

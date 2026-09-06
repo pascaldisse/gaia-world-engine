@@ -167,3 +167,8 @@ test('countdown uses injected simulation seconds instead of wall epoch', () => {
   now += 3; hud.renderCountdown();
   expect(hud.countdownEl.textContent).toBe('FIGHT 00:37');
 });
+
+test('game may label a distinct authoritative health pool without changing generic defaults', () => {
+ hud.setStats({health:{hp:60,max:100,label:'CAR'}});expect(hud.healthEl.textContent).toBe('CAR  60/100');
+ hud.setStats({health:{hp:70,max:100}});expect(hud.healthEl.textContent).toBe('HEALTH  70/100');
+});

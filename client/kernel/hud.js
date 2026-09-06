@@ -134,7 +134,7 @@ export class Hud {
       return text !== null;
     };
     const hasHealth = show(this.healthEl, finite(healthCurrent) && finite(healthMax) && healthMax > 0
-      ? `HEALTH  ${healthCurrent}/${healthMax}` : null);
+      ? `${typeof health.label === 'string' && health.label ? health.label : 'HEALTH'}  ${healthCurrent}/${healthMax}` : null);
     const hasArmor = show(this.armorEl, finite(armorCurrent) && finite(armorMax) && armorMax > 0
       ? `ARMOR  ${armorCurrent}/${armorMax}` : null);
     const scoreValue = score?.value ?? score;

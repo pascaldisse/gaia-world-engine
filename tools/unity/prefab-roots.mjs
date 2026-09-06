@@ -191,6 +191,9 @@ export function instanceRootLocal(authoredRoot, mods, { what = 'prefab instance'
   const base = trs(authoredRoot);
   const out = { position: { ...base.position }, rotation: { ...base.rotation }, scale: { ...base.scale } };
   const touched = { position: false, rotation: false, scale: false };
+  // per-axis record: which axes the instance actually names, so a consumer can
+  // tell an inherited value from a coincidentally equal override
+  const axes = { position: { x: false, y: false, z: false }, rotation: { x: false, y: false, z: false, w: false }, scale: { x: false, y: false, z: false } };
   for (const mod of mods ?? []) {
     const propertyPath = mod?.propertyPath;
     if (typeof propertyPath !== 'string') continue;
@@ -199,9 +202,9 @@ export function instanceRootLocal(authoredRoot, mods, { what = 'prefab instance'
     const [, kind, axis] = match;
     const value = Number(mod.value);
     if (!Number.isFinite(value)) throw new Error(`${what}: ${propertyPath} is not a finite number (${JSON.stringify(mod.value)})`);
-    if (kind === 'Position') { out.position[axis] = value; touched.position = true; }
-    else if (kind === 'Rotation') { out.rotation[axis] = value; touched.rotation = true; }
-    else { out.scale[axis] = value; touched.scale = true; }
+    if (kind === 'Position') { out.position[axis] = value; touched.position = true; axes.position[axis] = true; }
+    else if (kind === 'Rotation') { out.rotation[axis] = value; touched.rotation = true; axes.rotation[axis] = true; }
+    else { out.scale[axis] = value; touched.scale = true; axes.scale[axis] = true; }
   }
-  return { local: out, overridden: touched };
+  return { local: out, overridden: touched, axes };
 }

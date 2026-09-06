@@ -8,6 +8,17 @@ import { parseUnityMaterial } from './convert-model.mjs';
 import { unitySubAssetFileID, parseExternalObjectsMaterials, safeBase } from './fileid.mjs';
 import { boxToCenterSize, glbAABB, partsAABB } from './glb-aabb.mjs';
 import { M4_IDENTITY, m4Mul, m4Decompose, m4IsDecomposable } from './prefab-roots.mjs';
+import { PARSER_VERSION } from './parse.mjs';
+
+// The emitter needs IR v2+ (root-relative transforms + authored-root instance
+// poses). Anything older carries the OLD meaning and must be re-parsed, never
+// silently consumed.
+function assertIRVersion(doc, where) {
+  const version = Number(doc?.version ?? 0);
+  if (Number.isFinite(version) && version >= PARSER_VERSION) return;
+  throw new Error(`emit: IR schema v${doc?.version ?? '?'} at ${where} is older than v${PARSER_VERSION} `
+    + '(root-relative prefab transforms). Re-run: node tools/unity/parse.mjs <source> --guids <guids.json> --out <ir.json>');
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,6 +84,11 @@ for (let i = 2; i < args.length; i++) {
 
 const policy = policyPath ? JSON.parse(readFileSync(policyPath, 'utf8')) : {};
 const ir = JSON.parse(readFileSync(irPath, 'utf8'));
+// SCHEMA GATE. An IR produced before the root-relative fix looks perfectly
+// valid -- it just carries the old, double-baked meaning. Emitting from it would
+// silently reproduce the bug, so refuse with the exact command that fixes it.
+// (Prefab IR caches are re-parsed automatically; see parsePrefab.)
+assertIRVersion(ir, irPath);
 const guidDb = existsSync(guidDbPath) ? JSON.parse(readFileSync(guidDbPath, 'utf8')) : { guids: {} };
 const guidMap = normalizeGuidMap(guidDb);
 const unityRoot = ir.unityProjectRoot ?? guidDb.unityProjectRoot ?? inferUnityRoot(guidDb) ?? path.dirname(ir.source ?? '.');
@@ -706,14 +722,43 @@ function lightComponent(entity) {
 }
 function colorObjToHex(c) { return colorToHex([num(c?.r, 1), num(c?.g, 1), num(c?.b, 1), num(c?.a, 1)]); }
 
+// Cached prefab IR is invalid when EITHER the Unity source changed OR the parser
+// schema moved on. mtime alone was not enough: a parser fix leaves every source
+// file untouched, so stale caches kept feeding the old meaning into the emitter
+// until someone deleted them by hand.
+function prefabIRStale(cacheFile, sourceFile) {
+  if (!existsSync(cacheFile)) return 'missing';
+  if (statSync(cacheFile).mtimeMs < statSync(sourceFile).mtimeMs) return 'source is newer';
+  let cached;
+  try { cached = JSON.parse(readFileSync(cacheFile, 'utf8')); }
+  catch { return 'unreadable'; }
+  const version = Number(cached?.version ?? 0);
+  if (!Number.isFinite(version) || version < PARSER_VERSION) return `schema v${cached?.version ?? '?'} < v${PARSER_VERSION}`;
+  // A prefab IR also depends on the prefabs it read for their AUTHORED ROOTS
+  // (variant bases, nested sources). Editing one of those leaves this prefab's
+  // own mtime untouched, so the recorded dependency stamps are checked too.
+  for (const dep of cached.sourceDependencies ?? []) {
+    if (!dep?.path) continue;
+    let current = null;
+    try { current = statSync(dep.path).mtimeMs; } catch { return `dependency missing: ${dep.path}`; }
+    if (dep.mtimeMs == null || current > dep.mtimeMs) return `dependency changed: ${path.basename(dep.path)}`;
+  }
+  return null;
+}
 function parsePrefab(sourcePath) {
   const abs = resolveUnityPath(sourcePath);
   const out = path.join(prefabCacheDir, `${safeSlug(path.basename(sourcePath))}-${shortHash(sourcePath)}.ir.json`);
-  if (!existsSync(out) || statSync(out).mtimeMs < statSync(abs).mtimeMs) {
+  const stale = prefabIRStale(out, abs);
+  if (stale) {
+    if (stale.startsWith('schema')) console.warn(`[emit] re-parsing ${path.basename(sourcePath)}: cached IR ${stale}`);
     const r = spawnSync(process.execPath, [path.join(__dirname, 'parse.mjs'), abs, '--guids', guidDbPath, '--out', out], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`prefab parse failed for ${sourcePath}\n${[r.stdout, r.stderr].filter(Boolean).join('\n')}`);
   }
-  return JSON.parse(readFileSync(out, 'utf8'));
+  const parsed = JSON.parse(readFileSync(out, 'utf8'));
+  // belt and braces: a re-parse that still produces an old schema is a broken
+  // toolchain, not something to emit from
+  assertIRVersion(parsed, out);
+  return parsed;
 }
 
 function prefabNameForSource(source) {

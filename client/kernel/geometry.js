@@ -41,7 +41,7 @@ const GEOMETRY_FIELDS = [
   'carve',
 ];
 const MATERIAL_FIELDS = [
-  'preset', 'color', 'map', 'normalMap', 'normalScale', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
+  'shader', 'preset', 'color', 'map', 'normalMap', 'normalScale', 'roughness', 'metalness', 'flatShading', 'emissive', 'emissiveIntensity',
   'opacity', 'fog', 'tip', 'speed', 'glowStrength', 'beamStrength', 'sparkle', 'sky', 'glint', 'lines',
   'fadeAbove', 'flicker',
   'horizon', 'bands', 'bright', 'sunPos', 'sunColor', 'sunGlow', 'sunRadius', 'noiseScale', 'cover',
@@ -471,7 +471,24 @@ export function makePartMaterial(part) {
   return material;
 }
 
+const materialShaders = new Map();
+// § Game-owned node shaders; full descriptor participates in the shared cache key.
+export function registerMaterialShader(name, factory) {
+  if (typeof name !== 'string' || !name || typeof factory !== 'function') throw new TypeError('material shader name/factory required');
+  if (materialShaders.has(name)) throw new Error(`material shader already registered: ${name}`);
+  materialShaders.set(name, factory);
+  return () => { if (materialShaders.get(name) === factory) materialShaders.delete(name); };
+}
 function buildPartMaterial(part) {
+  if (part.shader) {
+    const factory = materialShaders.get(part.shader.name);
+    if (!factory) throw new Error(`material shader unavailable: ${part.shader.name}`);
+    const material = factory(part.shader, { loadTexture: loadPartTexture, part });
+    if (!material?.isMaterial) throw new TypeError(`material shader returned no material: ${part.shader.name}`);
+    if (part.fog === false) material.fog = false;
+    if (part.color) material.userData.baseColor = part.color;
+    return material;
+  }
   if (part.preset) {
     const preset = makePresetMaterial(part);
     if (preset) {

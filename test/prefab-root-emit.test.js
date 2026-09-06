@@ -344,3 +344,86 @@ test('externalPrefabGuids removes ONLY the game-owned prefab; its siblings stay'
   assert.deepEqual(after.externalPrefabGuids, [container.OWNED], 'guid matching is case-insensitive');
   assert.equal(fs.readdirSync(path.join(container.root, 'world-owned', 'prefabs')).some((n) => n.startsWith('Owned')), false);
 });
+
+// ---- transformless entities (the live Hub.prefab failure) -------------------
+// Hub.prefab carries a STRIPPED GameObject placeholder (#8877336647538198250,
+// no components, not renderable, transform null). The emitter used to derive a
+// root-relative matrix for every entity BEFORE knowing whether it contributed
+// anything, so the real in-place emit died on it. A transformless NON-VISUAL
+// object is skipped; a transformless object that DOES contribute geometry or a
+// collider is still refused, by name/source/id.
+const HUB = '/Users/pascaldisse/projects/boomtown-rampage/Assets/DotsCity/Samples/Demo City/Prefabs/Core/Hub.prefab';
+const REAL_GUIDS = process.env.BOOMTOWN_GUID_DB ?? '/Users/pascaldisse/projects/boomtown-rampage-gwe/tools/unity/out/guids.json';
+const REAL_MODELS = '/Users/pascaldisse/projects/boomtown-rampage-gwe/tools/unity/out/boomtown-world/assets/models';
+
+test('the REAL Hub.prefab (transformless stripped GameObject) emits instead of crashing', () => {
+  assert.ok(fs.existsSync(HUB), `real Hub.prefab required at ${HUB}`);
+  const db = JSON.parse(fs.readFileSync(REAL_GUIDS, 'utf8'));
+  const hubGuid = Object.entries(db.guids).find(([, rec]) => typeof rec?.path === 'string' && rec.path.endsWith('Prefabs/Core/Hub.prefab'))?.[0];
+  assert.ok(hubGuid, 'Hub.prefab guid found in the real guid db');
+
+  // parse the real prefab and CONFIRM the transformless entity is still there
+  const hubIR = path.join(tmp, 'hub.ir.json');
+  run(NODE, [path.join(repo, 'tools/unity/parse.mjs'), HUB, '--guids', REAL_GUIDS, '--out', hubIR]);
+  const parsed = JSON.parse(fs.readFileSync(hubIR, 'utf8'));
+  const transformless = parsed.entities.filter((e) => !e.transform);
+  assert.equal(transformless.length, 1, 'exactly one transformless entity in Hub.prefab');
+  assert.equal(transformless[0].id, '8877336647538198250');
+  assert.equal(transformless[0].renderable, false);
+  assert.deepEqual(Object.keys(transformless[0].components ?? {}), []);
+
+  // a scene that instantiates the REAL Hub, emitted through the real CLI
+  const sceneDir = path.join(tmp, 'hub-scene');
+  fs.mkdirSync(sceneDir, { recursive: true });
+  const scenePath = path.join(sceneDir, 'HubScene.unity');
+  fs.writeFileSync(scenePath, ['%YAML 1.1', '%TAG !u! tag:unity3d.com,2011:',
+    '--- !u!1001 &900', 'PrefabInstance:', '  m_ObjectHideFlags: 0', '  serializedVersion: 2',
+    '  m_Modification:', '    serializedVersion: 3', '    m_TransformParent: {fileID: 0}',
+    '    m_Modifications:',
+    `    - target: {fileID: 4229471211397551464, guid: ${hubGuid}, type: 3}`,
+    '      propertyPath: m_LocalPosition.x', '      value: 12', '      objectReference: {fileID: 0}',
+    '    m_RemovedComponents: []',
+    `  m_SourcePrefab: {fileID: 100100000, guid: ${hubGuid}, type: 3}`, ''].join(String.fromCharCode(10)));
+
+  const sceneIR = path.join(tmp, 'hub-scene.ir.json');
+  run(NODE, [path.join(repo, 'tools/unity/parse.mjs'), scenePath, '--guids', REAL_GUIDS, '--out', sceneIR]);
+  const worldOut = path.join(tmp, 'hub-world');
+  const args = [path.join(repo, 'tools/unity/emit.mjs'), sceneIR, worldOut, '--guids', REAL_GUIDS,
+    '--cache-dir', path.join(tmp, 'hub-cache'), '--reuse-models'];
+  if (fs.existsSync(REAL_MODELS)) args.push('--model-cache', REAL_MODELS); // reuse, never clone
+  const result = spawnSync(NODE, args, { encoding: 'utf8', cwd: repo });
+  assert.equal(result.status, 0, `emit failed:\n${result.stderr}`);
+  assert.equal(/has NO transform/.test(result.stderr), false, 'the transformless placeholder must be skipped, not fatal');
+  assert.ok(fs.existsSync(path.join(worldOut, 'scenes', 'HubScene.json')), 'the scene was written');
+});
+
+test('a transformless entity that DOES carry geometry is refused, naming it', () => {
+  // synthetic: an IR whose renderable entity has no transform at all
+  const broken = JSON.parse(fs.readFileSync(irPath, 'utf8'));
+  const cache = path.join(tmp, 'broken-cache');
+  fs.mkdirSync(cache, { recursive: true });
+  const prefabIR = {
+    version: broken.version,
+    source: path.join(project.assets, 'Probe.prefab'),
+    sourceDependencies: [],
+    entities: [{
+      id: '4242', name: 'GhostMesh', active: true, renderable: true, transform: null,
+      components: { meshFilter: { mesh: { fileID: '10202', guid: '0000000000000000e000000000000000' } }, meshRenderer: { enabled: true, materials: [] } },
+    }],
+    prefabInstances: [],
+  };
+  // pre-seed the prefab IR cache so emit reads exactly this document
+  const cacheName = fs.readdirSync(cacheDir).find((n) => n.endsWith('.ir.json'));
+  fs.writeFileSync(path.join(cache, cacheName), JSON.stringify(prefabIR));
+  const later = new Date(Date.now() + 60000);
+  fs.utimesSync(path.join(cache, cacheName), later, later);
+
+  const result = spawnSync(NODE, [path.join(repo, 'tools/unity/emit.mjs'), irPath, path.join(tmp, 'world-ghost'),
+    '--guids', project.guidPath, '--cache-dir', cache, '--reuse-models'], { encoding: 'utf8', cwd: repo });
+  assert.notEqual(result.status, 0, 'emit must refuse, not place it at identity');
+  const message = `${result.stderr}${result.stdout}`;
+  assert.match(message, /has NO transform but contributes geometry\/colliders/);
+  assert.match(message, /4242/, 'the id is in the message');
+  assert.match(message, /GhostMesh/, 'the name is in the message');
+  assert.match(message, /Probe\.prefab/, 'the source is in the message');
+});

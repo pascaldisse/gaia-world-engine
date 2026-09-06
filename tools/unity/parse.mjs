@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   CLASS_NAMES, splitUnityDocuments, parseUnityYamlBody, loadGuidDb, normalizeFileID, cleanRef, withoutKeys, pathBaseNoExt
 } from './unity-yaml.mjs';
+import { m4FromTRS, m4Mul, M4_IDENTITY, instanceRootLocal } from './prefab-roots.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, 'out');
@@ -66,18 +67,19 @@ function localTransform(t) {
     scale: v3(t?.m_LocalScale, ONE_VEC)
   };
 }
-function localFromMods(mods) {
-  const tr = { position: { ...ZERO_VEC }, rotation: { ...ID_QUAT }, scale: { ...ONE_VEC } };
-  const set = (path, value) => {
-    if (!path) return;
-    const n = num(value, undefined);
-    if (!Number.isFinite(n)) return;
-    if (path.startsWith('m_LocalPosition.')) tr.position[path.split('.').at(-1)] = n;
-    else if (path.startsWith('m_LocalRotation.')) tr.rotation[path.split('.').at(-1)] = n;
-    else if (path.startsWith('m_LocalScale.')) tr.scale[path.split('.').at(-1)] = n;
-  };
-  for (const m of mods) set(m.propertyPath, m.value);
-  return tr;
+// A PrefabInstance's root pose. Unity applies m_Local* modifications PER AXIS on
+// top of the AUTHORED root transform of the source prefab -- an instance that
+// overrides only position keeps the authored rotation AND scale. Starting from
+// identity (as this did) silently dropped every un-overridden axis: in the
+// Boomtown scene all 95 building instances override position + rotation and NONE
+// override scale, so every one of them lost its authored 1.5x height.
+function localFromMods(mods, authoredRoot = null) {
+  const { local } = instanceRootLocal(
+    authoredRoot ?? { position: ZERO_VEC, rotation: ID_QUAT, scale: ONE_VEC },
+    mods,
+    { what: 'prefab instance root' },
+  );
+  return local;
 }
 function objPathSet(root, prop, value) {
   const parts = String(prop).split('.');
@@ -92,7 +94,40 @@ function componentRefs(go) {
 function gameObjectRef(comp) { return normalizeFileID(comp?.m_GameObject); }
 function childTransformRefs(t) { return (t?.m_Children ?? []).map(normalizeFileID).filter(id => id !== '0'); }
 
-function buildPrefabInstance(doc, data, guidDb, transformByFile) {
+// The AUTHORED root transform of a source prefab, read straight from that file.
+// Keyed by `${guid}:${rootFileID}` -- the very target the instance's m_Local*
+// modifications name. Files are read once and cached; a prefab that cannot be
+// read leaves the entry absent and the caller falls back to identity (with the
+// same behaviour as before, so an unreadable dependency degrades, not explodes).
+async function loadAuthoredRoots(instanceDocs, guidDb, transformByFile) {
+  const wanted = new Map(); // guid -> Set(fileID)
+  for (const doc of instanceDocs) {
+    const stripped = [...transformByFile.values()].find((t) => normalizeFileID(t?.m_PrefabInstance) === doc.fileID);
+    const source = cleanRef(stripped?.m_CorrespondingSourceObject, guidDb);
+    if (!source?.guid || !source.fileID) continue;
+    if (!wanted.has(source.guid)) wanted.set(source.guid, new Set());
+    wanted.get(source.guid).add(normalizeFileID(source.fileID));
+  }
+  const roots = new Map();
+  for (const [guid, fileIDs] of wanted) {
+    const record = guidDb.guids?.[guid];
+    const rel = record?.path;
+    if (!rel) continue;
+    const file = path.isAbsolute(rel) ? rel : path.join(guidDb.unityProjectRoot ?? '.', rel);
+    let text;
+    try { text = await fs.readFile(file, 'utf8'); } catch { continue; }
+    for (const d of splitUnityDocuments(text)) {
+      if (![4, 224].includes(d.classId) || !fileIDs.has(normalizeFileID(d.fileID))) continue;
+      const parsed = parseUnityYamlBody(d.lines);
+      const key = classKeyForDoc(parsed, CLASS_NAMES[d.classId]);
+      const data = key ? parsed?.[key] : parsed;
+      roots.set(`${guid}:${normalizeFileID(d.fileID)}`, localTransform(data ?? {}));
+    }
+  }
+  return roots;
+}
+
+function buildPrefabInstance(doc, data, guidDb, transformByFile, authoredRoots = new Map()) {
   const mod = data?.m_Modification ?? {};
   const mods = mod.m_Modifications ?? [];
   const overrides = {};
@@ -119,6 +154,9 @@ function buildPrefabInstance(doc, data, guidDb, transformByFile) {
       return target?.fileID === strippedSource.fileID && target?.guid === strippedSource.guid;
     })
     : mods;
+  const authoredRoot = strippedSource?.guid
+    ? authoredRoots.get(`${strippedSource.guid}:${normalizeFileID(strippedSource.fileID)}`) ?? null
+    : null;
   return {
     id: `prefab:${doc.fileID}`,
     fileID: doc.fileID,
@@ -129,7 +167,11 @@ function buildPrefabInstance(doc, data, guidDb, transformByFile) {
     transformFileID: stripped?._fileID ?? null,
     parentTransformFileID: parentTransform === '0' ? null : parentTransform,
     source,
-    transform: { local: localFromMods(transformMods), world: null },
+    // The authored root travels with the instance: consumers must express the
+    // prefab's contents RELATIVE TO IT (an instance root replaces the authored
+    // root, it never stacks on it).
+    authoredRoot,
+    transform: { local: localFromMods(transformMods, authoredRoot), world: null },
     prefab: {
       modifications: Object.values(overrides),
       removedComponents: mod.m_RemovedComponents ?? [],
@@ -195,10 +237,13 @@ export async function parseFile(scenePath, guidDb) {
   // Stripped transforms have no local pose in scene YAML; their pose is stored
   // on the owning PrefabInstance's root-target override. Build this relation
   // before resolving hierarchy so children compose through their real parent.
+  const instanceDocs = (byClass.get(1001) ?? []).filter(
+    (doc) => !(doc.data.m_IsPrefabParent === 1 && normalizeFileID(doc.data.m_ParentPrefab) === '0'),
+  );
+  const authoredRoots = await loadAuthoredRoots(instanceDocs, guidDb, transforms);
   const prefabInstances = [];
-  for (const doc of byClass.get(1001) ?? []) {
-    if (doc.data.m_IsPrefabParent === 1 && normalizeFileID(doc.data.m_ParentPrefab) === '0') continue;
-    prefabInstances.push(buildPrefabInstance(doc, doc.data, guidDb, transforms));
+  for (const doc of instanceDocs) {
+    prefabInstances.push(buildPrefabInstance(doc, doc.data, guidDb, transforms, authoredRoots));
   }
   const prefabByTransform = new Map(
     prefabInstances.filter((pi) => pi.transformFileID).map((pi) => [pi.transformFileID, pi]),
@@ -222,6 +267,46 @@ export async function parseFile(scenePath, guidDb) {
   }
   for (const tid of transforms.keys()) resolveWorldTransform(tid);
 
+  // ROOT-RELATIVE MATRICES, built from the RAW LOCAL chain.
+  //
+  // A consumer that needs a prefab's contents relative to its root must NOT take
+  // rootInverse * world: `world` is a composed TRS triple and TRS composition
+  // silently drops the shear a non-uniform ancestor scale introduces -- once the
+  // IR has decomposed it that information is gone, and no inverse brings it back.
+  // Multiplying the raw local matrices down from (but EXCLUDING) the root is
+  // exact for every hierarchy, sheared or not.
+  //
+  // The root contributes IDENTITY on purpose: a PrefabInstance root REPLACES the
+  // authored root, so the authored root's own pose must never reappear inside its
+  // descendants (that double bake is what displaced every building by ~44 m).
+  const rootRelativeByTransform = new Map();
+  const rootByTransform = new Map();
+  const visitingRoot = new Set();
+  function resolveRootRelative(tid) {
+    tid = normalizeFileID(tid);
+    if (rootRelativeByTransform.has(tid)) return rootRelativeByTransform.get(tid);
+    if (visitingRoot.has(tid)) return M4_IDENTITY.slice();
+    visitingRoot.add(tid);
+    const t = transforms.get(tid);
+    const prefab = prefabByTransform.get(tid);
+    const parentTid = normalizeFileID(prefab?.parentTransformFileID ?? t?.m_Father ?? '0');
+    let matrix;
+    let root;
+    if (parentTid === '0') {
+      matrix = M4_IDENTITY.slice(); // this transform IS its file's root
+      root = tid;
+    } else {
+      const local = prefab?.transform.local ?? localTransform(t);
+      matrix = m4Mul(resolveRootRelative(parentTid), m4FromTRS(local));
+      root = rootByTransform.get(parentTid) ?? parentTid;
+    }
+    rootRelativeByTransform.set(tid, matrix);
+    rootByTransform.set(tid, root);
+    visitingRoot.delete(tid);
+    return matrix;
+  }
+  for (const tid of transforms.keys()) resolveRootRelative(tid);
+
   function transformIR(tid) {
     const t = transforms.get(tid);
     if (!t) return null;
@@ -232,7 +317,10 @@ export async function parseFile(scenePath, guidDb) {
       parent: transformToGo.get(parentTid) ?? null,
       children: childTransformRefs(t).map(id => transformToGo.get(id) ?? id),
       local: localTransform(t),
-      world: worldByTransform.get(tid) ?? { position: ZERO_VEC, rotation: ID_QUAT, scale: ONE_VEC }
+      world: worldByTransform.get(tid) ?? { position: ZERO_VEC, rotation: ID_QUAT, scale: ONE_VEC },
+      // exact, shear-preserving, root EXCLUDED (see above)
+      rootRelative: rootRelativeByTransform.get(tid) ?? M4_IDENTITY.slice(),
+      rootTransformFileID: rootByTransform.get(tid) ?? tid
     };
   }
 
@@ -300,6 +388,15 @@ export async function parseFile(scenePath, guidDb) {
     pi.transform.world = pi.transformFileID
       ? resolveWorldTransform(pi.transformFileID)
       : compose(worldByTransform.get(pi.parentTransformFileID) ?? { position: ZERO_VEC, rotation: ID_QUAT, scale: ONE_VEC }, pi.transform.local);
+    // Same rule for a nested instance: the raw local chain from its file's root,
+    // with the instance's own (override-merged) root local as the last factor.
+    // A top-level instance is at its file's root -> identity.
+    pi.transform.rootRelative = pi.parentTransformFileID
+      ? m4Mul(resolveRootRelative(pi.parentTransformFileID), m4FromTRS(pi.transform.local))
+      : M4_IDENTITY.slice();
+    pi.transform.rootTransformFileID = pi.parentTransformFileID
+      ? rootByTransform.get(normalizeFileID(pi.parentTransformFileID)) ?? null
+      : pi.transformFileID;
   }
 
   const statsByClass = {};

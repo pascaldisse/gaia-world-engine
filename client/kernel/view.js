@@ -12,7 +12,7 @@ import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { InstancedModels } from './instanced-models.js';
 import { resolveRainBones } from './rain-body.js';
 import { ImpostorCache, bucketOf, projectedExtents } from './impostors.js';
-import { presenceRenderYaw } from './presence-facing.js';
+import { presenceRenderYaw, vehicleRootOffset } from './presence-facing.js';
 import { PLAYER_EYE_HEIGHT_DEFAULT_M } from './player.js';
 
 // `mesh.parts[].animated: true` picks skinned playback (below) instead of
@@ -233,7 +233,7 @@ export class View {
           if (!own.userData.hidden) own.visible = true;
           const pose = this.player.vehicle ? this.player.drivePose : null;
           own.position.copy(pose?.position ?? this.player.position);
-          if (this.player.vehicle) own.position.y -= this.player.eyeStand ?? PLAYER_EYE_HEIGHT_DEFAULT_M;
+          if (this.player.vehicle) own.position.y += vehicleRootOffset(this.player.vehicle) - (this.player.eyeStand ?? PLAYER_EYE_HEIGHT_DEFAULT_M);
           // Authored model offset → standing-eye frame; crouch changes the eye,
           // not the feet. Primitive head markers retain eye-following semantics.
           if (!pose && own.children.some((part) => part.userData.model)) {
@@ -606,7 +606,7 @@ export class View {
     const components = this.store.get(id);
     const t = components.transform ?? {};
     const [x, y, z] = t.position ?? [0, 0, 0];
-    const bodyOffset = components.presence && components.vehicle ? PLAYER_EYE_HEIGHT_DEFAULT_M : 0;
+    const bodyOffset = components.presence && components.vehicle ? PLAYER_EYE_HEIGHT_DEFAULT_M - vehicleRootOffset(components.vehicle) : 0;
     const py = components.ground ? heightAt(x, z) + (components.ground.offset ?? 0) : y - bodyOffset;
     const [rx, ry, rz] = t.rotation ?? [0, 0, 0];
     const s = t.scale ?? 1;

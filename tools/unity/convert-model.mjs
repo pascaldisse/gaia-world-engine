@@ -271,6 +271,7 @@ export function unityImportOfFbxChain({ chain }) {
   const t = (k) => (chain[k] ? nodeTranslation(chain[k]) : [0, 0, 0]);
   const Rp = t('RotationPivot'), Sp = chain.ScalingPivot ? t('ScalingPivot') : Rp, Soff = t('ScalingOffset');
   const refuse = [];
+  for (const k of ['RotationPivot', 'RotationPivotInverse', 'ScalingPivot', 'ScalingPivotInverse', 'RotationOffset', 'Translation', 'Rotation', 'PreRotation', 'PostRotation']) if (chain[k] && !Array.isArray(chain[k].matrix) && !chain[k].translation && !chain[k].rotation) refuse.push(`${k} pseudo-node carries no transform (ancestry stripped by an earlier narrowing)`);
   if (!vNear(Sp, Rp, 1e-4)) refuse.push(`ScalingPivot ${Sp} != RotationPivot ${Rp}`);
   if (!vNear(Soff, [0, 0, 0], 1e-6)) refuse.push(`ScalingOffset ${Soff} != 0`);
   for (const g of ['GeometricTranslation', 'GeometricRotation', 'GeometricScaling']) if (chain[g]) refuse.push(`${g} present`);
@@ -288,11 +289,24 @@ export function unityImportOfFbxChain({ chain }) {
 // GAIA basis for a per-mesh static GLB placed at the emitter's Z-mirrored Unity transform: g = Mz*Mx*(v - Rp) = (-(x-Px), y-Py, -(z-Pz)).
 export const staticMeshBasis = (v, P = [0, 0, 0]) => [-(v[0] - P[0]), v[1] - P[1], -(v[2] - P[2])];
 function binChunkOf(glb) { const off = glb.jsonEnd; if (off + 8 > glb.buf.length) return null; if (glb.buf.readUInt32LE(off + 4) !== 0x004e4942) return null; return { start: off + 8, length: glb.buf.readUInt32LE(off) }; }
-function forEachFloatVec(glb, json, accessorIndex, comps, fn) {
-  const acc = json.accessors?.[accessorIndex]; if (!acc || acc.componentType !== 5126) throw new Error(`convert-model: pivot bake needs float32 accessor #${accessorIndex}`);
-  const view = json.bufferViews[acc.bufferView]; const bin = binChunkOf(glb); if (!bin) throw new Error('convert-model: GLB without BIN chunk');
+// Validates the accessor before touching bytes: float32, expected VEC type, dense, sane stride, inside its bufferView and the BIN chunk.
+export function validateFloatAccessor(glb, json, accessorIndex, comps, what = 'attribute') {
+  const acc = json.accessors?.[accessorIndex]; const want = { 3: 'VEC3', 4: 'VEC4' }[comps];
+  if (!acc) throw new Error(`convert-model: ${what} accessor #${accessorIndex} missing`);
+  if (acc.componentType !== 5126) throw new Error(`convert-model: ${what} accessor #${accessorIndex} componentType ${acc.componentType} != float32`);
+  if (acc.type !== want) throw new Error(`convert-model: ${what} accessor #${accessorIndex} type ${acc.type} != ${want}`);
+  if (acc.sparse) throw new Error(`convert-model: ${what} accessor #${accessorIndex} is sparse; pivot bake refused`);
+  if (acc.normalized) throw new Error(`convert-model: ${what} accessor #${accessorIndex} normalized float`);
+  const view = json.bufferViews?.[acc.bufferView]; if (!view) throw new Error(`convert-model: ${what} accessor #${accessorIndex} bufferView missing`);
   if ((view.buffer ?? 0) !== 0) throw new Error('convert-model: pivot bake supports buffer 0 only');
-  const stride = view.byteStride ?? comps * 4; const base = bin.start + (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+  const stride = view.byteStride ?? comps * 4; if (stride < comps * 4 || stride % 4 || stride > 252) throw new Error(`convert-model: ${what} accessor #${accessorIndex} byteStride ${stride} invalid for ${want}`);
+  const bin = binChunkOf(glb); if (!bin) throw new Error('convert-model: GLB without BIN chunk');
+  const viewStart = view.byteOffset ?? 0; if (viewStart + view.byteLength > bin.length) throw new Error(`convert-model: bufferView #${acc.bufferView} exceeds BIN chunk (${viewStart + view.byteLength} > ${bin.length})`);
+  const end = (acc.byteOffset ?? 0) + (acc.count - 1) * stride + comps * 4; if (acc.count < 1 || end > view.byteLength) throw new Error(`convert-model: ${what} accessor #${accessorIndex} exceeds its bufferView (${end} > ${view.byteLength})`);
+  return { acc, view, stride, base: bin.start + viewStart + (acc.byteOffset ?? 0) };
+}
+function forEachFloatVec(glb, json, accessorIndex, comps, fn, what) {
+  const { acc, stride, base } = validateFloatAccessor(glb, json, accessorIndex, comps, what);
   const min = new Array(comps).fill(Infinity), max = new Array(comps).fill(-Infinity); const v = new Array(comps);
   for (let i = 0; i < acc.count; i++) { const o = base + i * stride; for (let c = 0; c < comps; c++) v[c] = glb.buf.readFloatLE(o + c * 4); const out = fn(v); for (let c = 0; c < comps; c++) { glb.buf.writeFloatLE(out[c], o + c * 4); min[c] = Math.min(min[c], out[c]); max[c] = Math.max(max[c], out[c]); } }
   if (acc.min) acc.min = min; if (acc.max) acc.max = max;
@@ -305,9 +319,13 @@ export function bakeStaticMeshBasis(glb, json, meshIndex, pivot) {
   const done = new Set();
   for (const p of mesh.primitives) {
     const a = p.attributes ?? {};
-    if (a.POSITION != null && !done.has(a.POSITION)) { forEachFloatVec(glb, json, a.POSITION, 3, (v) => staticMeshBasis(v, pivot)); done.add(a.POSITION); }
-    if (a.NORMAL != null && !done.has(a.NORMAL)) { forEachFloatVec(glb, json, a.NORMAL, 3, (v) => staticMeshBasis(v)); done.add(a.NORMAL); }
-    if (a.TANGENT != null && !done.has(a.TANGENT)) { forEachFloatVec(glb, json, a.TANGENT, 4, (v) => [-v[0], v[1], -v[2], v[3]]); done.add(a.TANGENT); }
+    for (const [k, comps] of [['POSITION', 3], ['NORMAL', 3], ['TANGENT', 4]]) if (a[k] != null && !done.has(a[k])) validateFloatAccessor(glb, json, a[k], comps, k); // validate ALL before writing any
+  }
+  for (const p of mesh.primitives) {
+    const a = p.attributes ?? {};
+    if (a.POSITION != null && !done.has(a.POSITION)) { forEachFloatVec(glb, json, a.POSITION, 3, (v) => staticMeshBasis(v, pivot), 'POSITION'); done.add(a.POSITION); }
+    if (a.NORMAL != null && !done.has(a.NORMAL)) { forEachFloatVec(glb, json, a.NORMAL, 3, (v) => staticMeshBasis(v), 'NORMAL'); done.add(a.NORMAL); }
+    if (a.TANGENT != null && !done.has(a.TANGENT)) { forEachFloatVec(glb, json, a.TANGENT, 4, (v) => [-v[0], v[1], -v[2], v[3]], 'TANGENT'); done.add(a.TANGENT); }
   }
   return { positions: done.size };
 }
@@ -368,6 +386,20 @@ export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null,
   const glb = readGlbJson(glbFile);
   const json = glb?.json;
   if (String(targetFileID) === '100100000') return false; // prefab-asset handle: whole model IS the target.
+  // Idempotency. A narrowed GLB carries json.extras.gaiaNarrowed; running again for the SAME mesh is a no-op (annotation
+  // and baked bytes preserved -- re-baking would rotate a second time), for a DIFFERENT mesh it is impossible (the other
+  // meshes' node ancestry is gone) and refused. Legacy narrowed files (pre-marker: one mesh node left but several meshes)
+  // cannot be re-baked either: their pivot chain was stripped, so the pivot is unrecoverable -> strict refuses, else no-op.
+  const marker = json?.extras?.gaiaNarrowed;
+  if (marker) {
+    if (String(marker.fileID) === String(targetFileID)) return false;
+    throw new Error(`convert-model: ${glbFile} is already narrowed to mesh ${marker.mesh ?? marker.fileID}; cannot retarget to ${targetFileID} (ancestry of other meshes discarded) -- reconvert from source`);
+  }
+  // (narrowed outputs keep the pseudo-node NAMES as scale-only clones, so names cannot tell; the node/mesh count can)
+  if (json && (json.meshes ?? []).length > 1 && (json.nodes ?? []).filter((n) => n?.mesh != null).length === 1) {
+    const msg = `convert-model: ${glbFile} looks already narrowed (1 mesh node of ${json.meshes.length} meshes, pivot ancestry stripped); pivot bake impossible -- reconvert from source`;
+    if (strict) throw new Error(msg); console.warn(`${msg}; left untouched`); return false;
+  }
   const target = json ? findModelMeshFileIDTarget(json, targetFileID, fidToName) : null;
   if (json && (json.meshes || []).length <= 1) {
     // single-mesh model: nothing to narrow -- but only harmless if that one mesh
@@ -419,6 +451,7 @@ export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null,
   // TODO: Trim unused meshes/accessors/bufferViews/buffers after the scene is narrowed.
   const outJson = JSON.parse(JSON.stringify(json));
   outJson.nodes = nodes;
+  outJson.extras = { ...(outJson.extras ?? {}), gaiaNarrowed: { fileID: String(targetFileID), mesh: target.name ?? null, bake: meshNode.extras?.fbxPivotBake ? { pivot: meshNode.extras.fbxPivotBake.pivot, basis: meshNode.extras.fbxPivotBake.basis } : null } };
   // Static mesh-subasset export: discarded node graph cannot retain skin or
   // animation indices. Full animated-model conversion keeps both untouched.
   delete outJson.skins;

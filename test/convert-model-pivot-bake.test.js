@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { keepOnlyModelMeshFileID, unityMeshFileID, fixFbxUnitScale, staticMeshBasis, unityImportOfFbxChain } from '../tools/unity/convert-model.mjs';
+import { keepOnlyModelMeshFileID, unityMeshFileID, fixFbxUnitScale, staticMeshBasis, unityImportOfFbxChain, validateFloatAccessor } from '../tools/unity/convert-model.mjs';
 import { parseMetaRecycleNames } from '../tools/unity/fileid.mjs';
 
 // A per-mesh ("narrowed") static GLB is placed by the emitter at the Unity part transform, Z-mirrored
@@ -129,4 +129,65 @@ test('REAL PolygonCity vehicles: every wheel/door/steering-wheel narrowed GLB ge
     }
     assert.ok(Math.abs(assembledMinY) < 6e-3, `${car}: assembled bottom ${assembledMinY.toFixed(4)} (was ${hullMinY} live)`);
   }
+});
+
+test('idempotency: narrowing the same GLB again (what --repair-narrowed does) is a byte-identical no-op that keeps the bake annotation; retargeting a narrowed GLB to another mesh refuses; a LEGACY narrowed file (no marker, ancestry stripped) refuses under strict and is left untouched otherwise', () => {
+  const f = path.join(scratch, 'idem.glb'); buildGlb(f, [hull, wheel]); const fid = unityMeshFileID('Wheel_rl');
+  assert.equal(keepOnlyModelMeshFileID(f, fid, null, { strict: true }), true); const once = fs.readFileSync(f); const j1 = readGlb(f).json;
+  assert.deepEqual(j1.extras.gaiaNarrowed.fileID, String(fid)); assert.equal(j1.extras.gaiaNarrowed.mesh, 'Wheel_rl'); assert.deepEqual(j1.extras.gaiaNarrowed.bake.pivot.map((v) => +v.toFixed(3)), P_WHEEL);
+  assert.equal(keepOnlyModelMeshFileID(f, fid, null, { strict: true }), false, 'second run: no-op'); assert.ok(fs.readFileSync(f).equals(once), 'bytes identical after the repeat (no second rotation)');
+  assert.equal(keepOnlyModelMeshFileID(f, fid, null, { strict: false }), false); assert.ok(fs.readFileSync(f).equals(once));
+  assert.throws(() => keepOnlyModelMeshFileID(f, unityMeshFileID('Hull_Mesh'), null, { strict: true }), /already narrowed to mesh Wheel_rl; cannot retarget/);
+  assert.throws(() => keepOnlyModelMeshFileID(f, unityMeshFileID('Hull_Mesh'), null, { strict: false }), /cannot retarget/, 'retarget refused regardless of strict');
+  // legacy pre-marker narrowed file: one mesh node, several meshes, no pivot pseudo-nodes, no extras
+  const legacy = path.join(scratch, 'legacy.glb'); buildGlb(legacy, [hull, wheel]); keepOnlyModelMeshFileID(legacy, fid, null, { strict: true, bakePivot: false });
+  { const b = fs.readFileSync(legacy); const len = b.readUInt32LE(12); const j = JSON.parse(b.subarray(20, 20 + len).toString()); delete j.extras; const jt = Buffer.from(JSON.stringify(j)); const jp = (4 - (jt.length % 4)) % 4; const jc = Buffer.concat([jt, Buffer.alloc(jp, 0x20)]); const rest = b.subarray(20 + len); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + 8 + jc.length + rest.length, 8); const jh = Buffer.alloc(8); jh.writeUInt32LE(jc.length, 0); jh.writeUInt32LE(0x4e4f534a, 4); fs.writeFileSync(legacy, Buffer.concat([h, jh, jc, rest])); }
+  const before = fs.readFileSync(legacy); assert.throws(() => keepOnlyModelMeshFileID(legacy, fid, null, { strict: true }), /looks already narrowed .* pivot bake impossible/);
+  assert.equal(keepOnlyModelMeshFileID(legacy, fid, null, { strict: false }), false); assert.ok(fs.readFileSync(legacy).equals(before), 'legacy file left untouched (no blind R(pi) with pivot 0)');
+});
+
+test('accessor validation before any byte is written: wrong VEC type, non-float, sparse, bad stride, accessor past its bufferView, bufferView past the BIN chunk', () => {
+  const f = path.join(scratch, 'acc.glb'); buildGlb(f, [hull, wheel]); const b = fs.readFileSync(f); const len = b.readUInt32LE(12); const json = JSON.parse(b.subarray(20, 20 + len).toString()); const glb = { buf: b, jsonEnd: 20 + len };
+  const wheelMesh = json.meshes.find((m) => m.name === 'Wheel_rl'); const pos = wheelMesh.primitives[0].attributes.POSITION;
+  assert.ok(validateFloatAccessor(glb, json, pos, 3, 'POSITION').stride === 12);
+  const mut = (fn, re) => { const j = JSON.parse(JSON.stringify(json)); fn(j); assert.throws(() => validateFloatAccessor(glb, j, pos, 3, 'POSITION'), re); };
+  mut((j) => { j.accessors[pos].type = 'VEC2'; }, /type VEC2 != VEC3/); mut((j) => { j.accessors[pos].componentType = 5123; }, /!= float32/); mut((j) => { j.accessors[pos].sparse = { count: 1 }; }, /sparse/);
+  mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = 8; }, /byteStride 8 invalid/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = 14; }, /byteStride 14 invalid/);
+  mut((j) => { j.accessors[pos].count += 1; }, /exceeds its bufferView/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteLength += 100000; }, /exceeds BIN chunk/);
+  // through the public path: a corrupt accessor makes narrowing throw before the file changes
+  const bad = path.join(scratch, 'acc-bad.glb'); { const j = JSON.parse(JSON.stringify(json)); j.accessors[pos].type = 'VEC2'; const jt = Buffer.from(JSON.stringify(j)); const jp = (4 - (jt.length % 4)) % 4; const jc = Buffer.concat([jt, Buffer.alloc(jp, 0x20)]); const rest = b.subarray(20 + len); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + 8 + jc.length + rest.length, 8); const jh = Buffer.alloc(8); jh.writeUInt32LE(jc.length, 0); jh.writeUInt32LE(0x4e4f534a, 4); fs.writeFileSync(bad, Buffer.concat([h, jh, jc, rest])); }
+  const before = fs.readFileSync(bad); assert.throws(() => keepOnlyModelMeshFileID(bad, unityMeshFileID('Wheel_rl'), null, { strict: true }), /POSITION accessor .* type VEC2/); assert.ok(fs.readFileSync(bad).equals(before), 'file untouched on validation failure');
+});
+
+// The CURRENT traffic recipes (ecs/traffic-prefabs.json: 15 vehicles = 14 + Tram1, 29 distinct narrowed GLBs) all take this
+// path. Their DotsCity LOD-0 FBX files carry NO pivot pseudo-nodes and origin-centred meshes, so the bake is a pure basis
+// rotation R_y(pi) (pivot 0): every hull/wheel part turns 180 deg about Y relative to the pre-fix cache. Encoded here so a
+// regression in either direction (lost rotation, or a second one) fails loudly.
+const worldDir = process.env.GAIA_TEST_WORLD || path.join(process.env.HOME ?? '', 'projects', 'boomtown-rampage-gwe-wt', 'astra', 'tools', 'unity', 'out', 'boomtown-world');
+const trafficFile = path.join(worldDir, 'ecs', 'traffic-prefabs.json');
+const haveTraffic = assimp && fs.existsSync(trafficFile) && fs.existsSync(path.join(unityRoot, 'Assets/DotsCity/Samples/Demo Presets/Art/Models/Cars/LOD 0/Bus1.fbx'));
+test('REAL traffic recipes (ecs/traffic-prefabs.json, 29 narrowed GLBs, no parent cache writes): every multi-mesh recipe bakes with pivot 0 (pure R_y(pi)), wheels stay origin-centred with the axle on X, hull bottoms keep their height, x/z bounds flip sign, output deterministic; single-mesh Tram1 is untouched (whole-model path)', { skip: !haveTraffic && 'traffic recipes / assimp / DotsCity FBX missing', timeout: 600000 }, () => {
+  const t = JSON.parse(fs.readFileSync(trafficFile, 'utf8')); const glbs = new Set(); let baked = 0, single = 0;
+  for (const car of t.cars) {
+    const fbx = path.join(unityRoot, car.sourceModel); const base = path.join(scratch, `${car.key}.glb`);
+    const r = spawnSync('assimp', ['export', fbx, base, '-f', 'glb2', '-triangulate', '-joinidenticalvertices', '-pretransformvertices']); assert.equal(r.status, 0, `${car.key} assimp`); fixFbxUnitScale(base, fbx);
+    const table = parseMetaRecycleNames(fs.readFileSync(`${fbx}.meta`, 'utf8')); const full = readGlb(base);
+    assert.equal(full.json.nodes.filter((n) => /_\$AssimpFbx\$_/.test(n.name)).length, 0, `${car.key}: DotsCity LOD-0 FBX has no pivot pseudo-nodes`);
+    for (const src of new Set(car.parts.map((p) => p.src))) {
+      glbs.add(src); const m = /-m(n?)(\d+)\.glb$/.exec(src); const fid = (m[1] ? '-' : '') + m[2]; const f = path.join(scratch, path.basename(src)); fs.copyFileSync(base, f);
+      const ok = keepOnlyModelMeshFileID(f, fid, table, { strict: true });
+      if (full.json.meshes.length <= 1) { single++; assert.equal(ok, false, `${car.key}: single-mesh model is not narrowed/baked`); assert.ok(fs.readFileSync(f).equals(fs.readFileSync(base)), 'bytes untouched'); continue; }
+      assert.equal(ok, true, `${src} narrowed`); baked++; const g = readGlb(f); const node = g.json.nodes.at(-1); const bake = node.extras.fbxPivotBake; assert.ok(bake, `${src}: bake recorded`); assert.deepEqual(bake.pivot, [0, 0, 0], `${src}: pivot 0 -> pure basis rotation`); assert.deepEqual(g.json.extras.gaiaNarrowed.fileID, fid);
+      const s = g.json.nodes[0].scale?.[0] ?? 1; const pos = g.f32(g.json.meshes[node.mesh].primitives[0].attributes.POSITION, 3);
+      const rawMesh = full.json.meshes[node.mesh]; const raw = full.f32(rawMesh.primitives[0].attributes.POSITION, 3); assert.equal(raw.length, pos.length);
+      const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity], rmn = [Infinity, Infinity, Infinity], rmx = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i < pos.length; i += 3) for (let d = 0; d < 3; d++) { mn[d] = Math.min(mn[d], pos[i + d] * s); mx[d] = Math.max(mx[d], pos[i + d] * s); rmn[d] = Math.min(rmn[d], raw[i + d] * s); rmx[d] = Math.max(rmx[d], raw[i + d] * s); }
+      for (let i = 0; i < pos.length; i += 3) { assert.equal(pos[i], Math.fround(-raw[i])); assert.equal(pos[i + 1], raw[i + 1]); assert.equal(pos[i + 2], Math.fround(-raw[i + 2])); } // exact R_y(pi), no recentring
+      assert.ok(Math.abs(mn[1] - rmn[1]) < 1e-6 && Math.abs(mx[1] - rmx[1]) < 1e-6, `${src}: height untouched`); assert.ok(Math.abs(mn[0] + rmx[0]) < 1e-6 && Math.abs(mn[2] + rmx[2]) < 1e-6, `${src}: x/z bounds flip sign`);
+      if (/wheel/i.test(node.name)) { const ext = mn.map((v, i) => mx[i] - v); assert.ok(ext[0] < ext[1] && ext[0] < ext[2], `${src}: axle on X (${ext.map((v) => v.toFixed(2))})`); assert.ok(Math.abs(mn[1] + mx[1]) < 2e-3 && Math.abs(mn[2] + mx[2]) < 2e-3, `${src}: wheel centred on its axle (y,z)`); assert.ok(Math.abs(mn[0] + mx[0]) < 2e-3, `${src}: wheel centred across the axle (x)`); }
+      const f2 = `${f}.again`; fs.copyFileSync(base, f2); keepOnlyModelMeshFileID(f2, fid, table, { strict: true }); assert.ok(fs.readFileSync(f2).equals(fs.readFileSync(f)), `${src}: deterministic bytes`);
+      assert.equal(keepOnlyModelMeshFileID(f, fid, table, { strict: true }), false, `${src}: repeat is a no-op`);
+    }
+  }
+  assert.equal(glbs.size, 29, 'all 29 distinct narrowed traffic GLBs covered'); assert.equal(baked, 28); assert.equal(single, 1, 'Tram1');
 });

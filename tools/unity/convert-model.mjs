@@ -224,6 +224,94 @@ function cloneTransformNode(node) {
   return out;
 }
 
+// ---- FBX pivot bake for static mesh sub-assets (Unity ModelImporter parity) ------------------------
+// Assimp keeps every FBX pivot as a pseudo-node chain above the mesh node:
+//   <n>_$AssimpFbx$_Translation > _RotationOffset > _RotationPivot > _PreRotation > _Rotation > _PostRotation >
+//   _RotationPivotInverse > _ScalingOffset > _ScalingPivot > _Scaling > _ScalingPivotInverse > <n>
+// (the CLI's long `-pretransformvertices` flag is ignored -- verified: chains survive; `-ptv` would collapse the whole file
+// to one mesh and kill narrowing). Mesh vertices are RAW: authored in the parent's space, e.g. a wheel sitting on the
+// ground at (7.69, 4.19, -14.43) with RotationPivot = that hub. Unity's importer bakes the pivot INTO the mesh:
+//   Transform.localPosition = Mx(T + Roff + Rp) * scale, localRotation = Mx(Rpre * R * Rpost^-1), localScale = S,
+//   Mesh.vertices = Mx(v - Rp)            (Mx = X mirror: Unity flips X on FBX import; verified on 12 wheel pivots vs prefab)
+// The emitter then places the part at unityToGaiaTransform(local) = Z mirror. So the per-mesh GLB placed at that part
+// transform must hold  g = Mz * Mx * (v - Rp) = diag(-1, 1, -1) * (v - Rp)  -- a proper rotation (180 deg about Y):
+// normals/tangents map the same way, winding is unchanged. Nothing is recentred: off-centre hubs/hinges stay authored.
+// Gate (strict): ScalingPivot == RotationPivot, ScalingOffset == 0, no Geometric* pseudo-nodes -- outside that Unity's own
+// bake is not a pure translation and we refuse rather than guess. Whole-model and animated conversions are untouched.
+const FBX_PIVOT_KINDS = ['Translation', 'RotationOffset', 'RotationPivot', 'PreRotation', 'Rotation', 'PostRotation', 'RotationPivotInverse', 'ScalingOffset', 'ScalingPivot', 'Scaling', 'ScalingPivotInverse', 'GeometricTranslation', 'GeometricRotation', 'GeometricScaling'];
+function nodeTranslation(node) { if (Array.isArray(node?.matrix) && node.matrix.length === 16) return [node.matrix[12], node.matrix[13], node.matrix[14]]; return Array.isArray(node?.translation) ? [...node.translation] : [0, 0, 0]; }
+function nodeQuaternion(node) {
+  if (Array.isArray(node?.rotation) && node.rotation.length === 4) return [...node.rotation];
+  if (!Array.isArray(node?.matrix) || node.matrix.length !== 16) return [0, 0, 0, 1];
+  const m = node.matrix; // column-major, assume no scale on rotation pseudo-nodes
+  const m00 = m[0], m01 = m[4], m02 = m[8], m10 = m[1], m11 = m[5], m12 = m[9], m20 = m[2], m21 = m[6], m22 = m[10];
+  const tr = m00 + m11 + m22; let x, y, z, w;
+  if (tr > 0) { const sq = Math.sqrt(tr + 1) * 2; w = sq / 4; x = (m21 - m12) / sq; y = (m02 - m20) / sq; z = (m10 - m01) / sq; }
+  else if (m00 > m11 && m00 > m22) { const sq = Math.sqrt(1 + m00 - m11 - m22) * 2; w = (m21 - m12) / sq; x = sq / 4; y = (m01 + m10) / sq; z = (m02 + m20) / sq; }
+  else if (m11 > m22) { const sq = Math.sqrt(1 + m11 - m00 - m22) * 2; w = (m02 - m20) / sq; x = (m01 + m10) / sq; y = sq / 4; z = (m12 + m21) / sq; }
+  else { const sq = Math.sqrt(1 + m22 - m00 - m11) * 2; w = (m10 - m01) / sq; x = (m02 + m20) / sq; y = (m12 + m21) / sq; z = sq / 4; }
+  return [x, y, z, w];
+}
+function qMul(a, b) { return [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0], a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]]; }
+const qInv = (q) => [-q[0], -q[1], -q[2], q[3]];
+const vNear = (a, b, eps = 1e-6) => a.every((v, i) => Math.abs(v - b[i]) <= eps);
+// Pivot pseudo-nodes of `baseName` among the ORIGINAL ancestors of the mesh node.
+export function fbxPivotChainOf(json, meshNodeIndex, ancestorPath) {
+  const base = json.nodes[meshNodeIndex]?.name; if (typeof base !== 'string') return null;
+  const chain = {};
+  for (const idx of ancestorPath) {
+    const name = json.nodes[idx]?.name; if (typeof name !== 'string' || !name.startsWith(`${base}_$AssimpFbx$_`)) continue;
+    const kind = name.slice(base.length + '_$AssimpFbx$_'.length); if (!FBX_PIVOT_KINDS.includes(kind)) continue;
+    chain[kind] = json.nodes[idx];
+  }
+  return { base, chain, has: Object.keys(chain).length > 0 };
+}
+// What Unity's importer makes of the chain (raw file units; Mx applied), or a refusal reason.
+export function unityImportOfFbxChain({ chain }) {
+  const t = (k) => (chain[k] ? nodeTranslation(chain[k]) : [0, 0, 0]);
+  const Rp = t('RotationPivot'), Sp = chain.ScalingPivot ? t('ScalingPivot') : Rp, Soff = t('ScalingOffset');
+  const refuse = [];
+  if (!vNear(Sp, Rp, 1e-4)) refuse.push(`ScalingPivot ${Sp} != RotationPivot ${Rp}`);
+  if (!vNear(Soff, [0, 0, 0], 1e-6)) refuse.push(`ScalingOffset ${Soff} != 0`);
+  for (const g of ['GeometricTranslation', 'GeometricRotation', 'GeometricScaling']) if (chain[g]) refuse.push(`${g} present`);
+  if (chain.RotationPivotInverse && !vNear(nodeTranslation(chain.RotationPivotInverse), Rp.map((v) => -v), 1e-4)) refuse.push('RotationPivotInverse != -RotationPivot');
+  const pos = t('Translation').map((v, i) => v + t('RotationOffset')[i] + Rp[i]);
+  const rot = qMul(qMul(nodeQuaternion(chain.PreRotation ?? {}), nodeQuaternion(chain.Rotation ?? {})), qInv(nodeQuaternion(chain.PostRotation ?? {})));
+  const scl = chain.Scaling ? (Array.isArray(chain.Scaling.scale) ? [...chain.Scaling.scale] : (() => { const m = chain.Scaling.matrix ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; return [Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10])]; })()) : [1, 1, 1];
+  return {
+    refuse,
+    pivot: Rp, // subtract from raw vertices (Unity pivot bake)
+    unityLocal: { position: [-pos[0], pos[1], pos[2]], rotation: [rot[0], -rot[1], -rot[2], rot[3]], scale: scl }, // X mirror: (x,y,z)->(-x,y,z); quaternion under a reflection: q -> (qx, -qy, -qz, w)
+    fbxLocal: { position: pos, rotation: rot, scale: scl },
+  };
+}
+// GAIA basis for a per-mesh static GLB placed at the emitter's Z-mirrored Unity transform: g = Mz*Mx*(v - Rp) = (-(x-Px), y-Py, -(z-Pz)).
+export const staticMeshBasis = (v, P = [0, 0, 0]) => [-(v[0] - P[0]), v[1] - P[1], -(v[2] - P[2])];
+function binChunkOf(glb) { const off = glb.jsonEnd; if (off + 8 > glb.buf.length) return null; if (glb.buf.readUInt32LE(off + 4) !== 0x004e4942) return null; return { start: off + 8, length: glb.buf.readUInt32LE(off) }; }
+function forEachFloatVec(glb, json, accessorIndex, comps, fn) {
+  const acc = json.accessors?.[accessorIndex]; if (!acc || acc.componentType !== 5126) throw new Error(`convert-model: pivot bake needs float32 accessor #${accessorIndex}`);
+  const view = json.bufferViews[acc.bufferView]; const bin = binChunkOf(glb); if (!bin) throw new Error('convert-model: GLB without BIN chunk');
+  if ((view.buffer ?? 0) !== 0) throw new Error('convert-model: pivot bake supports buffer 0 only');
+  const stride = view.byteStride ?? comps * 4; const base = bin.start + (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+  const min = new Array(comps).fill(Infinity), max = new Array(comps).fill(-Infinity); const v = new Array(comps);
+  for (let i = 0; i < acc.count; i++) { const o = base + i * stride; for (let c = 0; c < comps; c++) v[c] = glb.buf.readFloatLE(o + c * 4); const out = fn(v); for (let c = 0; c < comps; c++) { glb.buf.writeFloatLE(out[c], o + c * 4); min[c] = Math.min(min[c], out[c]); max[c] = Math.max(max[c], out[c]); } }
+  if (acc.min) acc.min = min; if (acc.max) acc.max = max;
+}
+// Rewrites POSITION/NORMAL/TANGENT of ONE mesh in place. Refuses accessors shared with other meshes (would corrupt them).
+export function bakeStaticMeshBasis(glb, json, meshIndex, pivot) {
+  const mesh = json.meshes[meshIndex]; const mine = new Set();
+  for (const p of mesh.primitives) for (const k of ['POSITION', 'NORMAL', 'TANGENT']) if (p.attributes?.[k] != null) mine.add(p.attributes[k]);
+  json.meshes.forEach((m, i) => { if (i === meshIndex) return; for (const p of m.primitives) for (const a of Object.values(p.attributes ?? {})) if (mine.has(a)) throw new Error(`convert-model: accessor #${a} shared between meshes ${meshIndex} and ${i}; pivot bake refused`); });
+  const done = new Set();
+  for (const p of mesh.primitives) {
+    const a = p.attributes ?? {};
+    if (a.POSITION != null && !done.has(a.POSITION)) { forEachFloatVec(glb, json, a.POSITION, 3, (v) => staticMeshBasis(v, pivot)); done.add(a.POSITION); }
+    if (a.NORMAL != null && !done.has(a.NORMAL)) { forEachFloatVec(glb, json, a.NORMAL, 3, (v) => staticMeshBasis(v)); done.add(a.NORMAL); }
+    if (a.TANGENT != null && !done.has(a.TANGENT)) { forEachFloatVec(glb, json, a.TANGENT, 4, (v) => [-v[0], v[1], -v[2], v[3]]); done.add(a.TANGENT); }
+  }
+  return { positions: done.size };
+}
+
 function parentPathToNode(json, targetIndex) {
   const parents = new Map();
   for (let i = 0; i < (json.nodes ?? []).length; i++) {
@@ -276,7 +364,7 @@ function findModelMeshFileIDTarget(json, targetFileID, fidToName = null) {
 // a caller asking for one car body silently receives an entire authoring scene
 // (with that scene's layout offsets baked into the node matrices). A caller that
 // depends on the narrowing must be able to say "prove it or fail".
-export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null, { strict = false } = {}) {
+export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null, { strict = false, bakePivot = true } = {}) {
   const glb = readGlbJson(glbFile);
   const json = glb?.json;
   if (String(targetFileID) === '100100000') return false; // prefab-asset handle: whole model IS the target.
@@ -311,6 +399,19 @@ export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null,
   }
   const meshNode = {};
   if (target.name != null) meshNode.name = target.name;
+  // Static sub-asset: bake the FBX import pivot + the Unity->GAIA basis into this mesh's vertex data (see FBX pivot bake).
+  const hasVertexData = (m) => Array.isArray(m?.primitives) && m.primitives.some((pr) => pr?.attributes?.POSITION != null) && binChunkOf(glb) != null;
+  if (bakePivot && target.nodeIndex != null && target.meshIndex != null && hasVertexData(json.meshes[target.meshIndex])) {
+    const pc = fbxPivotChainOf(json, target.nodeIndex, parentPathToNode(json, target.nodeIndex));
+    const imp = unityImportOfFbxChain(pc ?? { chain: {} });
+    if (imp.refuse.length) {
+      const msg = `convert-model: FBX pivot chain of ${target.name} is not Unity-bakeable (${imp.refuse.join('; ')})`;
+      if (strict) throw new Error(msg); console.warn(`${msg}; vertices left raw`);
+    } else {
+      bakeStaticMeshBasis(glb, json, target.meshIndex, imp.pivot);
+      meshNode.extras = { ...(meshNode.extras ?? {}), fbxPivotBake: { pivot: imp.pivot, basis: 'Mz*Mx*(v-Rp) = diag(-1,1,-1)*(v-Rp)', unityLocal: imp.unityLocal, fbxLocal: imp.fbxLocal, chain: Object.keys(pc?.chain ?? {}) } };
+    }
+  }
   if (target.meshIndex != null) meshNode.mesh = target.meshIndex;
   if (lastIndex != null) nodes[lastIndex].children = [nodes.length];
   nodes.push(meshNode);
@@ -412,7 +513,7 @@ function pureUniformScaleOf(node) {
   }
   return null;
 }
-function fixFbxUnitScale(glbFile, fbxFile) {
+export function fixFbxUnitScale(glbFile, fbxFile) {
   // Unity ModelImporter parity. The scale Unity applies to RAW FBX vertex units:
   //   effective = (useFileScale ? UnitScaleFactor / 100 : 1) * globalScale
   // (FBX's native unit is the centimeter; USF = cm per file unit, so USF/100 is

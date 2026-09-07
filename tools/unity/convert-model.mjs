@@ -297,7 +297,10 @@ export function validateFloatAccessor(glb, json, accessorIndex, comps, what = 'a
   if (acc.type !== want) throw new Error(`convert-model: ${what} accessor #${accessorIndex} type ${acc.type} != ${want}`);
   if (acc.sparse) throw new Error(`convert-model: ${what} accessor #${accessorIndex} is sparse; pivot bake refused`);
   if (acc.normalized) throw new Error(`convert-model: ${what} accessor #${accessorIndex} normalized float`);
+  const nonneg = (v, name, { allowUndefined = true } = {}) => { if (v === undefined && allowUndefined) return; if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v) || v < 0) throw new Error(`convert-model: ${what} accessor #${accessorIndex} ${name} ${String(v)} is not a non-negative integer`); };
+  nonneg(acc.count, 'count', { allowUndefined: false }); nonneg(acc.byteOffset, 'byteOffset'); nonneg(acc.bufferView, 'bufferView', { allowUndefined: false });
   const view = json.bufferViews?.[acc.bufferView]; if (!view) throw new Error(`convert-model: ${what} accessor #${accessorIndex} bufferView missing`);
+  nonneg(view.byteOffset, 'bufferView.byteOffset'); nonneg(view.byteLength, 'bufferView.byteLength', { allowUndefined: false }); nonneg(view.byteStride, 'bufferView.byteStride'); nonneg(view.buffer, 'bufferView.buffer');
   if ((view.buffer ?? 0) !== 0) throw new Error('convert-model: pivot bake supports buffer 0 only');
   const stride = view.byteStride ?? comps * 4; if (stride < comps * 4 || stride % 4 || stride > 252) throw new Error(`convert-model: ${what} accessor #${accessorIndex} byteStride ${stride} invalid for ${want}`);
   const bin = binChunkOf(glb); if (!bin) throw new Error('convert-model: GLB without BIN chunk');
@@ -382,6 +385,8 @@ function findModelMeshFileIDTarget(json, targetFileID, fidToName = null) {
 // a caller asking for one car body silently receives an entire authoring scene
 // (with that scene's layout offsets baked into the node matrices). A caller that
 // depends on the narrowing must be able to say "prove it or fail".
+// bakePivot: the pivot/basis bake encodes Unity's FBX importer (X mirror + pivot baking) -- FBX inputs ONLY. convertOne passes
+// /\.fbx$/i.test(inFile); .glb/.gltf/.blend sources keep their triangle basis untouched (no Unity import step to mirror).
 export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null, { strict = false, bakePivot = true } = {}) {
   const glb = readGlbJson(glbFile);
   const json = glb?.json;
@@ -1133,7 +1138,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
     if (meshFileID != null) {
       const metaFile = inFile + '.meta';
       const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
-      keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh });
+      keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh, bakePivot: /\.fbx$/i.test(inFile) });
     }
     return { converter: 'blender-blend', bin, bytes: statSync(outFile).size, tried: ['blender-blend'], textures, doubleSided };
   }
@@ -1159,7 +1164,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
       if (meshFileID != null) {
         const metaFile = inFile + '.meta';
         const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
-        keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh });
+        keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh, bakePivot: /\.fbx$/i.test(inFile) });
       }
       return { converter: c.kind, bin: c.bin, bytes: statSync(outFile).size, tried: candidates.map(x => x.kind), textures, doubleSided };
     } catch (err) {
@@ -1181,7 +1186,7 @@ function convertOne(inFile, outFile, converter = null, textureRoots = [], meshFi
     if (meshFileID != null) {
       const metaFile = inFile + '.meta';
       const table = existsSync(metaFile) ? parseMetaRecycleNames(readFileSync(metaFile, 'utf8')) : null;
-      keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh });
+      keepOnlyModelMeshFileID(outFile, meshFileID, table, { strict: strictMesh, bakePivot: /\.fbx$/i.test(inFile) });
     }
     return { converter: 'legacy-fbx6100', bin: 'internal', bytes: statSync(outFile).size, tried: [...candidates.map(x => x.kind), 'legacy-fbx6100'], textures, doubleSided };
   } catch (err) {

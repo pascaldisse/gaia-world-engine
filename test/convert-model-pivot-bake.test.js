@@ -191,3 +191,26 @@ test('REAL traffic recipes (ecs/traffic-prefabs.json, 29 narrowed GLBs, no paren
   }
   assert.equal(glbs.size, 29, 'all 29 distinct narrowed traffic GLBs covered'); assert.equal(baked, 28); assert.equal(single, 1, 'Tram1');
 });
+
+test('non-FBX inputs never get the FBX-import basis: convertOne gates bakePivot by the actual input extension, and bakePivot:false keeps the triangle basis byte-for-byte (a .glb/.gltf/.blend source has no Unity FBX import to mirror)', () => {
+  const src = fs.readFileSync(path.join(repo, 'tools', 'unity', 'convert-model.mjs'), 'utf8');
+  const calls = [...src.matchAll(/keepOnlyModelMeshFileID\(outFile, meshFileID, table, \{([^}]*)\}\)/g)].map((m) => m[1]);
+  assert.equal(calls.length, 3, 'three convertOne call sites (.glb/.gltf, .blend, fbx converters)'); for (const c of calls) assert.match(c, /bakePivot: \/\\\.fbx\$\/i\.test\(inFile\)/, `call site gates on the FBX extension: {${c}}`);
+  // the gate's effect: a non-FBX source narrowed without the bake keeps raw vertices, normals and indices identical to the input
+  const f = path.join(scratch, 'nonfbx.glb'); const json = buildGlb(f, [hull, door]); const before = readGlb(f); const rawPos = Array.from(before.f32(json.meshes[1].primitives[0].attributes.POSITION, 3)); const rawNrm = Array.from(before.f32(json.meshes[1].primitives[0].attributes.NORMAL, 3));
+  assert.equal(keepOnlyModelMeshFileID(f, unityMeshFileID('Door_l'), null, { strict: true, bakePivot: false }), true);
+  const after = readGlb(f); const node = after.json.nodes.at(-1); assert.equal(node.name, 'Door_l'); assert.equal(node.extras, undefined, 'no bake annotation'); assert.equal(after.json.extras.gaiaNarrowed.bake, null);
+  assert.deepEqual(Array.from(after.f32(after.json.meshes[node.mesh].primitives[0].attributes.POSITION, 3)), rawPos, 'positions untouched'); assert.deepEqual(Array.from(after.f32(after.json.meshes[node.mesh].primitives[0].attributes.NORMAL, 3)), rawNrm, 'normals untouched');
+  assert.ok(after.json.nodes.slice(0, -1).every((n) => n.translation === undefined && n.rotation === undefined && n.matrix === undefined), 'ancestors still stripped to scale-only (pre-existing narrowing behaviour, independent of the bake)');
+});
+
+test('accessor validation refuses NaN/negative/fractional/undefined count, offsets, lengths, strides (comparisons against NaN silently pass otherwise)', () => {
+  const f = path.join(scratch, 'acc2.glb'); buildGlb(f, [hull, wheel]); const b = fs.readFileSync(f); const len = b.readUInt32LE(12); const json = JSON.parse(b.subarray(20, 20 + len).toString()); const glb = { buf: b, jsonEnd: 20 + len };
+  const pos = json.meshes.find((m) => m.name === 'Wheel_rl').primitives[0].attributes.POSITION; const mut = (fn, re) => { const j = JSON.parse(JSON.stringify(json)); fn(j); assert.throws(() => validateFloatAccessor(glb, j, pos, 3, 'POSITION'), re); };
+  mut((j) => { j.accessors[pos].count = NaN; }, /count NaN is not a non-negative integer/); mut((j) => { j.accessors[pos].count = -1; }, /count -1/); mut((j) => { j.accessors[pos].count = 1.5; }, /count 1.5/); mut((j) => { delete j.accessors[pos].count; }, /count undefined/); mut((j) => { j.accessors[pos].count = 0; }, /exceeds its bufferView|count 0/);
+  mut((j) => { j.accessors[pos].byteOffset = -4; }, /byteOffset -4/); mut((j) => { j.accessors[pos].byteOffset = NaN; }, /byteOffset NaN/); mut((j) => { j.accessors[pos].byteOffset = 2.5; }, /byteOffset 2.5/);
+  mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteLength = NaN; }, /bufferView.byteLength NaN/); mut((j) => { delete j.bufferViews[j.accessors[pos].bufferView].byteLength; }, /bufferView.byteLength undefined/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteOffset = -1; }, /bufferView.byteOffset -1/);
+  mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = NaN; }, /bufferView.byteStride NaN/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = 12.5; }, /byteStride 12.5/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = Infinity; }, /byteStride Infinity/);
+  mut((j) => { j.accessors[pos].bufferView = -1; }, /bufferView -1/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].buffer = 1; }, /buffer 0 only/);
+  assert.ok(validateFloatAccessor(glb, json, pos, 3, 'POSITION'), 'the pristine accessor still passes');
+});

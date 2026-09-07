@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { activeCameraRig } from './camera-config.js';
 import { aimYawFromPointer } from './aim.js';
+import { tractionSpeed, validateTraction } from './arcade-traction.js';
 import { heightAt } from './terrain.js';
 import { isTyping } from './dom.js';
 import { r2 } from '../../shared/num.js';
@@ -577,6 +578,7 @@ export class Player {
   }
 
   fixedDriveStep(dt, state, spec) {
+    if (spec.arcadeTraction) validateTraction(spec.arcadeTraction);
     const MaxSpeed = spec.MaxSpeed ?? spec.maxSpeed ?? AVP_DEFAULT_MAX_SPEED;
     const accelaration = spec.accelaration ?? spec.accel ?? AVP_DEFAULT_ACCELARATION;
     const turn = spec.turn ?? AVP_DEFAULT_TURN;
@@ -617,6 +619,7 @@ export class Player {
     // ArcadeVehicleController.FixedUpdate: carVelocity =
     // carBody.transform.InverseTransformDirection(carBody.linearVelocity).
     let localForwardVelocity = this.velocity.dot(forward);
+    const priorForwardVelocity = localForwardVelocity;
     let localLateralVelocity = this.velocity.dot(right);
     const carVelocityMagnitude = Math.hypot(localForwardVelocity, localLateralVelocity, this.vy);
 
@@ -733,6 +736,12 @@ export class Player {
       localLateralVelocity = applyDrag(localLateralVelocity, state.dynamicFriction, dt);
     }
 
+    // Optional Boomtown-feel tuning: cap angular-target→linear acceleration,
+    // brake progressively, and coast down instead of retaining wheel spin forever.
+    if (grounded && spec.arcadeTraction) {
+      localForwardVelocity = tractionSpeed(priorForwardVelocity, localForwardVelocity, dt, spec.arcadeTraction, AccelerationInput, BrakeInput > AVP_INPUT_DEADZONE);
+      if (movementMode === AVP_MOVEMENT_MODE_ANGULAR_VELOCITY && !state.freezeSphereRotationX) state.sphereAngularVelocity = localForwardVelocity / radius;
+    }
     // Unity LH yaw -> three RH yaw flip. D must decrease GAIA yaw.
     this.bodyYaw -= state.bodyAngularVelocity * dt;
     this.velocity.copy(forward).multiplyScalar(localForwardVelocity).addScaledVector(right, localLateralVelocity);

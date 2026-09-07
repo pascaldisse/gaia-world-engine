@@ -166,7 +166,7 @@ test('accessor validation before any byte is written: wrong VEC type, non-float,
 const worldDir = process.env.GAIA_TEST_WORLD || path.join(process.env.HOME ?? '', 'projects', 'boomtown-rampage-gwe-wt', 'astra', 'tools', 'unity', 'out', 'boomtown-world');
 const trafficFile = path.join(worldDir, 'ecs', 'traffic-prefabs.json');
 const haveTraffic = assimp && fs.existsSync(trafficFile) && fs.existsSync(path.join(unityRoot, 'Assets/DotsCity/Samples/Demo Presets/Art/Models/Cars/LOD 0/Bus1.fbx'));
-test('REAL traffic recipes (ecs/traffic-prefabs.json, 29 narrowed GLBs, no parent cache writes): every multi-mesh recipe bakes with pivot 0 (pure R_y(pi)), wheels stay origin-centred with the axle on X, hull bottoms keep their height, x/z bounds flip sign, output deterministic; single-mesh Tram1 is untouched (whole-model path)', { skip: !haveTraffic && 'traffic recipes / assimp / DotsCity FBX missing', timeout: 600000 }, () => {
+test('REAL traffic recipes (ecs/traffic-prefabs.json, 29 narrowed GLBs, no parent cache writes): every multi-mesh recipe bakes with pivot 0 (pure R_y(pi)), wheels stay origin-centred with the axle on X, hull bottoms keep their height, x/z bounds flip sign, output deterministic; single-mesh Tram1 takes the same path', { skip: !haveTraffic && 'traffic recipes / assimp / DotsCity FBX missing', timeout: 600000 }, () => {
   const t = JSON.parse(fs.readFileSync(trafficFile, 'utf8')); const glbs = new Set(); let baked = 0, single = 0;
   for (const car of t.cars) {
     const fbx = path.join(unityRoot, car.sourceModel); const base = path.join(scratch, `${car.key}.glb`);
@@ -176,7 +176,7 @@ test('REAL traffic recipes (ecs/traffic-prefabs.json, 29 narrowed GLBs, no paren
     for (const src of new Set(car.parts.map((p) => p.src))) {
       glbs.add(src); const m = /-m(n?)(\d+)\.glb$/.exec(src); const fid = (m[1] ? '-' : '') + m[2]; const f = path.join(scratch, path.basename(src)); fs.copyFileSync(base, f);
       const ok = keepOnlyModelMeshFileID(f, fid, table, { strict: true });
-      if (full.json.meshes.length <= 1) { single++; assert.equal(ok, false, `${car.key}: single-mesh model is not narrowed/baked`); assert.ok(fs.readFileSync(f).equals(fs.readFileSync(base)), 'bytes untouched'); continue; }
+      if (full.json.meshes.length <= 1) single++; // single-mesh (Tram1) now takes the same path; asserted below like every other part
       assert.equal(ok, true, `${src} narrowed`); baked++; const g = readGlb(f); const node = g.json.nodes.at(-1); const bake = node.extras.fbxPivotBake; assert.ok(bake, `${src}: bake recorded`); assert.deepEqual(bake.pivot, [0, 0, 0], `${src}: pivot 0 -> pure basis rotation`); assert.deepEqual(g.json.extras.gaiaNarrowed.fileID, fid);
       const s = g.json.nodes[0].scale?.[0] ?? 1; const pos = g.f32(g.json.meshes[node.mesh].primitives[0].attributes.POSITION, 3);
       const rawMesh = full.json.meshes[node.mesh]; const raw = full.f32(rawMesh.primitives[0].attributes.POSITION, 3); assert.equal(raw.length, pos.length);
@@ -189,7 +189,7 @@ test('REAL traffic recipes (ecs/traffic-prefabs.json, 29 narrowed GLBs, no paren
       assert.equal(keepOnlyModelMeshFileID(f, fid, table, { strict: true }), false, `${src}: repeat is a no-op`);
     }
   }
-  assert.equal(glbs.size, 29, 'all 29 distinct narrowed traffic GLBs covered'); assert.equal(baked, 28); assert.equal(single, 1, 'Tram1');
+  assert.equal(glbs.size, 29, 'all 29 distinct narrowed traffic GLBs covered'); assert.equal(baked, 29); assert.equal(single, 1, 'Tram1 (single-mesh) included');
 });
 
 test('non-FBX inputs never get the FBX-import basis: convertOne gates bakePivot by the actual input extension, and bakePivot:false keeps the triangle basis byte-for-byte (a .glb/.gltf/.blend source has no Unity FBX import to mirror)', () => {
@@ -213,4 +213,45 @@ test('accessor validation refuses NaN/negative/fractional/undefined count, offse
   mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = NaN; }, /bufferView.byteStride NaN/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = 12.5; }, /byteStride 12.5/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].byteStride = Infinity; }, /byteStride Infinity/);
   mut((j) => { j.accessors[pos].bufferView = -1; }, /bufferView -1/); mut((j) => { j.bufferViews[j.accessors[pos].bufferView].buffer = 1; }, /buffer 0 only/);
   assert.ok(validateFloatAccessor(glb, json, pos, 3, 'POSITION'), 'the pristine accessor still passes');
+});
+
+// Single-mesh FBX MeshFilter sub-asset: the request means Unity's imported mesh, so a proven match takes the normal
+// narrowing (scale-only ancestors, pivot/basis bake, marker) instead of the old "nothing to narrow" early return that kept
+// the raw basis + node TRS. Unprovable: strict refuses / no-op. 100100000 whole-model: untouched.
+function buildSingleGlb(file, part, rootScale = 0.01, nodeTRS = {}) {
+  const json = buildGlb(file, [part], rootScale); // Hull node (index 1) has no mesh; the part is the single mesh
+  // give the mesh's own node a TRS (source authoring): re-read, patch, re-write via the same container writer
+  const b = fs.readFileSync(file); const len = b.readUInt32LE(12); const j = JSON.parse(b.subarray(20, 20 + len).toString()); const node = j.nodes.find((n) => n.name === part.name); Object.assign(node, nodeTRS);
+  const jt = Buffer.from(JSON.stringify(j)); const jp = (4 - (jt.length % 4)) % 4; const jc = Buffer.concat([jt, Buffer.alloc(jp, 0x20)]); const rest = b.subarray(20 + len); const h = Buffer.alloc(12); h.write('glTF', 0); h.writeUInt32LE(2, 4); h.writeUInt32LE(12 + 8 + jc.length + rest.length, 8); const jh = Buffer.alloc(8); jh.writeUInt32LE(jc.length, 0); jh.writeUInt32LE(0x4e4f534a, 4); fs.writeFileSync(file, Buffer.concat([h, jh, jc, rest])); return j;
+}
+test('single-mesh FBX MeshFilter request: proven match -> normal narrowing (ancestors scale-only, node TRS dropped, basis/pivot baked, marker written); second run byte-identical no-op; unknown fileID refuses under strict and is a no-op otherwise; 100100000 untouched', () => {
+  const single = { ...door, name: 'Panel' }; // pivot chain + asymmetric geometry, alone in the file
+  const f = path.join(scratch, 'single.glb'); buildSingleGlb(f, single, 0.01, { translation: [1, 2, 3], rotation: quatAxis([0, 1, 0], 15) });
+  const before = readGlb(f); assert.equal(before.json.meshes.length, 1); const rawPos = Array.from(before.f32(before.json.meshes[0].primitives[0].attributes.POSITION, 3));
+  assert.equal(keepOnlyModelMeshFileID(f, unityMeshFileID('Panel'), null, { strict: true }), true, 'single mesh IS narrowed when proven');
+  const after = readGlb(f); const node = after.json.nodes.at(-1); assert.equal(node.name, 'Panel'); assert.equal(node.translation, undefined); assert.equal(node.rotation, undefined, 'source node TRS dropped: the consuming part transform places the mesh (MeshFilter semantics)');
+  assert.ok(after.json.nodes.slice(0, -1).every((n) => n.translation === undefined && n.rotation === undefined && n.matrix === undefined), 'ancestors scale-only'); assert.equal(after.json.nodes[0].scale[0], 0.01);
+  assert.deepEqual(node.extras.fbxPivotBake.pivot.map((v) => +v.toFixed(3)), P_DOOR); assert.equal(after.json.extras.gaiaNarrowed.mesh, 'Panel');
+  const pos = Array.from(after.f32(after.json.meshes[node.mesh].primitives[0].attributes.POSITION, 3)); for (let i = 0; i < pos.length; i += 3) { assert.equal(pos[i], Math.fround(-(rawPos[i] - P_DOOR[0]))); assert.equal(pos[i + 1], Math.fround(rawPos[i + 1] - P_DOOR[1])); assert.equal(pos[i + 2], Math.fround(-(rawPos[i + 2] - P_DOOR[2]))); }
+  const once = fs.readFileSync(f); assert.equal(keepOnlyModelMeshFileID(f, unityMeshFileID('Panel'), null, { strict: true }), false); assert.ok(fs.readFileSync(f).equals(once), 'repeat byte-identical');
+  const g = path.join(scratch, 'single-unknown.glb'); buildSingleGlb(g, single); const gb = fs.readFileSync(g);
+  assert.throws(() => keepOnlyModelMeshFileID(g, unityMeshFileID('SomethingElse'), null, { strict: true }), /is not the single mesh/); assert.ok(fs.readFileSync(g).equals(gb));
+  assert.equal(keepOnlyModelMeshFileID(g, unityMeshFileID('SomethingElse'), null, { strict: false }), false); assert.ok(fs.readFileSync(g).equals(gb), 'unknown non-strict: no-op');
+  assert.equal(keepOnlyModelMeshFileID(g, '100100000', null, { strict: true }), false); assert.ok(fs.readFileSync(g).equals(gb), 'whole-model handle untouched');
+  // non-FBX single mesh: narrowed for consistency but NO basis change
+  const h = path.join(scratch, 'single-nonfbx.glb'); buildSingleGlb(h, single); const hb = readGlb(h); const hr = Array.from(hb.f32(hb.json.meshes[0].primitives[0].attributes.POSITION, 3));
+  assert.equal(keepOnlyModelMeshFileID(h, unityMeshFileID('Panel'), null, { strict: true, bakePivot: false }), true); const ha = readGlb(h); assert.deepEqual(Array.from(ha.f32(ha.json.meshes[ha.json.nodes.at(-1).mesh].primitives[0].attributes.POSITION, 3)), hr); assert.equal(ha.json.extras.gaiaNarrowed.bake, null);
+});
+
+test('REAL Tram1 (single-mesh DotsCity FBX, 5 traffic parts): proven MeshFilter request now narrows + bakes R_y(pi) with pivot 0 like the 28 multi-mesh parts; repeat byte-identical; heights untouched', { skip: !haveTraffic && 'traffic recipes / assimp / DotsCity FBX missing', timeout: 300000 }, () => {
+  const t = JSON.parse(fs.readFileSync(trafficFile, 'utf8')); const tram = t.cars.find((c) => c.key === 'Tram1'); assert.ok(tram);
+  const fbx = path.join(unityRoot, tram.sourceModel); const base = path.join(scratch, 'Tram1-single.glb'); const r = spawnSync('assimp', ['export', fbx, base, '-f', 'glb2', '-triangulate', '-joinidenticalvertices', '-pretransformvertices']); assert.equal(r.status, 0); fixFbxUnitScale(base, fbx);
+  const full = readGlb(base); assert.equal(full.json.meshes.length, 1, 'single mesh'); const raw = full.f32(full.json.meshes[0].primitives[0].attributes.POSITION, 3);
+  const table = parseMetaRecycleNames(fs.readFileSync(`${fbx}.meta`, 'utf8')); const src = [...new Set(tram.parts.map((p) => p.src))]; assert.equal(src.length, 1); const m = /-m(n?)(\d+)\.glb$/.exec(src[0]); const fid = (m[1] ? '-' : '') + m[2];
+  const f = path.join(scratch, path.basename(src[0])); fs.copyFileSync(base, f); assert.equal(keepOnlyModelMeshFileID(f, fid, table, { strict: true }), true, 'Tram1 narrowed (was: early-return false)');
+  const g = readGlb(f); const node = g.json.nodes.at(-1); assert.deepEqual(node.extras.fbxPivotBake.pivot, [0, 0, 0]); assert.equal(g.json.extras.gaiaNarrowed.fileID, fid); assert.equal(g.json.nodes[0].scale?.[0] ?? 1, full.json.nodes[0].scale?.[0] ?? 1, 'root scale kept');
+  const pos = g.f32(g.json.meshes[node.mesh].primitives[0].attributes.POSITION, 3); assert.equal(pos.length, raw.length); for (let i = 0; i < pos.length; i += 3) { assert.equal(pos[i], Math.fround(-raw[i])); assert.equal(pos[i + 1], raw[i + 1]); assert.equal(pos[i + 2], Math.fround(-raw[i + 2])); }
+  const once = fs.readFileSync(f); assert.equal(keepOnlyModelMeshFileID(f, fid, table, { strict: true }), false); assert.ok(fs.readFileSync(f).equals(once), 'repeat byte-identical');
+  const f2 = `${f}.again`; fs.copyFileSync(base, f2); keepOnlyModelMeshFileID(f2, fid, table, { strict: true }); assert.ok(fs.readFileSync(f2).equals(once), 'deterministic');
+  const w = `${f}.whole`; fs.copyFileSync(base, w); assert.equal(keepOnlyModelMeshFileID(w, '100100000', table, { strict: true }), false); assert.ok(fs.readFileSync(w).equals(fs.readFileSync(base)), 'whole-model request untouched');
 });

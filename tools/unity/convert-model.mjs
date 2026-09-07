@@ -407,13 +407,17 @@ export function keepOnlyModelMeshFileID(glbFile, targetFileID, fidToName = null,
   }
   const target = json ? findModelMeshFileIDTarget(json, targetFileID, fidToName) : null;
   if (json && (json.meshes || []).length <= 1) {
-    // single-mesh model: nothing to narrow -- but only harmless if that one mesh
-    // IS the requested one. Under strict, an unprovable match is an error.
-    if (strict && !target) {
-      throw new Error(`convert-model: --mesh-fileid ${targetFileID} is not the single mesh in ${glbFile}`
-        + ` (meshes: ${(json.meshes ?? []).map((m) => m?.name ?? '<unnamed>').join(', ') || 'none'})`);
+    // single-mesh model. A MeshFilter sub-asset request still means "Unity's imported mesh": if the requested fileID
+    // provably IS that mesh, it goes through the normal narrowing (scale-only ancestors, pivot/basis bake, marker) so a
+    // single-mesh FBX gets the same semantics as one mesh out of many. An unprovable match: strict refuses, else no-op.
+    if (!target) {
+      if (strict) {
+        throw new Error(`convert-model: --mesh-fileid ${targetFileID} is not the single mesh in ${glbFile}`
+          + ` (meshes: ${(json.meshes ?? []).map((m) => m?.name ?? '<unnamed>').join(', ') || 'none'})`);
+      }
+      return false;
     }
-    return false;
+    if (target.nodeIndex == null || target.meshIndex == null) return false; // mesh without a scene node: nothing to place
   }
   if (!target) {
     if (strict) {

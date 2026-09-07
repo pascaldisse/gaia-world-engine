@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { heightAt } from './terrain.js';
+import { planarYaw } from '../../shared/collider.js';
 import { disposeOwn, tubeRadii } from './geometry.js';
 import { behaviorList } from '../../shared/motion.js';
 
@@ -89,7 +90,8 @@ export class Gizmos {
       const group = this.view.getGroup(t.id);
       if (group) {
         t.object.position.copy(group.position);
-        t.object.rotation.y = group.rotation.y;
+        t.object.rotation.y = t.colliderPose ? planarYaw(group.rotation) : group.rotation.y;
+        if (t.colliderPose) t.object.scale.copy(group.scale);
       }
     }
   }
@@ -140,30 +142,33 @@ export class Gizmos {
   }
 
   // ---- attached gizmos: a wrapper that mirrors the entity's pose ----
-  attach(id) {
+  attach(id, { colliderPose = false } = {}) {
     const wrapper = new THREE.Group();
     const group = this.view.getGroup(id);
     if (group) {
       wrapper.position.copy(group.position);
-      wrapper.rotation.y = group.rotation.y;
+      wrapper.rotation.y = colliderPose ? planarYaw(group.rotation) : group.rotation.y;
+      if (colliderPose) wrapper.scale.copy(group.scale);
     } else {
       const comps = this.store.get(id);
       wrapper.position.set(...(comps?.transform?.position ?? [0, 0, 0]));
-      wrapper.rotation.y = comps?.transform?.rotation?.[1] ?? 0;
+      wrapper.rotation.y = colliderPose ? planarYaw(comps?.transform?.rotation) : comps?.transform?.rotation?.[1] ?? 0;
+      if (colliderPose) wrapper.scale.set(...(comps?.transform?.scale ?? [1, 1, 1]));
     }
     this.root.add(wrapper);
-    this.tracked.push({ object: wrapper, id });
+    this.tracked.push({ object: wrapper, id, colliderPose });
     return wrapper;
   }
 
   addColliders(id, comps) {
-    const wrapper = this.attach(id);
+    const wrapper = this.attach(id, { colliderPose: true });
     for (const box of comps.collider.boxes) {
       const [sx, sy, sz] = box.size ?? [1, 1, 1];
       const source = new THREE.BoxGeometry(sx, sy, sz);
       const edges = new THREE.LineSegments(new THREE.EdgesGeometry(source), lineMaterial(box.blocker ? COLORS.blocker : COLORS.walkable));
       source.dispose();
       edges.position.set(...(box.position ?? [0, 0, 0]));
+      edges.rotation.y = planarYaw(box.rotation);
       mark(edges);
       wrapper.add(edges);
       if (!box.blocker) {
@@ -171,6 +176,7 @@ export class Gizmos {
         const top = new THREE.Line(rectGeometry(sx, sz), lineMaterial(COLORS.walkable, 1));
         top.position.set(...(box.position ?? [0, 0, 0]));
         top.position.y += sy / 2 + 0.02;
+        top.rotation.y = planarYaw(box.rotation);
         mark(top);
         wrapper.add(top);
       }

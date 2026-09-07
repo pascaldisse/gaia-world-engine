@@ -105,7 +105,7 @@ describe('ground queries — generic scene graph / actual Three raycasts', () =>
     } finally { globalThis.document = previous; }
   });
 
-  test('own model follows feet during crouch; primitive head and driven pose unchanged', () => {
+  test('own model follows feet during crouch; primitive head stays eye-space; driven model root is feet-space', () => {
     const { view, add } = fixture();
     const { group } = add('self', 0.5, { nested: true });
     const part = group.children[0]; part.userData.model = true;
@@ -119,7 +119,7 @@ describe('ground queries — generic scene graph / actual Three raycasts', () =>
     part.userData.model = true; view.player.vehicle = {};
     view.player.drivePose = { position: new THREE.Vector3(0, 2, 0), yaw: 0 };
     view.update(0);
-    expect(group.position.y).toBe(2);
+    expect(group.position.y).toBeCloseTo(2 - view.player.eyeStand);
   });
 
   test('spawn wisp/scale transients become support only after the real effect completes', () => {

@@ -20,6 +20,8 @@ let activeCamera = camera;
 let currentSpec = cameraSpec();
 let pixelTarget = null;
 let pixelQuad = null;
+let pixelFrame = null;
+let frameNumber = 0;
 let postProcessing = null;
 let bloomPass = null;
 const hemi = new THREE.HemisphereLight('#8fb3ff', '#2c241a', 0.6);
@@ -64,9 +66,11 @@ console.warn('[gaia] post chain unavailable, rendering plain:', err);
 }
 }
 function setPixelTarget(pixel) {
+pixelFrame = null;
 if (!pixel) {
 pixelTarget?.dispose();
 pixelTarget = null;
+pixelQuad?.material.dispose();
 pixelQuad = null;
 return;
 }
@@ -83,12 +87,27 @@ pixelQuad = new THREE.QuadMesh(material);
 pixelTarget.setSize(pixel.width, pixel.height);
 }
 }
+function setPixelResolution(pixel) {
+const limit = renderer.backend.device?.limits?.maxTextureDimension2D ?? renderer.backend.capabilities?.maxTextureSize;
+if (pixel !== null && (!Number.isInteger(limit) || !Number.isInteger(pixel?.width) || !Number.isInteger(pixel?.height)
+  || pixel.width < 1 || pixel.height < 1 || pixel.width > limit || pixel.height > limit)) throw Error('Invalid render resolution');
+currentSpec = { ...currentSpec, pixel };
+setPixelTarget(pixel);
+}
 function setCameraSpec(spec = null) {
 currentSpec = cameraSpec(spec);
 activeCamera = currentSpec.projection === 'orthographic' ? orthographicCamera : camera;
 applyProjection();
 setPixelTarget(currentSpec.pixel);
 rebuildPost();
+}
+async function readPixelFrame() {
+const target = pixelTarget;
+if (!target || pixelFrame?.target !== target) return null;
+const { width, height, frame } = pixelFrame;
+const rgba = await renderer.readRenderTargetPixelsAsync(target, 0, 0, width, height);
+if (rgba.length !== width * height * 4) throw Error('Render-target readback size changed');
+return { width, height, rgba, frame, source: 'world-render-target/pre-display/no-HUD', origin: renderer.coordinateSystem === THREE.WebGPUCoordinateSystem ? 'top-left' : 'bottom-left' };
 }
 function syncActiveCamera() {
 if (activeCamera === camera) return;
@@ -102,6 +121,7 @@ syncActiveCamera();
 if (pixelTarget && pixelQuad) {
 renderer.setRenderTarget(pixelTarget);
 renderer.render(scene, activeCamera);
+pixelFrame = { target: pixelTarget, width: pixelTarget.width, height: pixelTarget.height, frame: ++frameNumber };
 renderer.setRenderTarget(null);
 pixelQuad.render(renderer);
 return;
@@ -122,5 +142,5 @@ if (radius !== undefined) bloomPass && (bloomPass.radius.value = radius);
 if (threshold !== undefined) bloomPass && (bloomPass.threshold.value = threshold);
 },
 };
-return { renderer, scene, camera, hemi, sun, post, setCameraSpec, getActiveCamera: () => activeCamera, getCameraSpec: () => currentSpec, getPixelTargetSize: () => pixelTarget ? { width: pixelTarget.width, height: pixelTarget.height } : null };
+return { renderer, scene, camera, hemi, sun, post, setCameraSpec, setPixelResolution, readPixelFrame, getActiveCamera: () => activeCamera, getCameraSpec: () => currentSpec, getPixelTargetSize: () => pixelTarget ? { width: pixelTarget.width, height: pixelTarget.height } : null };
 }

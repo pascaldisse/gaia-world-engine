@@ -29,8 +29,8 @@ function makeView() {
   view.ownPresence = null;
   view.activeScenes = null; // isActive() => true for every entity
   view.store = new Map([
-    // the corrected ground plane: box top = pos.y(-1.38) + by(0) + sy/2(1.38) = 0
-    ['floor', { collider: { boxes: [{ position: [0, 0, 0], size: [1380, 2.76, 1380], blocker: false }] } }],
+    // Local box × authored scale138 once: top = -1.38 + .02/2*138 = 0.
+    ['floor', { collider: { boxes: [{ position: [0, 0, 0], size: [10, 0.02, 10], blocker: false }] } }],
     // a road patch around spawn, its walkable surface at y = 0.2 (higher than the floor)
     ['road', { collider: { boxes: [{ position: [0, 0, 0], size: [40, 0.4, 40], blocker: false }] } }],
   ]);

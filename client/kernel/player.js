@@ -5,6 +5,7 @@ import { heightAt } from './terrain.js';
 import { isTyping } from './dom.js';
 import { r2 } from '../../shared/num.js';
 import { applyAngularDrag, applyDrag, evaluateCurve } from './avp.js';
+import { boxYawInertia, hullExtents } from './vehicle-hull.js';
 
 // per-frame scratch — the movement math must not allocate
 const _forward = new THREE.Vector3();
@@ -597,14 +598,13 @@ export class Player {
     // MeshCollider; that runtime tensor is not serialized. Approximate I_y
     // from the imported hull AABB as m(w²+l²)/12. Reject malformed imported
     // dimensions/tensors so steering can never inject Infinity/NaN.
+    // The hull arrives in whichever shape the world serialized it (explicit raw
+    // `hull`, a direct `collider.size`, or the collider COMPONENT's single box) —
+    // hullExtents() validates and picks; ambiguous payloads return null and keep
+    // the documented mass fallback rather than guessing a shape.
     const validPositive = (value) => Number.isFinite(value) && value > 0;
     const safeBodyMass = validPositive(bodyMass) ? bodyMass : AVP_DEFAULT_BODY_MASS;
-    const hullSize = spec.collider?.size;
-    const width = hullSize?.[0];
-    const length = hullSize?.[2];
-    const computedYawInertia = validPositive(width) && validPositive(length)
-      ? safeBodyMass * (width ** 2 + length ** 2) / 12
-      : safeBodyMass;
+    const computedYawInertia = boxYawInertia(safeBodyMass, hullExtents(spec)) ?? safeBodyMass;
     const explicitYawInertia = spec.carBodyRigidbody?.inertiaTensor?.[1];
     const bodyYawInertia = validPositive(explicitYawInertia) ? explicitYawInertia : computedYawInertia;
     const SteeringInput = state.steeringInput;
@@ -773,7 +773,7 @@ export class Player {
     let y = heightAt(x, z);
     let platformId = null;
     const walk = this.view?.walkableAt(x, z, feet + walkReach, { excludeIds });
-    if (walk && walk.top > y) {
+    if (walk && walk.top > y + GROUND_HEIGHT_EPSILON_M) {
       y = walk.top;
       platformId = walk.id;
     }

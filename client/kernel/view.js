@@ -12,6 +12,8 @@ import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { InstancedModels } from './instanced-models.js';
 import { resolveRainBones } from './rain-body.js';
 import { ImpostorCache, bucketOf, projectedExtents } from './impostors.js';
+import { presenceRenderYaw } from './presence-facing.js';
+import { PLAYER_EYE_HEIGHT_DEFAULT_M } from './player.js';
 
 // `mesh.parts[].animated: true` picks skinned playback (below) instead of
 // the static instancing path — `auto` gait picks a clip from the entity's
@@ -231,14 +233,14 @@ export class View {
           if (!own.userData.hidden) own.visible = true;
           const pose = this.player.vehicle ? this.player.drivePose : null;
           own.position.copy(pose?.position ?? this.player.position);
+          if (this.player.vehicle) own.position.y -= this.player.eyeStand ?? PLAYER_EYE_HEIGHT_DEFAULT_M;
           // Authored model offset → standing-eye frame; crouch changes the eye,
           // not the feet. Primitive head markers retain eye-following semantics.
           if (!pose && own.children.some((part) => part.userData.model)) {
             own.position.y += (this.player.eyeStand ?? this.player.eyeHeight) - this.player.eyeHeight;
           }
-          // glTF model front is +Z; GAIA forward at yaw 0 is -Z (the same
-          // convention the path behavior resolves via atan2(dx,dz)) — flip.
-          own.rotation.y = (pose?.yaw ?? this.player.bodyYaw) + Math.PI;
+          // Imported assemblies may be -Z-front; preserve their declared nose.
+          own.rotation.y = presenceRenderYaw(pose?.yaw ?? this.player.bodyYaw, this.store.get(this.ownPresence)?.mesh);
         } else {
           own.visible = false;
         }
@@ -554,7 +556,7 @@ export class View {
         // other players' bodies face their published yaw (your own body
         // follows the local player in update() at frame rate instead)
         if (id !== this.ownPresence && value?.yaw !== undefined) {
-          const yawT = value.yaw + Math.PI; // +Z-front models vs -Z GAIA forward
+          const yawT = presenceRenderYaw(value.yaw, components.mesh);
           const m = this.motion.get(id);
           if (m) m.ry = yawT;
           else if (this.warming || this.snapTransforms) group.rotation.y = yawT;
@@ -604,7 +606,8 @@ export class View {
     const components = this.store.get(id);
     const t = components.transform ?? {};
     const [x, y, z] = t.position ?? [0, 0, 0];
-    const py = components.ground ? heightAt(x, z) + (components.ground.offset ?? 0) : y;
+    const bodyOffset = components.presence && components.vehicle ? PLAYER_EYE_HEIGHT_DEFAULT_M : 0;
+    const py = components.ground ? heightAt(x, z) + (components.ground.offset ?? 0) : y - bodyOffset;
     const [rx, ry, rz] = t.rotation ?? [0, 0, 0];
     const s = t.scale ?? 1;
     if (Array.isArray(s)) group.scale.set(s[0], s[1], s[2]);
@@ -1021,6 +1024,11 @@ export class View {
   // map directly — the same lazy self-heal instancedModels.sync() uses),
   // measures horizontal speed off the owning entity's group for `auto`,
   // then advances the mixer either smoothly or step-quantized.
+  setAnimationStepOverride(fps) {
+    if (fps !== null && (!Number.isFinite(fps) || fps < 0)) throw Error('Animation FPS must be null or nonnegative');
+    this.animationStepOverride = fps;
+  }
+
   updateAnimatedModels(dt, animationMultiplier = () => 1) {
     for (const [id, entry] of this.animatedModels) {
       if (!this.isAttachedToScene(entry.holder)) {
@@ -1042,9 +1050,11 @@ export class View {
       this.driveAnimationEntry(entry, speed);
       const multiplier = animationMultiplier(id);
       const animationDt = dt * (Number.isFinite(multiplier) && multiplier >= 0 ? multiplier : 1);
-      const step = entry.spec?.step ?? 0;
+      const step = this.animationStepOverride ?? entry.spec?.step ?? 0;
       if (step <= 0) {
-        entry.mixer.update(animationDt);
+        const elapsed = animationDt + entry.acc;
+        entry.acc = 0;
+        entry.mixer.update(elapsed);
       } else {
         entry.acc += animationDt;
         const q = 1 / step;
@@ -1266,9 +1276,11 @@ export class View {
       const sin = Math.sin(yaw);
       const wx = x - group.position.x;
       const wz = z - group.position.z;
-      // world → entity-local (inverse yaw)
-      const lx = wx * cos - wz * sin;
-      const lz = wx * sin + wz * cos;
+      // Same yaw/scale frame as blocker contacts and collider diagnostics.
+      const { x: scaleX, y: scaleY, z: scaleZ } = group.scale;
+      if (Math.abs(scaleX) < 1e-9 || Math.abs(scaleY) < 1e-9 || Math.abs(scaleZ) < 1e-9) continue;
+      const lx = (wx * cos - wz * sin) / scaleX;
+      const lz = (wx * sin + wz * cos) / scaleZ;
       for (const box of boxes) {
         if (box.blocker) continue;
         const [bx, by, bz] = box.position ?? [0, 0, 0];
@@ -1277,7 +1289,7 @@ export class View {
         const c = Math.cos(boxYaw), s = Math.sin(boxYaw);
         const dx = lx - bx, dz = lz - bz;
         if (Math.abs(dx * c - dz * s) > sx / 2 || Math.abs(dx * s + dz * c) > sz / 2) continue;
-        const top = group.position.y + by + sy / 2;
+        const top = group.position.y + by * scaleY + sy * Math.abs(scaleY) / 2;
         if (!Number.isFinite(top) || top > maxTop) continue;
         if (best === null || top > best.top) best = { top, id };
       }

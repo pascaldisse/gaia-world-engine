@@ -14,6 +14,7 @@ import { resolveRainBones } from './rain-body.js';
 import { ImpostorCache, bucketOf, projectedExtents } from './impostors.js';
 import { presenceRenderYaw, vehicleRootOffset } from './presence-facing.js';
 import { PLAYER_EYE_HEIGHT_DEFAULT_M } from './player.js';
+import { boxFootprint, moveVehicleFootprints } from './vehicle-contacts.js';
 
 // `mesh.parts[].animated: true` picks skinned playback (below) instead of
 // the static instancing path — `auto` gait picks a clip from the entity's
@@ -512,6 +513,7 @@ export class View {
         if (!this.suppressed.has(id)) this.applyTransform(id);
         break;
       case 'mesh':
+        group.userData.privateGeometry = !!components.vehicleDent;
         group.userData.dynamic = Boolean(components.behavior);
         this.applyMesh(group, value, id);
         this.buildVersion++;
@@ -520,6 +522,14 @@ export class View {
         const dynamic = Boolean(value);
         if (dynamic !== Boolean(group.userData.dynamic)) {
           group.userData.dynamic = dynamic;
+          if (components.mesh) this.applyMesh(group, components.mesh, id);
+        }
+        break;
+      }
+      case 'vehicleDent': {
+        const privateGeometry = !!value;
+        if (privateGeometry !== !!group.userData.privateGeometry) {
+          group.userData.privateGeometry = privateGeometry;
           if (components.mesh) this.applyMesh(group, components.mesh, id);
         }
         break;
@@ -852,7 +862,7 @@ export class View {
         // holder: an InstancedMesh has no per-holder object to hide, so when a
         // scene declares impostors the sprite path wins and this holder keeps
         // its own clone (which the impostor renders from, then hides).
-        if (!this.impostors.enabled && !group.userData.dynamic && holder.userData.solid === false && asset.templates?.length && asset.templates.every((t) => !Array.isArray(t.material))) {
+        if (!this.impostors.enabled && !group.userData.dynamic && !group.userData.privateGeometry && holder.userData.solid === false && asset.templates?.length && asset.templates.every((t) => !Array.isArray(t.material))) {
           const override = doc && doc.map ? makePartMaterial({ material: part.material }) : null;
           const materialKey = doc && doc.map ? part.material : '';
           for (const child of [...holder.children]) {
@@ -1309,6 +1319,49 @@ export class View {
       return { level: water.level ?? 0, drownAfter: water.drownAfter };
     }
     return null;
+  }
+
+  // Opt-in game hull controller; moving traffic contributes its native authoring
+  // hull without installing duplicate static physics bodies.
+  resolveVehicleMotion(start, position, eyeHeight, velocity, spec, yaw, { stepHeight = 0 } = {}) {
+    const boxes = (spec.carCollider ?? spec.collider)?.boxes;
+    if (!boxes?.length) throw Error('vehicle contacts require a source hull');
+    const root = new THREE.Matrix4().compose(
+      new THREE.Vector3(start.x, position.y - eyeHeight + vehicleRootOffset(spec), start.z),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, presenceRenderYaw(yaw, this.store.get(this.ownPresence)?.mesh), 0)),
+      this.groups.get(this.ownPresence)?.scale ?? new THREE.Vector3(1, 1, 1));
+    const shapes = boxes.map(b => boxFootprint(b, root));
+    // Ground resolves after this horizontal pass; tentative gravity must not
+    // turn the supporting floor into a kilometres-wide horizontal obstacle.
+    const obstacles = [], feet = Math.max(start.y, position.y) - eyeHeight;
+    const distance = Math.hypot(position.x - start.x, position.z - start.z);
+    const ownRadius = Math.max(...shapes.flatMap(a => a.poly.map(p => Math.hypot(p[0] - start.x, p[1] - start.z)))) + distance;
+    for (const [id, components] of this.store.entities) {
+      if (id === this.ownPresence || id === spec.carId || !this.isActive(components)) continue;
+      const other = (components.collider ?? components.vehicleHull)?.boxes;
+      const group = this.groups.get(id); if (!other?.length || !group) continue;
+      group.updateWorldMatrix(true, false);
+      this.vehicleContactCache ??= new WeakMap();
+      let cached = this.vehicleContactCache.get(group);
+      if (!cached || cached.boxes !== other || cached.matrix.some((v,i) => v !== group.matrixWorld.elements[i])) {
+        const shapes = other.filter(b => b.blocker).map(box => {
+          const b = boxFootprint(box, group.matrixWorld), xs = b.poly.map(p=>p[0]), zs = b.poly.map(p=>p[1]);
+          return {...b, id, minX:Math.min(...xs), maxX:Math.max(...xs), minZ:Math.min(...zs), maxZ:Math.max(...zs)};
+        });
+        cached = {boxes:other, matrix:group.matrixWorld.elements.slice(), shapes};
+        this.vehicleContactCache.set(group, cached);
+      }
+      for (const b of cached.shapes) {
+        if (b.maxY <= feet + 1e-6) continue; // support plane, never a horizontal wall
+        if (start.x + ownRadius < b.minX || start.x - ownRadius > b.maxX
+          || start.z + ownRadius < b.minZ || start.z - ownRadius > b.maxZ) continue;
+        obstacles.push(b);
+      }
+    }
+    const result = moveVehicleFootprints(shapes, obstacles, [position.x-start.x, position.z-start.z], [velocity.x,velocity.z], {stepHeight, feet});
+    position.x = start.x + result.offset[0]; position.z = start.z + result.offset[1];
+    velocity.x = result.velocity[0]; velocity.z = result.velocity[1];
+    return result.contacts;
   }
 
   // blocker boxes (`blocker: true` in a collider) push a body out

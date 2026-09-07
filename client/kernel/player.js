@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { activeCameraRig } from './camera-config.js';
 import { aimYawFromPointer } from './aim.js';
-import { tractionSpeed, validateTraction } from './arcade-traction.js';
+import { tractionSpeed, tractionLateral, validateTraction } from './arcade-traction.js';
 import { heightAt } from './terrain.js';
 import { isTyping } from './dom.js';
 import { r2 } from '../../shared/num.js';
@@ -740,16 +740,25 @@ export class Player {
     // brake progressively, and coast down instead of retaining wheel spin forever.
     if (grounded && spec.arcadeTraction) {
       localForwardVelocity = tractionSpeed(priorForwardVelocity, localForwardVelocity, dt, spec.arcadeTraction, AccelerationInput, BrakeInput > AVP_INPUT_DEADZONE);
+      localLateralVelocity = tractionLateral(localLateralVelocity, dt, spec.arcadeTraction, BrakeInput > AVP_INPUT_DEADZONE);
       if (movementMode === AVP_MOVEMENT_MODE_ANGULAR_VELOCITY && !state.freezeSphereRotationX) state.sphereAngularVelocity = localForwardVelocity / radius;
     }
     // Unity LH yaw -> three RH yaw flip. D must decrease GAIA yaw.
     this.bodyYaw -= state.bodyAngularVelocity * dt;
     this.velocity.copy(forward).multiplyScalar(localForwardVelocity).addScaledVector(right, localLateralVelocity);
+    const contactStart = spec.arcadeContacts ? this.position.clone() : null;
     this.position.addScaledVector(this.velocity, dt);
     this.position.y += this.vy * dt;
-
-    // GAIA seam — PhysX hull collisions become blocker push + into-wall clip.
-    this.view?.resolveBlockers?.(this.position, this.eyeHeight, this.velocity, { stepHeight: DEFAULT_STEP_HEIGHT });
+    if (spec.arcadeContacts && this.view?.resolveVehicleMotion) {
+      const contacts = this.view.resolveVehicleMotion(contactStart, this.position, this.eyeHeight, this.velocity, spec, this.bodyYaw, {stepHeight: DEFAULT_STEP_HEIGHT});
+      if (contacts.length) {
+        state.sphereAngularVelocity = this.velocity.dot(forward) / radius;
+        state.bodyAngularVelocity = 0;
+        for (const contact of contacts) this.onEvent?.('vehicle-impact', {...contact, impulse: contact.speed * (safeBodyMass + sphereMass)});
+      }
+    } else {
+      this.view?.resolveBlockers?.(this.position, this.eyeHeight, this.velocity, { stepHeight: DEFAULT_STEP_HEIGHT });
+    }
 
     // GAIA seam — resolve the sphere/ground contact against GAIA ground data.
     const resolvedGround = this.driveGroundAt(this.position.x, this.position.z, this.position.y);

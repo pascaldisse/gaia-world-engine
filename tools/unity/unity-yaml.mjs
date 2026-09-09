@@ -197,6 +197,12 @@ function parseSeq(lines, i, indent) {
         const key = rest.slice(0, idx).trim();
         const val = rest.slice(idx + 1).trim();
         item[key] = val === '' ? null : parseScalar(val);
+        if (val === '' && i < lines.length && lines[i].indent > indent && lines[i].text.startsWith('-')) {
+          // § Inline item key → nested sequence; keep subsequent same-item map siblings.
+          const [child, ni] = parseSeq(lines, i, lines[i].indent);
+          item[key] = child;
+          i = ni;
+        }
         if (i < lines.length && lines[i].indent > indent) {
           const [tail, ni] = parseMap(lines, i, lines[i].indent);
           if (tail && typeof tail === 'object' && !Array.isArray(tail)) Object.assign(item, tail);

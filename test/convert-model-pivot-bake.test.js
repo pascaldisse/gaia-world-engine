@@ -255,3 +255,19 @@ test('REAL Tram1 (single-mesh DotsCity FBX, 5 traffic parts): proven MeshFilter 
   const f2 = `${f}.again`; fs.copyFileSync(base, f2); keepOnlyModelMeshFileID(f2, fid, table, { strict: true }); assert.ok(fs.readFileSync(f2).equals(once), 'deterministic');
   const w = `${f}.whole`; fs.copyFileSync(base, w); assert.equal(keepOnlyModelMeshFileID(w, '100100000', table, { strict: true }), false); assert.ok(fs.readFileSync(w).equals(fs.readFileSync(base)), 'whole-model request untouched');
 });
+
+// § glTF implicit identity != discarded ancestry. Same synthetic source under both encodings.
+test('identity pivot pseudo-nodes: omitted transforms equal explicit identity, including actual strict narrowing', () => {
+  const kinds=['RotationPivot','RotationPivotInverse','ScalingPivot','ScalingPivotInverse'];
+  const implicit=Object.fromEntries(kinds.map(k=>[k,{}]));
+  const explicit=Object.fromEntries(kinds.map(k=>[k,{matrix:T(0,0,0)}]));
+  assert.deepEqual(unityImportOfFbxChain({chain:implicit}),unityImportOfFbxChain({chain:explicit}));
+  const shape={name:'IdentityGlass',positions:[[1,0,0],[0,1,0],[0,0,1]],normals:[[0,1,0],[0,1,0],[0,1,0]],indices:[0,1,2]};
+  const files=['implicit','explicit'].map(n=>path.join(scratch,`identity-${n}.glb`));
+  buildGlb(files[0],[{...shape,chain:kinds.map(k=>[k,undefined])}]);
+  buildGlb(files[1],[{...shape,chain:kinds.map(k=>[k,T(0,0,0)])}]);
+  for(const f of files)assert.equal(keepOnlyModelMeshFileID(f,unityMeshFileID(shape.name),null,{strict:true}),true);
+  const [a,b]=files.map(readGlb);assert.deepEqual(Array.from(a.f32(0,3)),Array.from(b.f32(0,3)));
+  assert.deepEqual(a.json.extras.gaiaNarrowed,b.json.extras.gaiaNarrowed);
+  for(const f of files){const bytes=fs.readFileSync(f);assert.equal(keepOnlyModelMeshFileID(f,unityMeshFileID(shape.name),null,{strict:true}),false);assert.ok(fs.readFileSync(f).equals(bytes));}
+});

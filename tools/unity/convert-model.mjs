@@ -271,7 +271,8 @@ export function unityImportOfFbxChain({ chain }) {
   const t = (k) => (chain[k] ? nodeTranslation(chain[k]) : [0, 0, 0]);
   const Rp = t('RotationPivot'), Sp = chain.ScalingPivot ? t('ScalingPivot') : Rp, Soff = t('ScalingOffset');
   const refuse = [];
-  for (const k of ['RotationPivot', 'RotationPivotInverse', 'ScalingPivot', 'ScalingPivotInverse', 'RotationOffset', 'Translation', 'Rotation', 'PreRotation', 'PostRotation']) if (chain[k] && !Array.isArray(chain[k].matrix) && !chain[k].translation && !chain[k].rotation) refuse.push(`${k} pseudo-node carries no transform (ancestry stripped by an earlier narrowing)`);
+  // § glTF omitted matrix/TRS = identity (fresh assimp output uses this encoding).
+  // § Already-narrowed markers / legacy node-mesh mismatch remain guarded at the narrowing entry.
   if (!vNear(Sp, Rp, 1e-4)) refuse.push(`ScalingPivot ${Sp} != RotationPivot ${Rp}`);
   if (!vNear(Soff, [0, 0, 0], 1e-6)) refuse.push(`ScalingOffset ${Soff} != 0`);
   for (const g of ['GeometricTranslation', 'GeometricRotation', 'GeometricScaling']) if (chain[g]) refuse.push(`${g} present`);

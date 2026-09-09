@@ -1359,8 +1359,9 @@ function textureRefFromBlock(block, guidMap, unityRoot) {
   return ref;
 }
 
-export function parseUnityMaterial(matFile, guidMap = new Map(), unityRoot = null) {
-  const text = readFileSync(matFile, 'utf8');
+export function parseUnityMaterial(matFile, guidMap = new Map(), unityRoot = null, { readText = file => readFileSync(file, 'utf8') } = {}) {
+  const text = readText(matFile);
+  if (typeof text !== 'string') throw new TypeError('parseUnityMaterial readText must return synchronous UTF-8 text');
   const name = text.match(/^\s*m_Name:\s*(.*)$/m)?.[1]?.trim() || path.basename(matFile, '.mat');
   const shaderGuid = text.match(/^\s*m_Shader:\s*\{[^}]*guid:\s*([0-9a-fA-F]+)[^}]*\}/m)?.[1] ?? null;
   const floats = {};

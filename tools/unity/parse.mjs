@@ -142,7 +142,7 @@ async function resolveAuthoredRoot(guid, guidDb, cache, chain = new Set()) {
   }
   const file = path.isAbsolute(rel) ? rel : path.join(guidDb.unityProjectRoot ?? '.', rel);
   let text;
-  try { text = await fs.readFile(file, 'utf8'); }
+  try { text = await cache.readText(file); }
   catch (err) { throw new Error(`prefab ${rel}: cannot read (${err.code ?? err.message}) -- cannot determine its authored root`); }
   cache.dependencies.set(file, true);
 
@@ -270,8 +270,18 @@ function classKeyForDoc(parsed, className) {
 //              instances rootUnresolved, for a caller that builds an INSPECTABLE
 //              report and fails on its own terms (tools/unity/pipeline.mjs).
 //              Consumers must still refuse such an IR (emit.mjs does).
-export async function parseFile(scenePath, guidDb, { onUnresolvedRoot = 'throw' } = {}) {
-  const text = await fs.readFile(scenePath, 'utf8');
+export async function parseFile(scenePath, guidDb, { onUnresolvedRoot = 'throw', readText } = {}) {
+  if (readText !== undefined && typeof readText !== 'function') throw new TypeError('parseFile readText must be a function');
+  let readerFailed = false, readerFailure;
+  // § One reader authority for main + nested source bytes; caller refusals never become collect-mode warnings.
+  const read = async file => {
+    try {
+      const text = await (readText ? readText(file) : fs.readFile(file, 'utf8'));
+      if (typeof text !== 'string') throw new TypeError('parseFile readText must return UTF-8 text');
+      return text;
+    } catch (error) { if (readText) { readerFailed = true; readerFailure = error; } throw error; }
+  };
+  const text = await read(scenePath);
   const docsRaw = splitUnityDocuments(text);
   const docs = [];
   const byFileID = new Map();
@@ -325,11 +335,11 @@ export async function parseFile(scenePath, guidDb, { onUnresolvedRoot = 'throw' 
   // An unresolvable root is collected and reported together: a scene that would
   // place objects from a root we could not read must fail loudly, listing every
   // offender, instead of silently placing them at identity.
-  const rootCache = { roots: new Map(), dependencies: new Map() };
+  const rootCache = { roots: new Map(), dependencies: new Map(), readText: read };
   const rootFailures = [];
   for (const guid of new Set(instanceDocs.map((doc) => cleanRef(doc.data?.m_SourcePrefab, guidDb)?.guid).filter(Boolean))) {
     try { await resolveAuthoredRoot(guid, guidDb, rootCache); }
-    catch (err) { rootFailures.push(err.message); }
+    catch (err) { if (readerFailed) throw readerFailure; rootFailures.push(err.message); }
   }
   const authoredRoots = rootCache.roots;
   const problems = [...rootFailures];

@@ -38,3 +38,20 @@ test('recursive nested sequences retain outer siblings without consuming followi
     Tag: outer
   - Id: next`)).toEqual({Root:[{Children:[{Members:[0,1],Id:'first'}],Tag:'outer'},{Id:'next'}]});
 });
+test('real asset shape: consecutive `- Key:` items holding ONLY a nested block sequence stay separate (Gang Prefab Data Container.asset)', () => {
+  const value = parse(`MonoBehaviour:
+  _prefabDictionary:
+    keys: 010000000200000003000000040000000500000006000000
+    values:
+    - Prefabs:
+      - {fileID: 1605591932368150452, guid: 7fb3bb30809ec7f44b47e2845d9b3bf2, type: 3}
+    - Prefabs:
+      - {fileID: 1605591932368150452, guid: 81536644356baba41ba496dbe787123d, type: 3}
+    - Prefabs:
+      - {fileID: 1605591932368150452, guid: 2fdf0a789089f4048b3a76098e0d1e97, type: 3}`).MonoBehaviour;
+  expect(value._prefabDictionary.values).toEqual([
+    {Prefabs:[{fileID:'1605591932368150452',guid:'7fb3bb30809ec7f44b47e2845d9b3bf2',type:3}]},
+    {Prefabs:[{fileID:'1605591932368150452',guid:'81536644356baba41ba496dbe787123d',type:3}]},
+    {Prefabs:[{fileID:'1605591932368150452',guid:'2fdf0a789089f4048b3a76098e0d1e97',type:3}]},
+  ]);
+});

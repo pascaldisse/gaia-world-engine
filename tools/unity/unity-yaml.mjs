@@ -196,17 +196,29 @@ function parseSeq(lines, i, indent) {
         item = {};
         const key = rest.slice(0, idx).trim();
         const val = rest.slice(idx + 1).trim();
-        item[key] = val === '' ? null : parseScalar(val);
-        if (val === '' && i < lines.length && lines[i].indent > indent && lines[i].text.startsWith('-')) {
-          // § Inline item key → nested sequence; keep subsequent same-item map siblings.
-          const [child, ni] = parseSeq(lines, i, lines[i].indent);
-          item[key] = child;
+        // Unity writes a `- Key:` item's VALUE (block seq or map) at the same
+        // deeper indent as any sibling keys of that item -- dispatch through
+        // parseBlock (seq-or-map) for the value first, THEN look for siblings
+        // at that same indent. A bare parseMap here (old code) silently ate
+        // block-style nested sequences: it breaks on the first '-' line,
+        // returning {} and leaving `i` stuck, which corrupted the outer walk.
+        if (val === '' && i < lines.length && lines[i].indent > indent) {
+          const childIndent = lines[i].indent;
+          const [childVal, ni] = parseBlock(lines, i, childIndent);
+          item[key] = childVal;
           i = ni;
-        }
-        if (i < lines.length && lines[i].indent > indent) {
-          const [tail, ni] = parseMap(lines, i, lines[i].indent);
-          if (tail && typeof tail === 'object' && !Array.isArray(tail)) Object.assign(item, tail);
-          i = ni;
+          if (i < lines.length && lines[i].indent === childIndent) {
+            const [tail, ni2] = parseMap(lines, i, childIndent);
+            if (tail && typeof tail === 'object' && !Array.isArray(tail)) Object.assign(item, tail);
+            i = ni2;
+          }
+        } else {
+          item[key] = val === '' ? null : parseScalar(val);
+          if (i < lines.length && lines[i].indent > indent) {
+            const [tail, ni] = parseMap(lines, i, lines[i].indent);
+            if (tail && typeof tail === 'object' && !Array.isArray(tail)) Object.assign(item, tail);
+            i = ni;
+          }
         }
       } else item = parseScalar(rest);
     }

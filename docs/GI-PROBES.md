@@ -132,6 +132,66 @@ hard-coded (straight down, white) until this stage — fixed (now reads
 light (`ndotl` always 0 for a vertical face under a vertical sun) and the
 harness would have nothing meaningful to compare on that scene.
 
+## Live-GPU root-cause pass (09-29, parent's own real run)
+Parent ran the harness live (headless Brave, real WebGPU) after fixing a
+readback bug of their own (WGSL pads a stored `vec3` to 4 floats/texel --
+`unpadVec3()`, their commit). Result: where a probe's atlas slot WAS
+written, the value matched the CPU reference within ~0.1% (shading itself
+is correct) -- but MOST probes were never written at all (still exactly
+0), in a scattered/non-contiguous pattern, plus one probe partially
+written (its per-probe sum ≈ 1/16th of the expected value, i.e. ~1 of its
+16 texels landed).
+
+Investigation (CPU-mirroring the kernel's thread -> atlas-index math,
+`test/gi-kernel-index-mirror.test.js`) found and fixed two REAL,
+independently-provable bugs:
+1. Both update kernels wrote/read the atlas via the raw thread-local
+   `texelIndex` instead of the offset-wrapped GLOBAL `probeIdx` --
+   `probeIdx*texelsPerProbe+localTexel`, wrapped `% probeCount`. This is
+   only numerically correct when `probeOffset==0`, which both live-tested
+   scenes' `updateFraction:1` config keeps permanently true -- so this bug
+   provably does NOT explain the observed failure, but it is a real
+   corruption for any `updateFraction<1` config, fixed regardless.
+2. `renderer.compute(kernel)` always dispatched the kernel's baked-in
+   FULL-ATLAS `totalTexels` thread count, regardless of `updateFraction` --
+   the round-robin batching design never actually reduced per-dispatch
+   GPU work. Fixed: `update()` now passes an explicit
+   `probesPerBatch*texelsPerProbe` count to `renderer.compute()` each call.
+
+**Neither bug reproduces the specific observed failure** (both are no-ops
+at `probeOffset==0` with a full-grid dispatch). The failure's own shape
+-- scattered completion, correct-where-touched, one PARTIALLY-completed
+probe -- is the classic signature of a GPU command being cut off mid-
+execution (a per-dispatch driver/browser watchdog / TDR), not a logic bug:
+some workgroups finished before a cutoff, some never started, one was
+mid-flight. `raysPerProbe` (24-128) x nested primary+shadow marches
+(`MAX_MARCH_STEPS=64` each) x 448 GPU threads x dozens of `update()` calls
+is a large amount of compute-shader work, and a HEADLESS browser commonly
+falls back to a software/CPU WebGPU implementation (no real GPU available)
+-- orders of magnitude slower than a discrete GPU, making a per-dispatch
+timeout far more plausible there than on hardware.
+
+**Mitigation applied** (unverified until the next live run): both harness
+scenes cut `raysPerProbe` (96->24, 128->32) and `updateFraction` (1->1/3,
+1->1/5) so bug-fix #2 above now actually shrinks each individual
+`renderer.compute()` dispatch instead of always submitting the full grid --
+reducing any single dispatch's chance of tripping a per-call watchdog (does
+NOT reduce total GPU work across the whole run, which stays roughly
+constant -- full-grid-coverage x convergence-iterations is invariant to
+how it's chunked; only per-dispatch size changes).
+
+**New diagnostic**: `createTouchedBuffer()` (gi-nodes.js) allocates a
+per-probe `uint` "was this slot written by a real dispatch" flag, wired
+through `GIController.resources.touched` and both kernels
+(`createGIUpdateKernel`'s `touched` param). The harness now reads it back
+and reports `written: boolean[]` + `writtenCount` per scene -- this is
+what will directly confirm or refute the TDR/timeout hypothesis on the
+next live run: if `writtenCount < probes` even with the smaller
+raysPerProbe/updateFraction, the cutoff is real and needs a harder fix
+(fewer probes per scene, or splitting each `update()` into more/smaller
+dispatches); if `writtenCount === probes` and results now match, the
+mitigation was sufficient.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

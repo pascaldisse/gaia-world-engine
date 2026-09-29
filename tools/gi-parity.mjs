@@ -128,8 +128,21 @@ export function buildClosedBoxScene({ half = 6, wallThickness = 1 } = {}) {
     triangles: [...outer, ...inner],
     giParams: {
       enabled: true, spacing: half, halfExtentXZ: half, layersY: 1, heightRange: [half * 0.5, half * 1.5],
-      raysPerProbe: 96, irradianceRes: 4, depthRes: 4, voxelCellSize: 1, voxelMaxDist: half * 4,
-      updateFraction: 1, irradianceAlpha: 0.9, depthAlpha: 0.8,
+      // PLACEHOLDER, reduced 09-29 after a live headless-Brave run showed a
+      // scattered incomplete-write pattern (most probes never touched, a
+      // few correct, one partial) consistent with a per-dispatch GPU
+      // timeout/TDR under a software/headless WebGPU backend, not a logic
+      // bug (see docs + the gi-kernel-index-mirror fixes committed
+      // alongside this change, which fix real bugs but don't reproduce
+      // THIS specific failure). Cutting raysPerProbe (96->24) shrinks total
+      // per-thread march-loop work ~4x; updateFraction<1 makes the NEW
+      // per-call explicit dispatch-count fix (gi-controller.js update())
+      // actually shrink each individual compute pass instead of always
+      // dispatching the full grid, reducing any SINGLE dispatch's chance of
+      // tripping a per-call watchdog. Unverified whether this is sufficient
+      // -- Pascal's next live run is the actual test.
+      raysPerProbe: 24, irradianceRes: 4, depthRes: 4, voxelCellSize: 1, voxelMaxDist: half * 4,
+      updateFraction: 1 / 3, irradianceAlpha: 0.9, depthAlpha: 0.8,
       sun: { direction: [0, -1, 0], color: [1, 1, 1], intensity: 1 },
     },
   };
@@ -143,8 +156,10 @@ export function buildOpenPlaneRedWallScene({ half = 10 } = {}) {
     triangles: [...ground, ...wall],
     giParams: {
       enabled: true, spacing: half * 0.5, halfExtentXZ: half, layersY: 1, heightRange: [0.5, 2],
-      raysPerProbe: 128, irradianceRes: 4, depthRes: 4, voxelCellSize: 1, voxelMaxDist: half * 3,
-      updateFraction: 1, irradianceAlpha: 0.9, depthAlpha: 0.8, albedo: 0.5,
+      // PLACEHOLDER, reduced 09-29 -- see buildClosedBoxScene's comment,
+      // same reasoning (raysPerProbe 128->32, updateFraction 1->1/5)
+      raysPerProbe: 32, irradianceRes: 4, depthRes: 4, voxelCellSize: 1, voxelMaxDist: half * 3,
+      updateFraction: 1 / 5, irradianceAlpha: 0.9, depthAlpha: 0.8, albedo: 0.5,
       // travels -X: lights the pillar's +X face and the open ground alike;
       // NOTE this harness compares GPU<->CPU with the SAME flat PLACEHOLDER
       // albedo both sides (the GPU kernel has no per-voxel color in v0, see
@@ -238,6 +253,16 @@ export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
   const buf = await renderer.getArrayBufferAsync(attr);
   const actual = new Float32Array(buf);
 
+  // parity-harness diagnostic (parent review 09-29): per-probe "was this
+  // slot ever actually written by a real dispatch" flag, uint32 scalar
+  // array (no vec3-padding quirk -- that's a vec3-specific std430 layout
+  // rule, a plain array<u32> is tightly packed) -- distinguishes "never
+  // ran" from "legitimately converged to 0" (scene(i)'s closed box has
+  // BOTH kinds of zero in the same result).
+  const touchedAttr = gi.resources.touched.value;
+  const touchedBuf = await renderer.getArrayBufferAsync(touchedAttr);
+  const written = Array.from(new Uint32Array(touchedBuf)).map((v) => v !== 0);
+
   const cfg = extractCpuReferenceInputs(gi);
   const expected = computeCpuReferenceAtlas(cfg);
 
@@ -245,6 +270,8 @@ export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
   cmp.expectedMax = Math.max(...expected); cmp.actualMax = Math.max(...unpadVec3(actual, expected.length));
   const per = arr => { const n = cfg.dims.x * cfg.dims.y * cfg.dims.z, k = arr.length / n; return Array.from({ length: n }, (_, p) => +arr.slice(p * k, (p + 1) * k).reduce((x, y) => x + y, 0).toFixed(3)); };
   cmp.perProbeActual = per(unpadVec3(actual, expected.length)); cmp.perProbeExpected = per(expected); cmp.probePositions = cfg.probePositions ?? null;
+  cmp.written = written;
+  cmp.writtenCount = written.filter(Boolean).length;
   return { scene: name, updates: K, probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
 }
 

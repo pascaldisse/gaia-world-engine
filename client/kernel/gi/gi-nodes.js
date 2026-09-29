@@ -12,7 +12,7 @@
 // called when gi.enabled === true (gi-controller.js gate).
 
 import {
-  Fn, storage, instancedArray, uniform, vec2, vec3, float, int, uint,
+  Fn, storage, instancedArray, uniform, vec2, vec3, vec4, float, int, uint,
   Loop, If, Break, dot, max, normalize, mix, clamp, abs, select,
   floor, length, instanceIndex,
 } from 'three/tsl';
@@ -243,69 +243,87 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
   const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97);
   const probeOffset = uniform(0, 'uint');
   const skyColorU = uniform(vec3(...skyColor));
+  const totalTexelsDefault = atlases.probeCount * irradianceRes * irradianceRes;
+  // BUGFIX (parent live-GPU report 09-29, 3rd pass): WORKGROUP ROUNDING.
+  // renderer.compute(kernel, count) dispatches ceil(count/workgroupSize)
+  // whole workgroups (workgroupSize=64 here) -- for any count that isn't an
+  // exact multiple of 64 (e.g. a round-robin batch of 5 probes x 16 texels
+  // = 80 threads -> 2 workgroups = 128 threads actually launched), the
+  // EXCESS threads (80..127) still decode to VALID (in-range, wrapped)
+  // probeIdx values via the existing atlasIndex wrap fix -- so instead of
+  // being harmlessly out-of-bounds, they silently RE-SHADE AND OVERWRITE a
+  // probe belonging to a DIFFERENT, not-yet-due round-robin batch with
+  // stale/premature data, racing that probe's own proper turn. Guarded by
+  // an explicit validCount uniform the caller sets to match the EXACT
+  // dispatch count it requested (gi-controller.js's update()) -- any
+  // thread beyond that does nothing at all, not even a redundant-but-
+  // otherwise-correct recompute.
+  const validCount = uniform(totalTexelsDefault, 'uint');
 
   const updateFn = Fn(() => {
     const texelIndex = instanceIndex;
-    const texelsPerProbe = int(irradianceRes * irradianceRes);
-    const probeLocal = int(texelIndex).div(texelsPerProbe);
-    const localTexel = int(texelIndex).mod(texelsPerProbe);
-    // BUGFIX (parent live-GPU report 09-29, test/gi-kernel-index-mirror.test.js):
-    // the GLOBAL probe this thread shades is probeOffset+probeLocal, wrapped
-    // to the grid size (a round-robin batch can straddle the end of the
-    // grid) — both the probe's WORLD POSITION *and* the ATLAS SLOT it
-    // writes into must use this wrapped id. Writing via the raw thread-local
-    // `texelIndex` instead (the pre-fix bug) only coincidentally matched
-    // when probeOffset==0 (every update() call in every scene tested before
-    // this fix used updateFraction:1, which keeps offset permanently 0).
-    const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
-    const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
+    If(uint(texelIndex).lessThan(validCount), () => {
+      const texelsPerProbe = int(irradianceRes * irradianceRes);
+      const probeLocal = int(texelIndex).div(texelsPerProbe);
+      const localTexel = int(texelIndex).mod(texelsPerProbe);
+      // BUGFIX (parent live-GPU report 09-29, test/gi-kernel-index-mirror.test.js):
+      // the GLOBAL probe this thread shades is probeOffset+probeLocal, wrapped
+      // to the grid size (a round-robin batch can straddle the end of the
+      // grid) — both the probe's WORLD POSITION *and* the ATLAS SLOT it
+      // writes into must use this wrapped id. Writing via the raw thread-local
+      // `texelIndex` instead (the pre-fix bug) only coincidentally matched
+      // when probeOffset==0 (every update() call in every scene tested before
+      // this fix used updateFraction:1, which keeps offset permanently 0).
+      const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
+      const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
 
-    const tu = localTexel.mod(int(irradianceRes));
-    const tv = localTexel.div(int(irradianceRes));
-    const octu = float(tu).add(0.5).div(irradianceRes).mul(2).sub(1);
-    const octv = float(tv).add(0.5).div(irradianceRes).mul(2).sub(1);
-    const texelDir = decodeOctTSL(vec2(octu, octv));
+      const tu = localTexel.mod(int(irradianceRes));
+      const tv = localTexel.div(int(irradianceRes));
+      const octu = float(tu).add(0.5).div(irradianceRes).mul(2).sub(1);
+      const octv = float(tv).add(0.5).div(irradianceRes).mul(2).sub(1);
+      const texelDir = decodeOctTSL(vec2(octu, octv));
 
-    const ix = probeIdx.mod(int(probeGrid.dims.x));
-    const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
-    const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
-    const probePos = vec3(
-      probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
-      probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
-      probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
-    );
+      const ix = probeIdx.mod(int(probeGrid.dims.x));
+      const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
+      const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
+      const probePos = vec3(
+        probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
+        probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
+        probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
+      );
 
-    const sampleEstimate = vec3(0, 0, 0).toVar();
-    Loop(raysPerProbe, ({ i }) => {
-      const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
-      const { radiance, hit } = traceAndShadeRayTSL({
-        occ, rayOrigin: probePos, rayDir: dir, maxDist,
-        sun, lights, albedo, skyColor: skyColorU, bounceAtlas, bounceGrid,
-      });
-      const w = max(0, dot(texelDir, dir));
-      sampleEstimate.assign(sampleEstimate.add(radiance.mul(w)));
-      // parity-harness diagnostic (parent review 09-29, 2nd pass): count sky
-      // (miss) rays per probe, see createSkyHitsBuffer's doc comment
-      if (skyHits) {
-        If(hit.not(), () => {
-          skyHits.element(probeIdx).assign(skyHits.element(probeIdx).add(uint(1)));
+      const sampleEstimate = vec3(0, 0, 0).toVar();
+      Loop(raysPerProbe, ({ i }) => {
+        const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
+        const { radiance, hit } = traceAndShadeRayTSL({
+          occ, rayOrigin: probePos, rayDir: dir, maxDist,
+          sun, lights, albedo, skyColor: skyColorU, bounceAtlas, bounceGrid,
         });
-      }
-    });
-    const mcNorm = float((4 * Math.PI) / raysPerProbe);
-    const newEstimate = sampleEstimate.mul(mcNorm);
+        const w = max(0, dot(texelDir, dir));
+        sampleEstimate.assign(sampleEstimate.add(radiance.mul(w)));
+        // parity-harness diagnostic (parent review 09-29, 2nd pass): count sky
+        // (miss) rays per probe, see createSkyHitsBuffer's doc comment
+        if (skyHits) {
+          If(hit.not(), () => {
+            skyHits.element(probeIdx).assign(skyHits.element(probeIdx).add(uint(1)));
+          });
+        }
+      });
+      const mcNorm = float((4 * Math.PI) / raysPerProbe);
+      const newEstimate = sampleEstimate.mul(mcNorm);
 
-    const old = irradiance.element(atlasIndex);
-    irradiance.element(atlasIndex).assign(mix(newEstimate, old, alpha));
-    // parity-harness diagnostic (§GI-PROBES.md, parent review): mark this
-    // probe as actually touched by a real dispatch, so a readback of 0 can
-    // be told apart from "never ran" vs "legitimately converged to 0"
-    if (touched) touched.element(probeIdx).assign(uint(1));
+      const old = irradiance.element(atlasIndex);
+      irradiance.element(atlasIndex).assign(mix(newEstimate, old, alpha));
+      // parity-harness diagnostic (§GI-PROBES.md, parent review): mark this
+      // probe as actually touched by a real dispatch, so a readback of 0 can
+      // be told apart from "never ran" vs "legitimately converged to 0"
+      if (touched) touched.element(probeIdx).assign(uint(1));
+    });
   });
 
-  const totalTexels = atlases.probeCount * irradianceRes * irradianceRes;
+  const totalTexels = totalTexelsDefault;
   const kernel = updateFn().compute(totalTexels, [64]);
-  return { kernel, alpha, probeOffset, totalTexels };
+  return { kernel, alpha, probeOffset, validCount, totalTexels };
 }
 
 /** decodeOct: [-1,1]^2 -> unit dir (octahedral.js, mirrored). */
@@ -332,56 +350,61 @@ export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProb
   const alpha = uniform(hysteresis?.depthAlpha ?? 0.9);
   const probeOffset = uniform(0, 'uint');
   const skyColorU = uniform(vec3(...skyColor));
+  const totalTexelsDefault = atlases.probeCount * depthRes * depthRes;
+  // BUGFIX — same workgroup-rounding class of bug as createGIUpdateKernel, see its comment.
+  const validCount = uniform(totalTexelsDefault, 'uint');
 
   const updateFn = Fn(() => {
     const texelIndex = instanceIndex;
-    const texelsPerProbe = int(depthRes * depthRes);
-    const probeLocal = int(texelIndex).div(texelsPerProbe);
-    const localTexel = int(texelIndex).mod(texelsPerProbe);
-    // BUGFIX — same class of bug as createGIUpdateKernel above, see its comment.
-    const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
-    const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
+    If(uint(texelIndex).lessThan(validCount), () => {
+      const texelsPerProbe = int(depthRes * depthRes);
+      const probeLocal = int(texelIndex).div(texelsPerProbe);
+      const localTexel = int(texelIndex).mod(texelsPerProbe);
+      // BUGFIX — same class of bug as createGIUpdateKernel above, see its comment.
+      const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
+      const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
 
-    const tu = localTexel.mod(int(depthRes));
-    const tv = localTexel.div(int(depthRes));
-    const octu = float(tu).add(0.5).div(depthRes).mul(2).sub(1);
-    const octv = float(tv).add(0.5).div(depthRes).mul(2).sub(1);
-    const texelDir = decodeOctTSL(vec2(octu, octv));
+      const tu = localTexel.mod(int(depthRes));
+      const tv = localTexel.div(int(depthRes));
+      const octu = float(tu).add(0.5).div(depthRes).mul(2).sub(1);
+      const octv = float(tv).add(0.5).div(depthRes).mul(2).sub(1);
+      const texelDir = decodeOctTSL(vec2(octu, octv));
 
-    const ix = probeIdx.mod(int(probeGrid.dims.x));
-    const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
-    const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
-    const probePos = vec3(
-      probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
-      probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
-      probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
-    );
+      const ix = probeIdx.mod(int(probeGrid.dims.x));
+      const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
+      const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
+      const probePos = vec3(
+        probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
+        probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
+        probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
+      );
 
-    const wSum = float(0).toVar();
-    const dSum = float(0).toVar();
-    const d2Sum = float(0).toVar();
-    Loop(raysPerProbe, ({ i }) => {
-      const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
-      const { dist } = traceAndShadeRayTSL({
-        occ, rayOrigin: probePos, rayDir: dir, maxDist,
-        sun, lights, albedo, skyColor: skyColorU,
+      const wSum = float(0).toVar();
+      const dSum = float(0).toVar();
+      const d2Sum = float(0).toVar();
+      Loop(raysPerProbe, ({ i }) => {
+        const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
+        const { dist } = traceAndShadeRayTSL({
+          occ, rayOrigin: probePos, rayDir: dir, maxDist,
+          sun, lights, albedo, skyColor: skyColorU,
+        });
+        const w = max(0, dot(texelDir, dir));
+        wSum.assign(wSum.add(w));
+        dSum.assign(dSum.add(w.mul(dist)));
+        d2Sum.assign(d2Sum.add(w.mul(dist).mul(dist)));
       });
-      const w = max(0, dot(texelDir, dir));
-      wSum.assign(wSum.add(w));
-      dSum.assign(dSum.add(w.mul(dist)));
-      d2Sum.assign(d2Sum.add(w.mul(dist).mul(dist)));
-    });
-    const safeW = max(wSum, 1e-5);
-    const newMean = dSum.div(safeW);
-    const newMean2 = d2Sum.div(safeW);
+      const safeW = max(wSum, 1e-5);
+      const newMean = dSum.div(safeW);
+      const newMean2 = d2Sum.div(safeW);
 
-    const old = depth.element(atlasIndex);
-    depth.element(atlasIndex).assign(mix(vec2(newMean, newMean2), old, alpha));
+      const old = depth.element(atlasIndex);
+      depth.element(atlasIndex).assign(mix(vec2(newMean, newMean2), old, alpha));
+    });
   });
 
-  const totalTexels = atlases.probeCount * depthRes * depthRes;
+  const totalTexels = totalTexelsDefault;
   const kernel = updateFn().compute(totalTexels, [64]);
-  return { kernel, alpha, probeOffset, totalTexels };
+  return { kernel, alpha, probeOffset, validCount, totalTexels };
 }
 
 /**
@@ -455,4 +478,44 @@ export function createGIQueryNode({ atlases, worldPositionNode, normalNode, prob
  *  into PhysicalLightingModel's indirectDiffuse for free (see docs). */
 export function wrapAsIrradianceNode(giQueryNode) {
   return new IrradianceNode(giQueryNode);
+}
+
+/**
+ * Per-ray debug trace (parent review 09-29, 3rd pass): one thread per ray
+ * index [0, raysToCapture), for a SINGLE probe (set via the returned
+ * `probeIdxUniform.value` before each dispatch — call this kernel once per
+ * probe of interest, reusing the same small buffer). Records the exact
+ * ray direction + first-hit distance using the SAME probePos formula,
+ * SAME fibonacciDirTSL, and SAME marchOccupancyTSL the real update kernel
+ * uses — a ground truth to diff against a CPU mirror
+ * (fibonacciSphereDirs + marchOccupancy) for the identical probe index.
+ * vec4 (not vec3): sidesteps the vec3 storage-padding quirk entirely by
+ * just using all 4 components on purpose (dir.xyz, hitT).
+ */
+export function createRayDebugKernel({ occ, probeGrid, raysPerProbe, raysToCapture, rotation = null, maxDist = 64 }) {
+  const probeIdxUniform = uniform(0, 'uint');
+  const debugBuffer = instancedArray(raysToCapture, 'vec4');
+  const posDebugBuffer = instancedArray(1, 'vec4');
+
+  const debugFn = Fn(() => {
+    const rayIdx = instanceIndex;
+    const probeIdx = int(probeIdxUniform);
+    const ix = probeIdx.mod(int(probeGrid.dims.x));
+    const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
+    const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
+    const probePos = vec3(
+      probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
+      probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
+      probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
+    );
+    If(rayIdx.equal(0), () => {
+      posDebugBuffer.element(0).assign(vec4(probePos, 0));
+    });
+    const dir = fibonacciDirTSL(rayIdx, raysPerProbe, rotation);
+    const hitT = marchOccupancyTSL(occ, probePos, dir, maxDist);
+    debugBuffer.element(rayIdx).assign(vec4(dir, hitT));
+  });
+
+  const kernel = debugFn().compute(raysToCapture, [Math.min(64, raysToCapture)]);
+  return { kernel, probeIdxUniform, debugBuffer, posDebugBuffer, raysToCapture };
 }

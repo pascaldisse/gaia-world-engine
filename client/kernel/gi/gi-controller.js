@@ -191,8 +191,19 @@ export class GIController {
     // full-atlas default.
     const irrTexelsPerProbe = this.resources.atlases.irradianceRes * this.resources.atlases.irradianceRes;
     const depTexelsPerProbe = this.resources.atlases.depthRes * this.resources.atlases.depthRes;
-    this.renderer?.compute(irr.kernel, probesPerBatch * irrTexelsPerProbe);
-    this.renderer?.compute(dep.kernel, probesPerBatch * depTexelsPerProbe);
+    const irrDispatchCount = probesPerBatch * irrTexelsPerProbe;
+    const depDispatchCount = probesPerBatch * depTexelsPerProbe;
+    // BUGFIX (parent live-GPU report 09-29, 3rd pass): workgroup rounding
+    // (renderer.compute dispatches whole 64-thread workgroups) launches
+    // MORE threads than irrDispatchCount/depDispatchCount whenever those
+    // aren't exact multiples of 64 -- the kernel's own validCount uniform
+    // must match EXACTLY what's being requested here, or the excess
+    // threads silently re-shade and overwrite a probe from a different,
+    // not-yet-due round-robin batch (see gi-nodes.js's own comment).
+    irr.validCount.value = irrDispatchCount;
+    dep.validCount.value = depDispatchCount;
+    this.renderer?.compute(irr.kernel, irrDispatchCount);
+    this.renderer?.compute(dep.kernel, depDispatchCount);
 
     // wire E: a cheap mesh-count check catches meshes added after enable
     // and attaches them without re-scanning already-attached materials

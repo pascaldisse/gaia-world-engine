@@ -240,6 +240,69 @@ voxelize.js. The old `worldToVoxelIndexTSL` clamp-and-read helper is gone.
   shows mismatches, the fix above didn't fully land or there's a further
   bug still to find.
 
+## Live-GPU root-cause pass #3 (09-29, parent rerun after pass #2)
+Occupancy now proven byte-identical GPU==CPU (0/864, 0/800 mismatches) --
+the bounds-check fix (pass #2) landed correctly. Remaining symptom: an
+EXACT half-value split (skyHits 4224 vs 2112, "not race noise" per parent)
+on probe-grid columns 3-4 of scene(ii)'s 5-wide rows, and scene(i) reading
+uniformly 0 for EVERY probe (even ones CPU expects ~77-80 for).
+
+**Hypothesis (a) probe-position-formula mismatch: RULED OUT.**
+`test/gi-ray-debug.test.js` CPU-mirrors the kernel's OWN ix/iy/iz
+decomposition + position formula against `probeIndex()`/`gridToWorld()`
+(used by the CPU reference) for every index of a representative grid --
+exact match, always. Not the cause.
+
+**Root cause (found): WORKGROUP ROUNDING corrupts cross-batch data.**
+`renderer.compute(kernel, count)` dispatches `ceil(count/64)` WHOLE
+workgroups (64 threads each) -- for scene(ii)'s actual round-robin config
+(`probesPerBatch=5` * `texelsPerProbe=16` = 80 requested threads), that's
+128 threads ACTUALLY launched, 48 in excess. Those 48 excess threads don't
+fail harmlessly out-of-bounds: they decode `probeLocal=5,6,7` (beyond this
+batch's own 0..4 range) which the earlier atlasIndex wrap-fix turns into
+VALID probe ids (5,6,7 -- the start of row iz=1, a DIFFERENT, not-yet-due
+round-robin batch) and silently RE-SHADE AND OVERWRITE them with
+premature/stale data, racing that row's own proper turn later in the
+round-robin cycle. `test/gi-workgroup-guard-mirror.test.js` proves this
+numerically (probesPerBatch=5 config -> exactly 48 excess threads -> they
+decode to probe ids belonging to row iz=1 while row iz=0 is dispatching).
+Scene(i)'s probesPerBatch=3 hits the identical class of bug (16 excess
+threads out of a 64-thread single workgroup), touching a rotating
+different probe every batch -- consistent with (though not fully
+re-derived here) a compounding corruption across all 9 probes over many
+convergence iterations, since batches cycle with period 3 and each
+over-dispatch clobbers the NEXT batch's first probe prematurely.
+
+**Fixed**: both `createGIUpdateKernel` and `createGIDepthUpdateKernel` now
+take an explicit `validCount` uniform and wrap their ENTIRE body in
+`If(texelIndex < validCount, ...)` -- any thread beyond the caller's exact
+requested dispatch count does nothing at all (no decode, no shade, no
+write). `GIController.update()` sets `validCount` to the exact
+`probesPerBatch*texelsPerProbe` it requests from `renderer.compute()`,
+every call, for both kernels.
+
+**New diagnostic**: `createRayDebugKernel()` (gi-nodes.js) + its harness
+wiring (`debugProbeRaysCPU`, `compareRayDebug`, `decomposeProbeIndex` in
+tools/gi-parity.mjs) -- for explicit probe indices (scene(i): 0,4,8;
+scene(ii): 0,3,14, the parent's own choice), dispatches ONE real GPU
+compute pass per probe recording each of the first 16 rays' exact
+direction + first-hit distance (vec4 per ray, dir.xyz+hitT, no padding
+quirk) plus the probe's own GPU-computed world position, diffed against a
+pure CPU mirror (`fibonacciSphereDirs`+`marchOccupancy`, the same
+functions gi-reference.js itself uses). Wired into `runScene()`'s
+`cmp.rayDebug` array automatically whenever `debugProbeIndices` is passed.
+
+Ground-truth CPU dump generated locally for the exact requested probes
+(computed via `debugProbeRaysCPU`, no GPU needed) -- see chat reply for the
+full per-ray table; summary: scene(i) probe 0 = 16/16 immediate hits
+(t=0, self-enclosed, matches CPU's own reported 0); probes 4,8 = 0/16 hits
+(pure sky, matches CPU's own reported ~77-80). scene(ii) probes 0, 3, 14 =
+all 0/16 hits in their first 16 rays (pure sky expected for all three --
+none of them are geometrically near the wall), consistent with the
+parent's own "CPU all 80.629" report and giving NO indication of a
+directional/positional asymmetry on the CPU side -- reinforcing that the
+divergence was GPU-execution-side (workgroup rounding), not a formula bug.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

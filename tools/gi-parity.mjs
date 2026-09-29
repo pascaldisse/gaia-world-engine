@@ -20,9 +20,11 @@
 
 import * as THREE from 'three/webgpu';
 import { GIController } from '../client/kernel/gi/gi-controller.js';
+import { createRayDebugKernel } from '../client/kernel/gi/gi-nodes.js';
 import { referenceUpdateProbe } from '../client/kernel/gi/gi-reference.js';
-import { voxelizeTriangles } from '../client/kernel/gi/voxelize.js';
+import { voxelizeTriangles, marchOccupancy } from '../client/kernel/gi/voxelize.js';
 import { probeIndex } from '../client/kernel/gi/probe-grid.js';
+import { fibonacciSphereDirs } from '../client/kernel/gi/irradiance.js';
 
 // ---------------------------------------------------------------- tolerance
 // Documented tolerance (§GI-PROBES.md UNVERIFIED — needs a real GPU frame to
@@ -250,6 +252,59 @@ function computeCpuReferenceAtlas(cfg) {
   return flat;
 }
 
+// ---------------------------------------------------------------- ray debug
+// Per-ray debug trace (parent review 09-29, 3rd pass): for a SPECIFIC
+// probe index, the exact first-N ray directions + first-hit distances,
+// GPU (createRayDebugKernel, real dispatch) vs a pure CPU mirror using the
+// SAME probe-index decomposition, fibonacciSphereDirs, and marchOccupancy.
+
+/** Flat probeIdx -> (ix,iy,iz), the SAME decomposition gi-nodes.js's
+ *  kernels use (ix=probeIdx%dims.x, iy=floor(probeIdx/dims.x)%dims.y,
+ *  iz=floor(probeIdx/(dims.x*dims.y))). Pure, node-testable. */
+export function decomposeProbeIndex(probeIdx, dims) {
+  const ix = probeIdx % dims.x;
+  const iy = Math.floor(probeIdx / dims.x) % dims.y;
+  const iz = Math.floor(probeIdx / (dims.x * dims.y));
+  return { ix, iy, iz };
+}
+
+/**
+ * Pure CPU mirror of createRayDebugKernel: for `probeIdx`, the first
+ * `raysToCapture` fibonacci ray directions (rotation=null, matching the
+ * harness's static ray set throughout) + each ray's marchOccupancy hit
+ * distance against `cfg.occupancy`. Pure, node-testable.
+ */
+export function debugProbeRaysCPU(probeIdx, cfg, raysToCapture) {
+  const { ix, iy, iz } = decomposeProbeIndex(probeIdx, cfg.dims);
+  const probePos = [cfg.origin[0] + ix * cfg.spacing, cfg.origin[1] + iy * cfg.spacing, cfg.origin[2] + iz * cfg.spacing];
+  const dirs = fibonacciSphereDirs(cfg.raysPerProbe, null).slice(0, raysToCapture);
+  return dirs.map((dir) => ({
+    dir,
+    hitT: marchOccupancy(cfg.occupancy, cfg.dims, cfg.voxelOrigin, cfg.cellSize, probePos, dir, cfg.maxDist),
+  }));
+}
+
+/**
+ * Compare a GPU ray-debug readback (Float32Array, 4 floats/ray: dir.xyz +
+ * hitT, vec4 so no storage-padding quirk) against debugProbeRaysCPU's
+ * output for the same probe. Pure, node-testable.
+ */
+export function compareRayDebug(actualVec4Flat, cpuRays, tolerance = { dirTol: 1e-4, distTol: 1e-2 }) {
+  const mismatches = [];
+  for (let i = 0; i < cpuRays.length; i++) {
+    const gx = actualVec4Flat[i * 4], gy = actualVec4Flat[i * 4 + 1], gz = actualVec4Flat[i * 4 + 2], gt = actualVec4Flat[i * 4 + 3];
+    const { dir, hitT } = cpuRays[i];
+    const dirErr = Math.hypot(gx - dir[0], gy - dir[1], gz - dir[2]);
+    const cpuMiss = hitT === null;
+    const gpuMiss = gt < 0;
+    const distOk = cpuMiss || gpuMiss ? cpuMiss === gpuMiss : Math.abs(gt - hitT) <= tolerance.distTol;
+    if (dirErr > tolerance.dirTol || !distOk) {
+      mismatches.push({ ray: i, gpuDir: [gx, gy, gz], cpuDir: dir, gpuHitT: gt, cpuHitT: hitT, cpuMiss, gpuMiss });
+    }
+  }
+  return { pass: mismatches.length === 0, mismatches, total: cpuRays.length };
+}
+
 // ------------------------------------------------------------- browser orchestration
 // Everything below actually touches a WebGPU device. Only called from
 // tools/gi-parity.html in a real browser; importing this module (as the
@@ -261,8 +316,29 @@ async function defaultRendererFactory() {
   return renderer;
 }
 
+/**
+ * Dispatch the real ray-debug kernel for ONE probe, read its vec4 buffer
+ * back, and compare to debugProbeRaysCPU for the same probe. Reuses the
+ * live `gi`'s occ/probeGrid (must already be configure()+setSceneTriangles
+ * +at least one update() so probeGrid.origin is recentered/settled).
+ */
+async function debugProbeRaysGPU(gi, renderer, probeIdx, raysToCapture, giParams, cfg) {
+  const dbg = createRayDebugKernel({
+    occ: gi.resources.occ, probeGrid: gi.resources.probeGrid,
+    raysPerProbe: giParams.raysPerProbe, raysToCapture, maxDist: giParams.voxelMaxDist,
+  });
+  dbg.probeIdxUniform.value = probeIdx;
+  renderer.compute(dbg.kernel);
+  const buf = await renderer.getArrayBufferAsync(dbg.debugBuffer.value);
+  const actual = new Float32Array(buf);
+  const posBuf = await renderer.getArrayBufferAsync(dbg.posDebugBuffer.value);
+  const gpuWorldPos = Array.from(new Float32Array(posBuf)).slice(0, 3);
+  const cpuRays = debugProbeRaysCPU(probeIdx, cfg, raysToCapture);
+  return { probeIdx, gpuWorldPos, ...compareRayDebug(actual, cpuRays) };
+}
+
 /** Run one scene end to end: build it, drive K real updates, read the GPU atlas back, compare to the CPU reference. */
-export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
+export async function runScene(name, sceneBuilder, { rendererFactory, debugProbeIndices = [], raysToCapture = 16 } = {}) {
   const { triangles, giParams } = sceneBuilder();
   const renderer = await (rendererFactory ?? defaultRendererFactory)();
   const scene = new THREE.Scene();
@@ -312,19 +388,35 @@ export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
   cmp.writtenCount = written.filter(Boolean).length;
   cmp.skyHits = skyHits;
   cmp.occupancy = occCompare;
+
+  // per-ray debug trace (parent review 09-29, 3rd pass): only for the
+  // explicitly requested probe indices (cheap, small dispatches) -- world
+  // position + first raysToCapture ray dirs/hitTs, GPU vs CPU mirror
+  if (debugProbeIndices.length > 0) {
+    cmp.rayDebug = [];
+    for (const probeIdx of debugProbeIndices) {
+      const { ix, iy, iz } = decomposeProbeIndex(probeIdx, cfg.dims);
+      const cpuWorldPos = [cfg.origin[0] + ix * cfg.spacing, cfg.origin[1] + iy * cfg.spacing, cfg.origin[2] + iz * cfg.spacing];
+      // eslint-disable-next-line no-await-in-loop -- small, sequential, diagnostic-only
+      const trace = await debugProbeRaysGPU(gi, renderer, probeIdx, raysToCapture, giParams, cfg);
+      const posErr = Math.hypot(...trace.gpuWorldPos.map((v, k) => v - cpuWorldPos[k]));
+      cmp.rayDebug.push({ ...trace, cpuWorldPos, positionsMatch: posErr < 1e-4 });
+    }
+  }
+
   return { scene: name, updates: K, probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
 }
 
 /** Run both scenes. Returns an array of results (see runScene). */
 export async function runAll({ rendererFactory } = {}) {
   const scenes = [
-    ['closed-box-scene-i', buildClosedBoxScene],
-    ['open-plane-wall-scene-ii', buildOpenPlaneRedWallScene],
+    ['closed-box-scene-i', buildClosedBoxScene, [0, 4, 8]], // 3x3 grid: a corner, the center, the opposite corner
+    ['open-plane-wall-scene-ii', buildOpenPlaneRedWallScene, [0, 3, 14]], // parent's explicit choice: an interior, an edge-adjacent, and a wall-adjacent probe
   ];
   const results = [];
-  for (const [name, builder] of scenes) {
+  for (const [name, builder, debugProbeIndices] of scenes) {
     // eslint-disable-next-line no-await-in-loop -- scenes must run sequentially, each owns its own renderer/device
-    results.push(await runScene(name, builder, { rendererFactory }));
+    results.push(await runScene(name, builder, { rendererFactory, debugProbeIndices }));
   }
   return results;
 }

@@ -41,8 +41,74 @@
 - If a scene has no static geometry to voxelize (empty occupancy grid) probes fall back to ambient/hemisphere-only irradiance (rays never hit ⇒ radiance = sky/ambient term, still correct, just flat GI = no bounce contribution).
 - Sun + pooled point lights (explosion flashes) both feed the compute pass's ray-hit shading term (their existing `environment.lightScale`-scaled intensities), so probes react to combat lighting, not just the static sun.
 
+## GPU path status (09-29 follow-up, parent review @838d000 addressed)
+The kernel/query skeleton from the first pass was flagged as non-functional
+(`vec3(0)` ray accumulation, `cornerIdx=i` fake query, no occupancy upload,
+no confirmed per-frame dispatch) — all four fixed:
+- **Ray-march kernel** (`gi-nodes.js: createGIUpdateKernel` /
+  `createGIDepthUpdateKernel`, shared `traceAndShadeRayTSL`): real occupancy
+  storage upload (`createOccupancyStorage`), real spherical-Fibonacci ray
+  gen + rotation, sun N·L + a SECOND occupancy march toward the sun/point
+  light for shadowing, pooled point lights, a single nearest-probe-nearest-
+  texel bounce read (infinite-bounce, PLACEHOLDER: the CPU reference's
+  richer trilinear bounce query was too costly to repeat per-ray on GPU in
+  v0), flat PLACEHOLDER albedo (no per-voxel color storage on the GPU side
+  — the CPU reference's optional per-voxel color is proven correct in
+  `gi-reference.test.js` scene(ii-b) but not ported to GPU yet), sky color
+  on miss, hysteresis-blended atlas write.
+- **Self-shadow bias bug**: found via the CPU reference's scene(i) closed-
+  box test (every hit was self-shadowing because a fixed-step DDA's
+  reported hit position can land up to one step *inside* the voxel it
+  detected, not on its surface) — fixed by advancing the shadow ray's
+  origin one march-step along the shadow ray's OWN direction (not the
+  approximate hit normal) before marching; mirrored identically on the GPU
+  side (`gi-nodes-parity.test.js` asserts the source literally biases along
+  `L`/`Ldir`, not `N`).
+- **Query** (`gi-nodes.js: createGIQueryNode`): real 8 enclosing corners
+  (base cell = floor((p-origin)/spacing), nested 2×2×2 loop), true
+  trilinear weights, `probeDir = normalize(probePos - p)`, octahedral-
+  encoded normal picks the irradiance texel, octahedral-encoded
+  probe→point direction picks the depth texel, Chebyshev visibility per
+  corner. Structurally mirrors `gi-reference.js: referenceQueryIrradiance`
+  op-by-op (proven by `gi-nodes-parity.test.js`, see below).
+- **Controller** (`gi-controller.js`): voxelizes the scene on `configure()`
+  when enabling, `setSceneTriangles()` is the scene-change signal (mutates
+  the EXISTING GPU storage buffer's data in place — the compute graph is
+  built once, not rebuilt, since it closed over the buffer object at
+  construction), `update(dt, cameraPos)` actually calls
+  `renderer.compute(kernel)` for both the irradiance and depth kernels
+  every call, advances a round-robin `probeOffset` so the whole grid cycles
+  over `1/updateFraction` frames, and recenters the probe grid origin
+  toward the camera (X/Z only, per the RTS cascade design above). Still
+  never touches any of this when `enabled:false`.
+
+### Parity proof without a GPU
+A WebGPU `NodeBuilder` needs a browser `document`/device context this repo
+can't construct in `node --test` (confirmed: `new THREE.WebGPURenderer()`
+throws `document is not defined` here). A TSL `Fn(() => {...})` body is
+also NOT expanded into a walkable node graph until `builder.build()` runs
+— confirmed empirically: the callback sits unexecuted at
+`shaderCallNode.shaderNode.jsFunc`. So neither "walk the built graph" nor
+"real WGSL codegen" is available here. The substitute used
+(`gi-nodes-parity.test.js`): `jsFunc.toString()` returns the exact JS
+source text of the (still-unexecuted) closure — static proof that specific
+ops (`traceAndShadeRayTSL`, the sun/point-light shadow bias, the trilinear
+`Loop(2,...)` nesting, `chebyshev`, `octUvToTexelIndexTSL`, the hysteresis
+`mix(...)`) are really wired into the code that WILL run, cross-checked
+against literal regressions of the exact bugs the parent's review
+described (`vec3(0, 0, 0)` accumulation, `cornerIdx = i`,
+`trilinearWeight = float(1)`, N-biased shadow rays). Numeric constants
+(golden angle `FIB_PHI`) are cross-checked bit-exact against
+`irradiance.js`'s own formula.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
-- Voxelization over-occlusion visibility on real geometry (thin diagonal walls).
-- Whether flat-radiance ray hits (no second bounce/material sample) look acceptable vs needing a real one-bounce shade.
-- `raysPerProbe`, `updateFraction`, both hysteresis alphas, Chebyshev epsilon — all PLACEHOLDER, tuned on a real frame later.
+- Whether the kernel/query TSL graphs, once actually built+run on a real
+  device, numerically agree with `gi-reference.js`'s CPU output for the
+  same scene — structural parity (above) is proven, numeric equality is not
+  (and cannot be, without a GPU).
+- Voxelization over-occlusion visibility on real geometry (thin diagonal walls); the same fixed-step DDA coarseness that caused the self-shadow bug may still slightly over/under-shoot thin (1-voxel) walls at grazing angles even after the bias fix.
+- Per-voxel albedo color is proven correct on the CPU reference (scene ii-b) but NOT ported to the GPU kernel (flat PLACEHOLDER albedo only) — a real per-voxel color texture is future work.
+- The GPU bounce term reads a single nearest-probe-nearest-texel value (cost cut vs. the CPU reference's full trilinear bounce query) — correctness on a real multi-bounce scene is unverified.
+- `attachGI()` (gi-material.js) is not yet called by the controller against any real material's `positionWorld`/`normalWorld` nodes — the query graph exists and is tested standalone, but per-material wiring (which material(s) get GI, and feeding their real world-position/normal nodes into `createGIQueryNode`) is the next integration step, not done here.
+- `raysPerProbe`, `updateFraction`, both hysteresis alphas, Chebyshev epsilon, voxel cell size, max march steps — all PLACEHOLDER, tuned on a real frame later.

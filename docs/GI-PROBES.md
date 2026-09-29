@@ -303,6 +303,71 @@ parent's own "CPU all 80.629" report and giving NO indication of a
 directional/positional asymmetry on the CPU side -- reinforcing that the
 divergence was GPU-execution-side (workgroup rounding), not a formula bug.
 
+## Live-GPU root-cause pass #4 (09-29, parent rerun after CPU-oracle fix + pass #3)
+Parent found+fixed their OWN harness bug (commit fc1fffa): `extractCpuReferenceInputs`
+passed the tiny PROBE-grid dims (e.g. scene(i) 3x1x3) as the VOXEL occupancy
+grid's dims into `referenceUpdateProbe`/`marchOccupancy` -- silently making
+the CPU oracle see almost no geometry (everything past a 3x1x3 cube read as
+"outside the grid" per the bounds-check fix from pass #2), so its own
+"expected 77-80 inside the closed box" numbers were themselves wrong. Fixed
+by threading `voxelDims` separately from the probe-grid `dims`.
+
+After that fix + this file's pass-#3 workgroup-guard fix: **rayDebug shows
+6/6 probes, 16/16 rays GPU==CPU for direction, hitT, hit/miss classification,
+AND world position** -- hit/miss parity is proven. Remaining: RADIANCE at
+hit points (CPU returns sun-lit albedo+bounce, GPU reads ~0), plus a small
+0.1% residual on miss-only (pure sky) probes (80.552 vs 80.629).
+
+**Extended the debug tooling exactly as requested**: `traceAndShadeRayTSL`
+(gi-nodes.js) now also returns `shadowT` (sentinel -2 = "no sun configured",
+otherwise the raw shadow march result: -1=unshadowed, >=0=shadow hit
+distance) and `N` (the hit normal) alongside `radiance`/`dist`/`hit` -- no
+logic change, just exposing values that were already computed internally.
+`createRayDebugKernel` now reuses `traceAndShadeRayTSL` directly (previously
+it only ran the primary march) and writes two more vec4 buffers per ray:
+`radianceBuffer` (radiance.xyz + shadowT) and `normalBuffer` (N.xyz + hit
+flag). CPU side: `gi-reference.js`'s `traceProbeRays` was refactored into a
+thin wrapper over a new exported `traceSingleRay()` (single source of
+truth, behaviorally identical -- all 160+ existing tests still pass
+unchanged) that returns the same rich per-ray shape. `tools/gi-parity.mjs`
+gained `compareRayShading()` (radiance/shadowT/N diff, tolerant on radiance
+magnitude, exact on hit/miss classification) wired into `runScene()`
+alongside the existing direction/hitT comparison.
+
+**Own-oracle sanity check while building this** (parent: "check the oracle
+too, don't trust either side"): the debug tool's default `raysToCapture`
+was a fixed 16 out of `raysPerProbe` (24-32) -- but `fibonacciSphereDirs`
+is y-DESCENDING (top pole to bottom pole first), so the first 16 of 24 rays
+are systematically biased toward UPWARD-pointing directions. Under
+scene(i)'s straight-down sun, an upward ray's hit normal (N=-dir) points
+DOWN (away from the sun) almost every time -- so a naive 16-ray debug
+sample of scene(i) shows "all hit rays have zero radiance" for a
+perfectly legitimate reason (N.L<0, no bug) while the OTHER 8
+(uncaptured) rays are the ones actually receiving sun and driving the
+probe's real ~70-80 aggregate value. Fixed: `raysToCapture` now defaults to
+the scene's full `raysPerProbe`, not a fixed prefix, so the next live run's
+ray-level diff is unbiased and won't manufacture a false "radiance always
+0" signal from sampling alone.
+
+**Regression test added** (parent: "pin cfg.voxelDims!=probe dims,
+removal mutant"): `test/gi-parity.test.js` now asserts probe-grid dims and
+voxel-grid dims are never numerically interchangeable for either scene, and
+that swapping them changes `referenceUpdateProbe`'s result materially (not
+a silent no-op) -- pins the exact bug class the parent's fc1fffa fixed.
+
+**Still UNVERIFIED**: whether GPU radiance now actually matches CPU at hit
+points -- the extended per-ray radiance/shadowT/N trace is built and
+CPU-tested, but only a real GPU run can show whether the divergence was in
+the shadow march bias, N sign, or the bounce-probe lookup (the parent's own
+listed suspects); this pass adds the INSTRUMENT, not (yet) a confirmed fix,
+since no CPU-side formula divergence was found -- `traceAndShadeRayTSL` and
+`traceSingleRay` are structurally identical formulas (confirmed by direct
+source comparison), so if GPU still diverges after this, the cause is
+likely GPU-execution-side (float32 precision, a WGSL-specific quirk in
+`select()`/`If()` short-circuiting, or the bounce-atlas read racing an
+unconverged neighbor) rather than a formula-level bug this repo's own
+node --test can catch without a device.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

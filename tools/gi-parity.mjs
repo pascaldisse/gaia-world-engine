@@ -21,8 +21,8 @@
 import * as THREE from 'three/webgpu';
 import { GIController } from '../client/kernel/gi/gi-controller.js';
 import { createRayDebugKernel } from '../client/kernel/gi/gi-nodes.js';
-import { referenceUpdateProbe } from '../client/kernel/gi/gi-reference.js';
-import { voxelizeTriangles, marchOccupancy } from '../client/kernel/gi/voxelize.js';
+import { referenceUpdateProbe, traceSingleRay } from '../client/kernel/gi/gi-reference.js';
+import { voxelizeTriangles } from '../client/kernel/gi/voxelize.js';
 import { probeIndex } from '../client/kernel/gi/probe-grid.js';
 import { fibonacciSphereDirs } from '../client/kernel/gi/irradiance.js';
 
@@ -278,9 +278,13 @@ export function debugProbeRaysCPU(probeIdx, cfg, raysToCapture) {
   const { ix, iy, iz } = decomposeProbeIndex(probeIdx, cfg.dims);
   const probePos = [cfg.origin[0] + ix * cfg.spacing, cfg.origin[1] + iy * cfg.spacing, cfg.origin[2] + iz * cfg.spacing];
   const dirs = fibonacciSphereDirs(cfg.raysPerProbe, null).slice(0, raysToCapture);
-  return dirs.map((dir) => ({
-    dir,
-    hitT: marchOccupancy(cfg.occupancy, cfg.voxelDims ?? cfg.dims, cfg.voxelOrigin, cfg.cellSize, probePos, dir, cfg.maxDist),
+  // traceSingleRay (gi-reference.js) does the FULL shade (shadow march,
+  // N, radiance) -- the single source of truth traceProbeRays itself uses,
+  // so this debug trace can never silently drift from the real baked atlas
+  return dirs.map((dir) => traceSingleRay({
+    probePos, dir,
+    occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.voxelDims ?? cfg.dims, maxDist: cfg.maxDist,
+    sun: cfg.sun, albedo: cfg.albedo, skyColor: cfg.skyColor,
   }));
 }
 
@@ -289,7 +293,7 @@ export function debugProbeRaysCPU(probeIdx, cfg, raysToCapture) {
  * hitT, vec4 so no storage-padding quirk) against debugProbeRaysCPU's
  * output for the same probe. Pure, node-testable.
  */
-export function compareRayDebug(actualVec4Flat, cpuRays, tolerance = { dirTol: 1e-4, distTol: 1e-2 }) {
+export function compareRayDebug(actualVec4Flat, cpuRays, tolerance = { dirTol: 1e-4, distTol: 1e-2, radianceTol: 5e-2 }) {
   const mismatches = [];
   for (let i = 0; i < cpuRays.length; i++) {
     const gx = actualVec4Flat[i * 4], gy = actualVec4Flat[i * 4 + 1], gz = actualVec4Flat[i * 4 + 2], gt = actualVec4Flat[i * 4 + 3];
@@ -300,6 +304,45 @@ export function compareRayDebug(actualVec4Flat, cpuRays, tolerance = { dirTol: 1
     const distOk = cpuMiss || gpuMiss ? cpuMiss === gpuMiss : Math.abs(gt - hitT) <= tolerance.distTol;
     if (dirErr > tolerance.dirTol || !distOk) {
       mismatches.push({ ray: i, gpuDir: [gx, gy, gz], cpuDir: dir, gpuHitT: gt, cpuHitT: hitT, cpuMiss, gpuMiss });
+    }
+  }
+  return { pass: mismatches.length === 0, mismatches, total: cpuRays.length };
+}
+
+/**
+ * Compare the radiance/shadowT/N buffers (parent review 09-29, 4th pass:
+ * "extend rayDebug with per-ray radiance + shadowT + normal"). Pure,
+ * node-testable -- reads the SAME flat vec4 layout createRayDebugKernel
+ * writes (radianceBuffer: radiance.xyz+shadowT; normalBuffer: N.xyz+hit).
+ */
+export function compareRayShading(radianceFlat, normalFlat, cpuRays, tolerance = { radianceTol: 5e-2, normalTol: 1e-4, shadowTTol: 1e-2 }) {
+  const mismatches = [];
+  for (let i = 0; i < cpuRays.length; i++) {
+    const gr = [radianceFlat[i * 4], radianceFlat[i * 4 + 1], radianceFlat[i * 4 + 2]];
+    const gShadowT = radianceFlat[i * 4 + 3];
+    const gN = [normalFlat[i * 4], normalFlat[i * 4 + 1], normalFlat[i * 4 + 2]];
+    const gHit = normalFlat[i * 4 + 3] !== 0;
+    const cpu = cpuRays[i];
+    const radianceErr = Math.hypot(gr[0] - cpu.radiance[0], gr[1] - cpu.radiance[1], gr[2] - cpu.radiance[2]);
+    const radianceMag = Math.hypot(...cpu.radiance) || 1;
+    const radianceOk = radianceErr <= tolerance.radianceTol * Math.max(1, radianceMag);
+    // GPU shadowT encoding: -2 = "no sun configured" sentinel (traceAndShadeRayTSL),
+    // -1 = shadow march found nothing (unshadowed/lit), >=0 = shadow hit distance.
+    let normalOk = true, shadowTOk = true;
+    if (cpu.hit) {
+      const normalErr = Math.hypot(gN[0] - cpu.N[0], gN[1] - cpu.N[1], gN[2] - cpu.N[2]);
+      normalOk = normalErr <= tolerance.normalTol;
+      if (gShadowT !== -2) {
+        const cpuShadowed = cpu.shadowT !== null;
+        const gpuShadowed = gShadowT >= 0;
+        shadowTOk = cpuShadowed === gpuShadowed && (!cpuShadowed || Math.abs(gShadowT - cpu.shadowT) <= tolerance.shadowTTol);
+      }
+    }
+    if (!radianceOk || !normalOk || !shadowTOk || gHit !== cpu.hit) {
+      mismatches.push({
+        ray: i, gpuRadiance: gr, cpuRadiance: cpu.radiance, gpuShadowT: gShadowT, cpuShadowT: cpu.shadowT,
+        gpuN: gN, cpuN: cpu.N, gpuHit: gHit, cpuHit: cpu.hit,
+      });
     }
   }
   return { pass: mismatches.length === 0, mismatches, total: cpuRays.length };
@@ -323,9 +366,11 @@ async function defaultRendererFactory() {
  * +at least one update() so probeGrid.origin is recentered/settled).
  */
 async function debugProbeRaysGPU(gi, renderer, probeIdx, raysToCapture, giParams, cfg) {
+  const { sun } = gi.resources; // the SAME live uniforms the real kernels use
   const dbg = createRayDebugKernel({
     occ: gi.resources.occ, probeGrid: gi.resources.probeGrid,
     raysPerProbe: giParams.raysPerProbe, raysToCapture, maxDist: giParams.voxelMaxDist,
+    sun, albedo: giParams.albedo, skyColor: giParams.skyColor,
   });
   dbg.probeIdxUniform.value = probeIdx;
   renderer.compute(dbg.kernel);
@@ -333,13 +378,30 @@ async function debugProbeRaysGPU(gi, renderer, probeIdx, raysToCapture, giParams
   const actual = new Float32Array(buf);
   const posBuf = await renderer.getArrayBufferAsync(dbg.posDebugBuffer.value);
   const gpuWorldPos = Array.from(new Float32Array(posBuf)).slice(0, 3);
+  const radianceBuf = await renderer.getArrayBufferAsync(dbg.radianceBuffer.value);
+  const normalBuf = await renderer.getArrayBufferAsync(dbg.normalBuffer.value);
   const cpuRays = debugProbeRaysCPU(probeIdx, cfg, raysToCapture);
-  return { probeIdx, gpuWorldPos, ...compareRayDebug(actual, cpuRays) };
+  const dirCmp = compareRayDebug(actual, cpuRays);
+  const shadingCmp = compareRayShading(new Float32Array(radianceBuf), new Float32Array(normalBuf), cpuRays);
+  return {
+    probeIdx, gpuWorldPos,
+    pass: dirCmp.pass && shadingCmp.pass,
+    dirMismatches: dirCmp.mismatches, shadingMismatches: shadingCmp.mismatches,
+    total: dirCmp.total,
+  };
 }
 
 /** Run one scene end to end: build it, drive K real updates, read the GPU atlas back, compare to the CPU reference. */
-export async function runScene(name, sceneBuilder, { rendererFactory, debugProbeIndices = [], raysToCapture = 16 } = {}) {
+export async function runScene(name, sceneBuilder, { rendererFactory, debugProbeIndices = [], raysToCapture = null } = {}) {
   const { triangles, giParams } = sceneBuilder();
+  // default: capture the FULL ray set, not a truncated prefix -- the
+  // fibonacci ordering is y-descending (top pole to bottom pole), so a
+  // short prefix like 16-of-24 is systematically biased toward
+  // upward-facing rays and can show "all zero radiance" for reasons that
+  // have nothing to do with a GPU/CPU divergence (every one of those rays
+  // legitimately has N.dot(sunDir) < 0 under a straight-down sun) --
+  // found while investigating the parent's radiance-mismatch report 09-29.
+  const effectiveRaysToCapture = raysToCapture ?? giParams.raysPerProbe;
   const renderer = await (rendererFactory ?? defaultRendererFactory)();
   const scene = new THREE.Scene();
   const gi = new GIController({ renderer, scene });
@@ -398,7 +460,7 @@ export async function runScene(name, sceneBuilder, { rendererFactory, debugProbe
       const { ix, iy, iz } = decomposeProbeIndex(probeIdx, cfg.dims);
       const cpuWorldPos = [cfg.origin[0] + ix * cfg.spacing, cfg.origin[1] + iy * cfg.spacing, cfg.origin[2] + iz * cfg.spacing];
       // eslint-disable-next-line no-await-in-loop -- small, sequential, diagnostic-only
-      const trace = await debugProbeRaysGPU(gi, renderer, probeIdx, raysToCapture, giParams, cfg);
+      const trace = await debugProbeRaysGPU(gi, renderer, probeIdx, effectiveRaysToCapture, giParams, cfg);
       const posErr = Math.hypot(...trace.gpuWorldPos.map((v, k) => v - cpuWorldPos[k]));
       cmp.rayDebug.push({ ...trace, cpuWorldPos, positionsMatch: posErr < 1e-4 });
     }

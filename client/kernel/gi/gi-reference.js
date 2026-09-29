@@ -57,6 +57,78 @@ function octUvToTexelIndex(u, v, res) {
  *
  * @returns {{irradianceTexels:Array<[number,number,number]>, depthTexels:Array<[number,number]>}}
  */
+/**
+ * Single-ray trace+shade, exposing every intermediate value a GPU-vs-CPU
+ * debug diff needs (§GI-PROBES.md, parent review 09-29 4th pass: "extend
+ * rayDebug with per-ray radiance + shadowT + normal"). `traceProbeRays`
+ * below is a thin wrapper over this — single source of truth, so the debug
+ * export can never silently drift from what actually gets baked into the
+ * atlas.
+ * @returns {{dir, hit:boolean, hitT:number|null, N:[number,number,number]|null, shadowT:number|null, radiance:[number,number,number], dist:number}}
+ */
+export function traceSingleRay({
+  probePos, dir,
+  occupancy, voxelOrigin, cellSize, dims, maxDist,
+  sun = null, pointLights = [],
+  albedo = GI_REFERENCE_DEFAULTS.albedo,
+  surfaceAlbedoColor = null,
+  skyColor = GI_REFERENCE_DEFAULTS.skyColor,
+  sampleAtlasIrradiance = null,
+}) {
+  const hitT = marchOccupancy(occupancy, dims, voxelOrigin, cellSize, probePos, dir, maxDist);
+  if (hitT === null) return { dir, hit: false, hitT: null, N: null, shadowT: null, radiance: skyColor, dist: maxDist };
+
+  const hitPos = add3(probePos, scale3(dir, hitT));
+  // flat-voxel assumption: no true surface normal from the occupancy
+  // grid, so the hit normal is approximated as facing back at the probe
+  // (PLACEHOLDER — correct for a probe looking straight at a wall, wrong
+  // for glancing hits; a real mesh-normal lookup is future work)
+  const N = scale3(dir, -1);
+  // self-shadow bias (§GI-PROBES.md Chebyshev/self-shadow note): the
+  // occupancy march is FIXED-STEP (voxelize.js: step=cellSize*0.5), so
+  // hitPos can land anywhere up to one step INSIDE the voxel that was
+  // detected — not exactly on its surface. Biasing along the approximate
+  // hit normal N is unreliable (N itself is only an approximation, see
+  // above), so instead each shadow ray's origin is advanced one march
+  // STEP along its OWN direction before marching — the same resolution
+  // the occupancy detection itself used to find this hit, so it neither
+  // under- nor over-shoots relative to what "one wall" means to this grid.
+  const SHADOW_STEP = cellSize * 0.5;
+
+  let direct = [0, 0, 0];
+  let sunShadowT = null;
+  if (sun) {
+    const L = normalize3(scale3(sun.direction, -1)); // surface -> sun
+    const ndotl = Math.max(0, dot3(N, L));
+    if (ndotl > 0) {
+      const shadowOrigin = add3(hitPos, scale3(L, SHADOW_STEP));
+      sunShadowT = marchOccupancy(occupancy, dims, voxelOrigin, cellSize, shadowOrigin, L, maxDist);
+      const lit = sunShadowT === null ? 1 : 0;
+      direct = add3(direct, scale3(sun.color, ndotl * (sun.intensity ?? 1) * lit));
+    }
+  }
+  for (const pl of pointLights) {
+    const toLight = sub3(pl.position, hitPos);
+    const dist = length3(toLight);
+    if (dist < 1e-6) continue;
+    const Ldir = scale3(toLight, 1 / dist);
+    const ndotl = Math.max(0, dot3(N, Ldir));
+    if (ndotl <= 0) continue;
+    const atten = 1 / Math.max(dist * dist, 1e-4);
+    const shadowOrigin = add3(hitPos, scale3(Ldir, SHADOW_STEP));
+    const shadowT = marchOccupancy(occupancy, dims, voxelOrigin, cellSize, shadowOrigin, Ldir, Math.max(0, dist - SHADOW_STEP - cellSize * 0.5));
+    const lit = shadowT === null ? 1 : 0;
+    const intensity = (pl.intensity ?? 1) * (pl.lightScale ?? 1);
+    direct = add3(direct, scale3(pl.color, ndotl * intensity * atten * lit));
+  }
+
+  const bounce = sampleAtlasIrradiance ? sampleAtlasIrradiance(hitPos) : [0, 0, 0];
+  const incident = add3(direct, bounce);
+  const tint = surfaceAlbedoColor ? surfaceAlbedoColor(hitPos) : [albedo, albedo, albedo];
+  const radiance = mul3(tint, incident);
+  return { dir, hit: true, hitT, N, shadowT: sunShadowT, radiance, dist: hitT };
+}
+
 export function traceProbeRays({
   probePos,
   occupancy, voxelOrigin, cellSize, dims, maxDist,
@@ -68,59 +140,10 @@ export function traceProbeRays({
   sampleAtlasIrradiance = null, // (worldPos) => [r,g,b] previous-bounce lookup
 }) {
   const rayDirs = fibonacciSphereDirs(raysPerProbe, rotation);
-  return rayDirs.map((dir) => {
-    const hitT = marchOccupancy(occupancy, dims, voxelOrigin, cellSize, probePos, dir, maxDist);
-    if (hitT === null) return { dir, radiance: skyColor, dist: maxDist };
-
-    const hitPos = add3(probePos, scale3(dir, hitT));
-    // flat-voxel assumption: no true surface normal from the occupancy
-    // grid, so the hit normal is approximated as facing back at the probe
-    // (PLACEHOLDER — correct for a probe looking straight at a wall, wrong
-    // for glancing hits; a real mesh-normal lookup is future work)
-    const N = scale3(dir, -1);
-    // self-shadow bias (§GI-PROBES.md Chebyshev/self-shadow note): the
-    // occupancy march is FIXED-STEP (voxelize.js: step=cellSize*0.5), so
-    // hitPos can land anywhere up to one step INSIDE the voxel that was
-    // detected — not exactly on its surface. Biasing along the approximate
-    // hit normal N is unreliable (N itself is only an approximation, see
-    // above), so instead each shadow ray's origin is advanced one march
-    // STEP along its OWN direction before marching — the same resolution
-    // the occupancy detection itself used to find this hit, so it neither
-    // under- nor over-shoots relative to what "one wall" means to this grid.
-    const SHADOW_STEP = cellSize * 0.5;
-
-    let direct = [0, 0, 0];
-    if (sun) {
-      const L = normalize3(scale3(sun.direction, -1)); // surface -> sun
-      const ndotl = Math.max(0, dot3(N, L));
-      if (ndotl > 0) {
-        const shadowOrigin = add3(hitPos, scale3(L, SHADOW_STEP));
-        const shadowT = marchOccupancy(occupancy, dims, voxelOrigin, cellSize, shadowOrigin, L, maxDist);
-        const lit = shadowT === null ? 1 : 0;
-        direct = add3(direct, scale3(sun.color, ndotl * (sun.intensity ?? 1) * lit));
-      }
-    }
-    for (const pl of pointLights) {
-      const toLight = sub3(pl.position, hitPos);
-      const dist = length3(toLight);
-      if (dist < 1e-6) continue;
-      const Ldir = scale3(toLight, 1 / dist);
-      const ndotl = Math.max(0, dot3(N, Ldir));
-      if (ndotl <= 0) continue;
-      const atten = 1 / Math.max(dist * dist, 1e-4);
-      const shadowOrigin = add3(hitPos, scale3(Ldir, SHADOW_STEP));
-      const shadowT = marchOccupancy(occupancy, dims, voxelOrigin, cellSize, shadowOrigin, Ldir, Math.max(0, dist - SHADOW_STEP - cellSize * 0.5));
-      const lit = shadowT === null ? 1 : 0;
-      const intensity = (pl.intensity ?? 1) * (pl.lightScale ?? 1);
-      direct = add3(direct, scale3(pl.color, ndotl * intensity * atten * lit));
-    }
-
-    const bounce = sampleAtlasIrradiance ? sampleAtlasIrradiance(hitPos) : [0, 0, 0];
-    const incident = add3(direct, bounce);
-    const tint = surfaceAlbedoColor ? surfaceAlbedoColor(hitPos) : [albedo, albedo, albedo];
-    const radiance = mul3(tint, incident);
-    return { dir, radiance, dist: hitT };
-  });
+  return rayDirs.map((dir) => traceSingleRay({
+    probePos, dir, occupancy, voxelOrigin, cellSize, dims, maxDist,
+    sun, pointLights, albedo, surfaceAlbedoColor, skyColor, sampleAtlasIrradiance,
+  }));
 }
 
 /**

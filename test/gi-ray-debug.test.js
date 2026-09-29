@@ -9,8 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  decomposeProbeIndex, debugProbeRaysCPU, compareRayDebug,
+  decomposeProbeIndex, debugProbeRaysCPU, compareRayDebug, compareRayShading,
 } from '../tools/gi-parity.mjs';
+import { traceSingleRay } from '../client/kernel/gi/gi-reference.js';
 import { gridToWorld, probeIndex } from '../client/kernel/gi/probe-grid.js';
 import { fibonacciSphereDirs } from '../client/kernel/gi/irradiance.js';
 import { marchOccupancy } from '../client/kernel/gi/voxelize.js';
@@ -152,4 +153,75 @@ test('compareRayDebug: hit vs miss classification (not just distance) is compare
 test('mutant: comparing only hitT numerically (ignoring the null/miss vs negative-number encoding) would silently accept a hit reported as a huge negative distance instead of a proper miss flag', () => {
   const numericOnly = (gpuT, cpuT) => Math.abs(gpuT - (cpuT ?? -1)) < 1; // BUG: -1 sentinel vs an actual small negative distance are conflated numerically for small |t|
   assert.equal(numericOnly(-0.5, null), true, 'a mutant comparator would accept -0.5 as "close enough" to the -1 miss sentinel, even though -0.5 is not how misses are actually encoded');
+});
+
+// --------------------------------------------------------- traceSingleRay + compareRayShading
+// (parent review 09-29, 4th pass: "extend rayDebug with per-ray radiance +
+// shadowT + normal")
+test('traceSingleRay: a miss returns hit:false, N:null, shadowT:null, radiance:skyColor', () => {
+  const cfg = makeCfg();
+  const r = traceSingleRay({ probePos: [0, 0, 0], dir: [1, 0, 0], occupancy: new Uint8Array(cfg.dims.x * cfg.dims.y * cfg.dims.z), voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.dims, maxDist: cfg.maxDist, skyColor: [0.4, 0.5, 0.7] });
+  assert.equal(r.hit, false);
+  assert.equal(r.N, null);
+  assert.equal(r.shadowT, null);
+  assert.deepEqual(r.radiance, [0.4, 0.5, 0.7]);
+});
+
+test('traceSingleRay: a lit hit (N faces the sun, shadow march finds nothing) returns shadowT:null (meaning unshadowed) and nonzero radiance', () => {
+  const cfg = makeCfgWithWall(); // +x face occupied
+  const sun = { direction: [1, 0, 0], color: [1, 1, 1], intensity: 1 }; // travels +x -> lights the wall's -x face... use a probe on the -x side
+  const r = traceSingleRay({
+    probePos: [0, 3, 3], dir: [1, 0, 0], occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.dims, maxDist: cfg.maxDist,
+    sun, albedo: 0.5, skyColor: [0.4, 0.5, 0.7],
+  });
+  assert.equal(r.hit, true);
+  assert.ok(r.N.every((v, i) => Math.abs(v - [-1, 0, 0][i]) < 1e-12), `N should be -dir, got ${r.N}`); // N = -dir (avoid -0 !== 0 under deepEqual)
+  assert.equal(r.shadowT, null, 'unshadowed -> null, not a numeric "no hit" sentinel');
+  assert.ok(r.radiance[0] > 0, `expected positive lit radiance, got ${r.radiance}`);
+});
+
+test('traceSingleRay: a hit whose N faces AWAY from the sun (ndotl<=0) never even enters the shadow march -- shadowT stays null, radiance is legitimately 0', () => {
+  const cfg = makeCfgWithWall();
+  const sun = { direction: [-1, 0, 0], color: [1, 1, 1], intensity: 1 }; // travels -x -> hits the wall's OWN face from the wrong side for this probe
+  const r = traceSingleRay({
+    probePos: [0, 3, 3], dir: [1, 0, 0], occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.dims, maxDist: cfg.maxDist,
+    sun, albedo: 0.5, skyColor: [0.4, 0.5, 0.7],
+  });
+  assert.equal(r.hit, true);
+  assert.deepEqual(r.radiance, [0, 0, 0], 'N faces away from this sun direction -> legitimately unlit, not a bug');
+  assert.equal(r.shadowT, null, 'the shadow branch was never entered (ndotl<=0), so shadowT has no meaning here -- distinct from "entered and found nothing"');
+});
+
+test('compareRayShading: identical GPU/CPU shading passes with zero mismatches', () => {
+  const cfg = makeCfgWithWall();
+  const sun = { direction: [1, 0, 0], color: [1, 1, 1], intensity: 1 };
+  const cpuRays = [0, 1].map(() => traceSingleRay({ probePos: [0, 3, 3], dir: [1, 0, 0], occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.dims, maxDist: cfg.maxDist, sun, albedo: 0.5, skyColor: [0.4, 0.5, 0.7] }));
+  const radianceFlat = new Float32Array(2 * 4);
+  const normalFlat = new Float32Array(2 * 4);
+  cpuRays.forEach((r, i) => {
+    radianceFlat[i * 4] = r.radiance[0]; radianceFlat[i * 4 + 1] = r.radiance[1]; radianceFlat[i * 4 + 2] = r.radiance[2];
+    radianceFlat[i * 4 + 3] = r.shadowT === null ? -1 : r.shadowT;
+    normalFlat[i * 4] = r.N[0]; normalFlat[i * 4 + 1] = r.N[1]; normalFlat[i * 4 + 2] = r.N[2];
+    normalFlat[i * 4 + 3] = 1; // hit
+  });
+  const cmp = compareRayShading(radianceFlat, normalFlat, cpuRays);
+  assert.equal(cmp.pass, true);
+});
+
+test('compareRayShading: a GPU radiance stuck at 0 where CPU expects a lit value is flagged (the exact live symptom, parent 09-29 4th pass)', () => {
+  const cfg = makeCfgWithWall();
+  const sun = { direction: [1, 0, 0], color: [1, 1, 1], intensity: 1 };
+  const cpuRay = traceSingleRay({ probePos: [0, 3, 3], dir: [1, 0, 0], occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.dims, maxDist: cfg.maxDist, sun, albedo: 0.5, skyColor: [0.4, 0.5, 0.7] });
+  assert.ok(cpuRay.radiance[0] > 0, 'sanity: CPU really does expect a lit (nonzero) radiance here');
+  const radianceFlat = new Float32Array([0, 0, 0, -1]); // BUG: GPU reports zero radiance, claims unshadowed
+  const normalFlat = new Float32Array([...cpuRay.N, 1]);
+  const cmp = compareRayShading(radianceFlat, normalFlat, [cpuRay]);
+  assert.equal(cmp.pass, false);
+  assert.equal(cmp.mismatches[0].ray, 0);
+});
+
+test('mutant: a shading comparator that only checks hit/miss + normal (not radiance itself) would MISS the live "radiance stuck at 0" symptom entirely', () => {
+  const hitOnlyCompare = (gpuHit, cpuHit, gpuN, cpuN) => gpuHit === cpuHit && Math.hypot(...gpuN.map((v, i) => v - cpuN[i])) < 1e-4; // BUG: never looks at radiance
+  const gpuN = [-1, 0, 0], cpuN = [-1, 0, 0];
+  assert.equal(hitOnlyCompare(true, true, gpuN, cpuN), true, 'the mutant would pass even though GPU radiance is stuck at 0 and CPU expects a lit value -- exactly the bug this scenario represents');
 });

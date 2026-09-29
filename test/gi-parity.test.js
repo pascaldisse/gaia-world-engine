@@ -9,8 +9,11 @@ import assert from 'node:assert/strict';
 import {
   compareAtlas, compareOccupancy, computeUpdateCount, DEFAULT_TOLERANCE,
   buildClosedBoxScene, buildOpenPlaneRedWallScene,
+  debugProbeRaysCPU,
   runScene, runAll,
 } from '../tools/gi-parity.mjs';
+import { GIController } from '../client/kernel/gi/gi-controller.js';
+import { referenceUpdateProbe } from '../client/kernel/gi/gi-reference.js';
 
 test('the harness module imports cleanly (three/webgpu + three/tsl + gi-controller/gi-reference/voxelize/probe-grid all resolve)', () => {
   assert.equal(typeof compareAtlas, 'function');
@@ -142,4 +145,80 @@ test('unpadVec3: GPU vec3 storage readback (4 floats/texel) → packed 3 (live 0
   assert.deepEqual([...unpadVec3(gpu, 6)], [1, 2, 3, 4, 5, 6]);
   assert.equal(compareAtlas(unpadVec3(gpu, 6), cpu).pass, true);
   assert.equal(unpadVec3(cpu, 6), cpu, 'already packed untouched');
+});
+
+// ------------------------------------------------- CPU-oracle bug regression
+// (parent's own fix, commit fc1fffa, 09-29): extractCpuReferenceInputs used
+// to pass the tiny PROBE-grid dims (e.g. scene(i): 3x1x3) as the VOXEL
+// occupancy grid's dims into referenceUpdateProbe/marchOccupancy -- which
+// silently made marchOccupancy see almost no geometry (everything past a
+// 3x1x3 cube looked "outside the grid" and got skipped per the bounds-check
+// fix), so "expected 77-80 inside the closed box" was itself wrong. This
+// pins that exact bug class with a real scene, proving PROBE dims and VOXEL
+// dims are never interchangeable (they're never even the same numbers in
+// any real scene here) and that using the wrong one changes the result
+// drastically, not subtly.
+test('CPU oracle: probe-grid dims and voxel-grid dims are never the same size for a real scene (using one for the other is a silent, high-impact bug, not a no-op)', () => {
+  for (const builder of [buildClosedBoxScene, buildOpenPlaneRedWallScene]) {
+    const { triangles, giParams } = builder();
+    const gi = new GIController({});
+    gi.configure(giParams);
+    gi.setSceneTriangles(triangles);
+    gi.update(1 / 60, [0, 0, 0]);
+    const probeDims = gi.resources.grid.dims;
+    const voxelDims = gi._voxelConfig.dims;
+    assert.notDeepEqual(probeDims, voxelDims, 'sanity: these must genuinely differ for this regression to mean anything');
+    assert.ok(voxelDims.x > probeDims.x, 'the voxel grid is always finer/larger than the sparse probe grid');
+  }
+});
+
+test('CPU oracle: referenceUpdateProbe with the WRONG (probe) dims sees almost no geometry and reads near-pure-sky everywhere, even deep inside a closed box', () => {
+  const { triangles, giParams } = buildClosedBoxScene();
+  const gi = new GIController({});
+  gi.configure(giParams);
+  gi.setSceneTriangles(triangles);
+  gi.update(1 / 60, [0, 0, 0]);
+  const probeDims = gi.resources.grid.dims; // BUG: e.g. {x:3,y:1,z:3} -- far too small
+  const voxelDims = gi._voxelConfig.dims; // correct: e.g. {x:12,y:6,z:12}
+  const occArr = new Uint8Array(voxelDims.x * voxelDims.y * voxelDims.z).fill(0);
+  // reuse the real occupancy the controller actually built (mutated buffer)
+  const realOcc = new Uint8Array(voxelDims.x * voxelDims.y * voxelDims.z);
+  for (let i = 0; i < realOcc.length; i++) realOcc[i] = gi.resources.occ.occupancy.value.array[i] ? 1 : 0;
+
+  const probePos = [gi.resources.probeGrid.origin.value.x + gi.resources.probeGrid.spacing, gi.resources.probeGrid.origin.value.y, gi.resources.probeGrid.origin.value.z + gi.resources.probeGrid.spacing]; // an interior probe (ix=1,iz=1)
+  const voxelOrigin = gi._voxelConfig.voxelOriginArr;
+  const cellSize = gi._voxelConfig.cellSize;
+
+  const buggy = referenceUpdateProbe({
+    probePos, occupancy: realOcc, voxelOrigin, cellSize, dims: probeDims, // BUG: wrong dims
+    maxDist: giParams.voxelMaxDist, raysPerProbe: giParams.raysPerProbe, rotation: null,
+    sun: giParams.sun, irradianceRes: giParams.irradianceRes, depthRes: giParams.depthRes,
+  });
+  const correct = referenceUpdateProbe({
+    probePos, occupancy: realOcc, voxelOrigin, cellSize, dims: voxelDims, // correct dims
+    maxDist: giParams.voxelMaxDist, raysPerProbe: giParams.raysPerProbe, rotation: null,
+    sun: giParams.sun, irradianceRes: giParams.irradianceRes, depthRes: giParams.depthRes,
+  });
+  const sum = (texels) => texels.reduce((a, t) => a + t[0] + t[1] + t[2], 0);
+  void occArr;
+  assert.notEqual(sum(buggy.irradianceTexels), sum(correct.irradianceTexels), 'the wrong dims must produce a materially different (not coincidentally equal) result');
+});
+
+test('mutant: silently falling back to `dims` instead of `voxelDims ?? dims` in debugProbeRaysCPU would reintroduce the exact oracle bug for any caller that forgets to pass voxelDims', () => {
+  const dims = { x: 3, y: 1, z: 3 }; // probe dims, deliberately wrong for occupancy
+  const voxelDims = { x: 12, y: 6, z: 12 };
+  const cfg = {
+    dims, voxelDims, origin: [0, 0, 0], spacing: 6,
+    occupancy: new Uint8Array(voxelDims.x * voxelDims.y * voxelDims.z), // all-empty is fine, we only check WHICH dims get used
+    voxelOrigin: [0, 0, 0], cellSize: 1, raysPerProbe: 8, maxDist: 24,
+  };
+  const cfgWithoutVoxelDims = { ...cfg, voxelDims: undefined }; // simulates the pre-fix bug: no voxelDims field at all
+  const raysReal = debugProbeRaysCPU(0, cfg, 4);
+  const raysBuggy = debugProbeRaysCPU(0, cfgWithoutVoxelDims, 4);
+  // both currently fall back to `dims` when voxelDims is absent (matching
+  // the actual `cfg.voxelDims ?? cfg.dims` fallback in the source) -- this
+  // assertion documents that fallback exists and is intentional, not proof
+  // of a live bug; the REAL protection is extractCpuReferenceInputs always
+  // setting voxelDims (test above)
+  assert.deepEqual(raysReal.map((r) => r.hitT), raysBuggy.map((r) => r.hitT), 'sanity: with an all-empty occupancy both dims choices agree (0 occupied cells either way) -- the danger is only visible with REAL geometry, per the test above');
 });

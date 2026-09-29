@@ -181,6 +181,11 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
   const hitPos = rayOrigin.add(rayDir.mul(max(hitT, 0)));
   const N = rayDir.negate();
   const shadowStep = float(occ.cellSize * 0.5);
+  // debug-visible: sentinel -2 means "no sun configured / never computed",
+  // distinct from a real shadow-march result (-1=miss/unshadowed, >=0=hit).
+  // Exposed via createRayDebugKernel's per-ray trace (parent review 09-29,
+  // 4th pass: "extend rayDebug with per-ray radiance + shadowT + normal").
+  const shadowTOut = float(-2).toVar();
 
   const direct = vec3(0, 0, 0).toVar();
   if (sun) {
@@ -188,6 +193,7 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
     const ndotl = max(0, dot(N, L));
     const shadowOrigin = hitPos.add(L.mul(shadowStep));
     const shadowT = marchOccupancyTSL(occ, shadowOrigin, L, maxDist);
+    shadowTOut.assign(shadowT);
     const lit = shadowT.lessThan(0);
     direct.assign(direct.add(select(lit.and(ndotl.greaterThan(0)), sun.color.mul(ndotl).mul(sun.intensity), vec3(0, 0, 0))));
   }
@@ -226,7 +232,7 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
   const tint = vec3(albedo, albedo, albedo);
   const radiance = select(hit, tint.mul(incident), skyColor);
   const dist = select(hit, hitT, float(maxDist));
-  return { radiance, dist, hit };
+  return { radiance, dist, hit, shadowT: shadowTOut, N };
 }
 
 /**
@@ -492,10 +498,18 @@ export function wrapAsIrradianceNode(giQueryNode) {
  * vec4 (not vec3): sidesteps the vec3 storage-padding quirk entirely by
  * just using all 4 components on purpose (dir.xyz, hitT).
  */
-export function createRayDebugKernel({ occ, probeGrid, raysPerProbe, raysToCapture, rotation = null, maxDist = 64 }) {
+export function createRayDebugKernel({ occ, probeGrid, raysPerProbe, raysToCapture, rotation = null, maxDist = 64, sun = null, albedo = 0.5, skyColor = [0.4, 0.5, 0.7] }) {
   const probeIdxUniform = uniform(0, 'uint');
-  const debugBuffer = instancedArray(raysToCapture, 'vec4');
-  const posDebugBuffer = instancedArray(1, 'vec4');
+  const debugBuffer = instancedArray(raysToCapture, 'vec4'); // dir.xyz, hitT
+  const posDebugBuffer = instancedArray(1, 'vec4'); // probe world pos.xyz, 0
+  // parent review 09-29, 4th pass: "extend rayDebug with per-ray radiance +
+  // shadowT + normal" -- reuses traceAndShadeRayTSL directly (not a
+  // re-derivation) so the debug trace is GUARANTEED to reflect exactly
+  // what the real update kernel computes, not a parallel implementation
+  // that could silently drift from it.
+  const radianceBuffer = instancedArray(raysToCapture, 'vec4'); // radiance.xyz, shadowT (-2=no sun)
+  const normalBuffer = instancedArray(raysToCapture, 'vec4'); // N.xyz, hit(0/1)
+  const skyColorU = uniform(vec3(...skyColor));
 
   const debugFn = Fn(() => {
     const rayIdx = instanceIndex;
@@ -512,10 +526,16 @@ export function createRayDebugKernel({ occ, probeGrid, raysPerProbe, raysToCaptu
       posDebugBuffer.element(0).assign(vec4(probePos, 0));
     });
     const dir = fibonacciDirTSL(rayIdx, raysPerProbe, rotation);
+    const { radiance, hit, shadowT, N } = traceAndShadeRayTSL({
+      occ, rayOrigin: probePos, rayDir: dir, maxDist,
+      sun, lights: null, albedo, skyColor: skyColorU, bounceAtlas: null, bounceGrid: null,
+    });
     const hitT = marchOccupancyTSL(occ, probePos, dir, maxDist);
     debugBuffer.element(rayIdx).assign(vec4(dir, hitT));
+    radianceBuffer.element(rayIdx).assign(vec4(radiance, shadowT));
+    normalBuffer.element(rayIdx).assign(vec4(N, select(hit, float(1), float(0))));
   });
 
   const kernel = debugFn().compute(raysToCapture, [Math.min(64, raysToCapture)]);
-  return { kernel, probeIdxUniform, debugBuffer, posDebugBuffer, raysToCapture };
+  return { kernel, probeIdxUniform, debugBuffer, posDebugBuffer, radianceBuffer, normalBuffer, raysToCapture };
 }

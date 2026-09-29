@@ -469,6 +469,45 @@ export async function runScene(name, sceneBuilder, { rendererFactory, debugProbe
   return { scene: name, updates: K, probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
 }
 
+/**
+ * Isolate the ATLAS KERNEL's raw per-dispatch integration from hysteresis
+ * convergence and round-robin batching (parent review 09-29, 5th pass:
+ * "GPU per-probe single-update irradiance (1 update, hysteresis 0) vs CPU
+ * same"). Forces `irradianceAlpha:0` (mix(new,old,0)=new exactly, no
+ * blend-in of the fresh-zero initial atlas) and `updateFraction:1` (one
+ * update() call covers the WHOLE grid, no round-robin subset/probeOffset
+ * complexity) so a single `gi.update()` call's GPU atlas readback is
+ * DIRECTLY comparable to `referenceUpdateProbe`'s raw CPU result (which
+ * has no hysteresis concept at all -- every call is already a fresh
+ * integral). If this still diverges, the bug is in the kernel's raw
+ * Loop+weighted-sum+MC-normalize accumulation itself; if it MATCHES, the
+ * bug is specific to the multi-iteration hysteresis/round-robin path.
+ */
+export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory } = {}) {
+  const { triangles, giParams: baseParams } = sceneBuilder();
+  const giParams = { ...baseParams, irradianceAlpha: 0, depthAlpha: 0, updateFraction: 1 };
+  const renderer = await (rendererFactory ?? defaultRendererFactory)();
+  const scene = new THREE.Scene();
+  const gi = new GIController({ renderer, scene });
+  gi.configure(giParams);
+  gi.setSceneTriangles(triangles);
+
+  gi.update(1 / 60, [0, 0, 0]); // EXACTLY one update -- no convergence loop
+
+  const attr = gi.resources.atlases.irradiance.value;
+  const buf = await renderer.getArrayBufferAsync(attr);
+  const actual = new Float32Array(buf);
+
+  const cfg = extractCpuReferenceInputs(gi);
+  const expected = computeCpuReferenceAtlas(cfg); // no hysteresis concept on the CPU side -- already the raw single-pass integral
+
+  const cmp = compareAtlas(unpadVec3(actual, expected.length), expected);
+  const per = (arr) => { const n = cfg.dims.x * cfg.dims.y * cfg.dims.z, k = arr.length / n; return Array.from({ length: n }, (_, p) => +arr.slice(p * k, (p + 1) * k).reduce((x, y) => x + y, 0).toFixed(3)); };
+  cmp.perProbeActual = per(unpadVec3(actual, expected.length));
+  cmp.perProbeExpected = per(expected);
+  return { scene: name, updates: 1, hysteresis: 'disabled (alpha=0)', probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
+}
+
 /** Run both scenes. Returns an array of results (see runScene). */
 export async function runAll({ rendererFactory } = {}) {
   const scenes = [
@@ -480,5 +519,10 @@ export async function runAll({ rendererFactory } = {}) {
     // eslint-disable-next-line no-await-in-loop -- scenes must run sequentially, each owns its own renderer/device
     results.push(await runScene(name, builder, { rendererFactory, debugProbeIndices }));
   }
-  return results;
+  const singleUpdateResults = [];
+  for (const [name, builder] of scenes) {
+    // eslint-disable-next-line no-await-in-loop
+    singleUpdateResults.push(await runSingleUpdateCheck(name, builder, { rendererFactory }));
+  }
+  return { scenes: results, singleUpdate: singleUpdateResults };
 }

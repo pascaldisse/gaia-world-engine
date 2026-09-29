@@ -368,6 +368,47 @@ likely GPU-execution-side (float32 precision, a WGSL-specific quirk in
 unconverged neighbor) rather than a formula-level bug this repo's own
 node --test can catch without a device.
 
+## Live-GPU root-cause pass #5 (09-29, parent rerun after pass #4)
+Per-ray shading parity now FULLY proven live: radiance GPU==CPU on every ray
+for all 6 debug probes (0 diffs, full ray sets), N equal, only a cosmetic
+shadowT encoding difference (GPU 0 vs CPU null when N.L<=0 -- both mean
+"never entered the shadow branch", just encoded differently; harmless).
+
+Remaining: the FULL BAKED ATLAS still diverges (scene(i) all-0 actual vs a
+varied CPU expectation). Parent's new hypothesis: "the CPU oracle's
+integration path doesn't equal a sum of its own traceSingleRay outputs" for
+scene(i) probe 4 (their read: probe 4 is dead-center inside a sealed box,
+every ray should hit with radiance 0, so the atlas should read 0 -- but the
+CPU oracle says 53.58).
+
+**Investigated directly** (this repo, real scene data, `test/gi-integration-mirror.test.js`):
+1. `referenceUpdateProbe`'s texels are EXACTLY `integrateProbeIrradiance(texelDir, traceProbeRays(...))` for every one of the 16 texels -- verified by direct equality, not approximation. There is no hidden extra step or different ray set between the per-ray debug path and the atlas path; they trace identical rays through identical functions (`traceSingleRay` is the single source of truth for both, since the pass-#4 refactor).
+2. The apparent "doesn't equal a sum of the rays" observation is comparing two DIFFERENT, both-correct aggregations: a texel value is a *cosine-weighted Monte-Carlo integral along one specific direction*, not a raw sum of all 24 rays' radiance -- these are never expected to be numerically equal, even with zero bugs anywhere (documented + pinned with a mutant test).
+3. **Scene(i) probe 4 is NOT physically sealed.** `heightRange` (e.g. `[3,9]` for `half=6`) is narrower than the box mesh's own full height (`[0, 2*half]` = `[0,12]`) -- the box's floor and ceiling triangles fall ENTIRELY outside the voxel grid's Y window and get skip-checked away by voxelize.js's own "fully outside" rule (the exact rule this project's own bugfix history added). Only the 4 side walls survive, clipped to a 6-unit-tall slice. A ray fired straight up or down from the center travels only 3 units before exiting the GRID (not the mesh) and correctly reads sky per the pass-#2 bounds-check-and-skip fix. Directly confirmed: 8 of 24 rays from probe 4 miss (sky) in this repo's own re-derivation. **The CPU oracle's nonzero value is physically correct for this scene's geometry/grid config, not a bug.**
+
+Given the integration math is proven internally consistent and the ray-level
+shading is proven GPU==CPU, the gap must be specific to the FULL ATLAS
+KERNEL's accumulation across its `Loop(raysPerProbe,...)` + hysteresis path
+-- something the simpler ray-debug kernel (which just records raw per-ray
+values, no accumulation) doesn't exercise.
+
+**New diagnostic added** (parent's exact request): `runSingleUpdateCheck()`
+(tools/gi-parity.mjs) isolates the kernel's RAW per-dispatch integration
+from hysteresis convergence and round-robin batching: forces
+`irradianceAlpha:0` (so `mix(new,old,0)=new` exactly -- no blend-in of the
+fresh-zero initial atlas) and `updateFraction:1` (one `update()` call
+covers the whole grid, no probeOffset/round-robin complexity), runs
+EXACTLY one `gi.update()`, and diffs the GPU atlas readback directly
+against `referenceUpdateProbe`'s raw CPU result (which has no hysteresis
+concept at all -- every CPU call already IS the fresh single-pass integral,
+so no special-casing needed on that side). `runAll()` now returns
+`{ scenes: [...], singleUpdate: [...] }` (was a flat array -- `tools/gi-parity.html`'s
+render() updated to match). **If this single-update check still diverges,
+the bug is in the kernel's raw Loop+weighted-sum+MC-normalize accumulation
+itself; if it matches, the bug is specific to the multi-iteration
+hysteresis/round-robin path** (e.g. the validCount guard added in pass #3,
+or a probeOffset/atlasIndex interaction across many calls).
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

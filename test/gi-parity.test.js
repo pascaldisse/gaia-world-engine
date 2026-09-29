@@ -10,7 +10,7 @@ import {
   compareAtlas, compareOccupancy, computeUpdateCount, DEFAULT_TOLERANCE,
   buildClosedBoxScene, buildOpenPlaneRedWallScene,
   debugProbeRaysCPU,
-  runScene, runAll,
+  runScene, runAll, runSingleUpdateCheck,
 } from '../tools/gi-parity.mjs';
 import { GIController } from '../client/kernel/gi/gi-controller.js';
 import { referenceUpdateProbe } from '../client/kernel/gi/gi-reference.js';
@@ -20,6 +20,7 @@ test('the harness module imports cleanly (three/webgpu + three/tsl + gi-controll
   assert.equal(typeof computeUpdateCount, 'function');
   assert.equal(typeof runScene, 'function');
   assert.equal(typeof runAll, 'function');
+  assert.equal(typeof runSingleUpdateCheck, 'function');
   // importing must NOT have constructed a renderer (no `document` in node)
   // -- if it had, this test file itself would already have thrown on import
 });

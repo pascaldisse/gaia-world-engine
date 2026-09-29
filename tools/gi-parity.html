@@ -54,7 +54,11 @@
   const h1 = document.querySelector('h1');
 
   function render(results) {
-    const allPass = results.every((r) => r.pass);
+    // runAll() returns { scenes: [...], singleUpdate: [...] } (09-29, 5th
+    // pass: single-update/hysteresis-0 diagnostic added alongside the
+    // full-convergence scene runs)
+    const allResults = [...(results.scenes ?? []), ...(results.singleUpdate ?? [])];
+    const allPass = allResults.length > 0 && allResults.every((r) => r.pass);
     h1.textContent = allPass ? 'GI probe parity: ALL PASS' : 'GI probe parity: FAILURES';
     h1.className = allPass ? 'pass' : 'fail';
     const pre = document.createElement('pre');

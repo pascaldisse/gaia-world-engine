@@ -697,6 +697,7 @@ export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory
       cmp.instrumented.push({
         probeIdx, gpuProbeIdxAsReadBack, gpuProbePos, cpuProbePos: cpuTrace.probePos, positionMatch: posErr < 1e-4,
         gpuFinalWritten,
+        gpuSteps, cpuSteps: cpuTrace.steps,
         ...stepCmp,
       });
     }

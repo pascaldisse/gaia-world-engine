@@ -20,7 +20,7 @@
 
 import * as THREE from 'three/webgpu';
 import { GIController } from '../client/kernel/gi/gi-controller.js';
-import { createRayDebugKernel } from '../client/kernel/gi/gi-nodes.js';
+import { createRayDebugKernel, computeDebugLayout } from '../client/kernel/gi/gi-nodes.js';
 import { referenceUpdateProbe, traceSingleRay } from '../client/kernel/gi/gi-reference.js';
 import { voxelizeTriangles } from '../client/kernel/gi/voxelize.js';
 import { probeIndex } from '../client/kernel/gi/probe-grid.js';
@@ -360,6 +360,58 @@ async function defaultRendererFactory() {
   return renderer;
 }
 
+// -------------------------------------------------------- GPU error capture
+// (parent review 09-29, 8th pass: "Zeros must never again be silently
+// reported as data." The pass-#7 instrumentation kernel failed
+// BindGroupLayout validation and every dispatch was silently dropped --
+// NO thrown JS error, only visible via the browser's Log domain, which
+// the harness itself never inspected. This wraps every scene/check in a
+// WebGPU validation error scope PLUS a persistent 'uncapturederror'
+// listener on the real GPUDevice, so any validation/device error surfaces
+// as `result.gpuErrors` and forces `result.pass = false` with the actual
+// error message, instead of a silently-wrong all-zero readback looking
+// like valid (if surprising) data.
+
+/**
+ * Run `fn()` inside a WebGPU validation error scope, with a persistent
+ * `uncapturederror` listener attached to the renderer's real GPUDevice for
+ * the duration. Gracefully no-ops (still runs `fn`, just can't detect
+ * device-level errors) if `renderer.backend.device` isn't available --
+ * e.g. a mock/fake renderer used only by node --test, which never reaches
+ * this code path via runScene/runSingleUpdateCheck anyway (those always
+ * construct a real renderer).
+ */
+export async function withGpuValidation(renderer, fn) {
+  const device = renderer?.backend?.device;
+  const uncaptured = [];
+  let handler = null;
+  if (device && typeof device.addEventListener === 'function') {
+    handler = (event) => uncaptured.push({ kind: 'uncapturederror', message: event.error?.message ?? String(event.error) });
+    device.addEventListener('uncapturederror', handler);
+  }
+  if (device?.pushErrorScope) device.pushErrorScope('validation');
+
+  let result;
+  let thrown = null;
+  try {
+    result = await fn();
+  } catch (err) {
+    thrown = err;
+  }
+
+  let scopeError = null;
+  if (device?.popErrorScope) {
+    scopeError = await device.popErrorScope();
+  }
+  if (handler) device.removeEventListener('uncapturederror', handler);
+
+  const errors = [...uncaptured];
+  if (scopeError) errors.push({ kind: 'validation', message: scopeError.message ?? String(scopeError) });
+  if (thrown) errors.push({ kind: 'thrown', message: String(thrown?.message ?? thrown) });
+
+  return { result, errors, thrown };
+}
+
 /**
  * Dispatch the real ray-debug kernel for ONE probe, read its vec4 buffer
  * back, and compare to debugProbeRaysCPU for the same probe. Reuses the
@@ -404,6 +456,16 @@ export async function runScene(name, sceneBuilder, { rendererFactory, debugProbe
   // found while investigating the parent's radiance-mismatch report 09-29.
   const effectiveRaysToCapture = raysToCapture ?? giParams.raysPerProbe;
   const renderer = await (rendererFactory ?? defaultRendererFactory)();
+  const { result: sceneResult, errors: gpuErrors, thrown } = await withGpuValidation(renderer, () => runSceneBody());
+  if (thrown) throw thrown; // a genuinely thrown JS error is not swallowed into gpuErrors -- it still fails loudly
+  const hasGpuErrors = gpuErrors.length > 0;
+  return {
+    ...(sceneResult ?? { scene: name }),
+    gpuErrors,
+    pass: hasGpuErrors ? false : sceneResult?.pass,
+  };
+
+  async function runSceneBody() {
   const scene = new THREE.Scene();
   const gi = new GIController({ renderer, scene });
   gi.configure(giParams);
@@ -468,6 +530,7 @@ export async function runScene(name, sceneBuilder, { rendererFactory, debugProbe
   }
 
   return { scene: name, updates: K, probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
+  }
 }
 
 /**
@@ -488,8 +551,9 @@ export async function runScene(name, sceneBuilder, { rendererFactory, debugProbe
 // parent review 09-29, 7th pass: "stop inferring from sibling kernels,
 // instrument the REAL update kernel". Pure CPU half first (node-testable);
 // the GPU half (runSingleUpdateCheck's debugProbeIndices option, below)
-// reads back createGIUpdateKernel's own debugDirHit/debugRadianceWeight/
-// debugRunningSum/debugFinal/probeMapBuffer and diffs them against this.
+// reads back createGIUpdateKernel's own PACKED debugBuffer (one flat float
+// storage buffer, gi-nodes.js's computeDebugLayout() -- see its own doc
+// for the byte layout) and diffs it against this.
 
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
@@ -561,6 +625,16 @@ export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory
   const { triangles, giParams: baseParams } = sceneBuilder();
   const giParams = { ...baseParams, irradianceAlpha: 0, depthAlpha: 0, updateFraction: 1 };
   const renderer = await (rendererFactory ?? defaultRendererFactory)();
+  const { result: checkResult, errors: gpuErrors, thrown } = await withGpuValidation(renderer, () => runCheckBody());
+  if (thrown) throw thrown;
+  const hasGpuErrors = gpuErrors.length > 0;
+  return {
+    ...(checkResult ?? { scene: name }),
+    gpuErrors,
+    pass: hasGpuErrors ? false : checkResult?.pass,
+  };
+
+  async function runCheckBody() {
   const scene = new THREE.Scene();
   const gi = new GIController({ renderer, scene });
   gi.configure(giParams);
@@ -580,52 +654,56 @@ export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory
   cmp.perProbeActual = per(unpadVec3(actual, expected.length));
   cmp.perProbeExpected = per(expected);
 
-  // (A)(C) real-kernel instrumentation (parent review 09-29, 7th pass):
+  // (A)(C) real-kernel instrumentation (parent review 09-29, 7th/8th pass):
   // re-run the (idempotent at alpha=0) single update once per requested
   // debug probe, with debugProbeUniform set, then read back the REAL
-  // update kernel's own per-ray trace + probe->position map and diff
-  // against a CPU step-by-step trace. Reports the FIRST diverging ray.
+  // update kernel's own per-ray trace + probe->position map (PACKED into
+  // one flat float storage buffer, 8th pass -- 5 separate buffers exceeded
+  // the device's compute-stage storage-buffer limit and silently
+  // invalidated the whole pipeline, see gi-nodes.js's own comment) and
+  // diff against a CPU step-by-step trace. Reports the FIRST diverging ray.
   if (debugProbeIndices.length > 0) {
     cmp.instrumented = [];
+    const layout = gi.resources.irr.debugLayout;
     for (const probeIdx of debugProbeIndices) {
       gi.resources.irr.debugProbeUniform.value = probeIdx;
       // eslint-disable-next-line no-await-in-loop -- sequential, diagnostic-only
-      gi.update(1 / 60, [0, 0, 0]); // re-run: same inputs + alpha=0 -> same atlas, freshly populates this probe's debug buffers
+      gi.update(1 / 60, [0, 0, 0]); // re-run: same inputs + alpha=0 -> same atlas, freshly populates this probe's debug region
 
       // eslint-disable-next-line no-await-in-loop
-      const probeMapBuf = await renderer.getArrayBufferAsync(gi.resources.irr.probeMapBuffer.value);
-      const probeMapArr = new Float32Array(probeMapBuf);
-      const gpuProbePos = [probeMapArr[probeIdx * 4], probeMapArr[probeIdx * 4 + 1], probeMapArr[probeIdx * 4 + 2]];
-      const gpuProbeIdxAsReadBack = probeMapArr[probeIdx * 4 + 3];
+      const buf = await renderer.getArrayBufferAsync(gi.resources.irr.debugBuffer.value);
+      const flat = new Float32Array(buf); // scalar float array -- no vec-padding quirk, tight packing, no unpad needed
 
-      // eslint-disable-next-line no-await-in-loop
-      const [dirHitBuf, radWBuf, runSumBuf, finalBuf] = await Promise.all([
-        renderer.getArrayBufferAsync(gi.resources.irr.debugDirHit.value),
-        renderer.getArrayBufferAsync(gi.resources.irr.debugRadianceWeight.value),
-        renderer.getArrayBufferAsync(gi.resources.irr.debugRunningSum.value),
-        renderer.getArrayBufferAsync(gi.resources.irr.debugFinal.value),
-      ]);
-      const dirHit = new Float32Array(dirHitBuf), radW = new Float32Array(radWBuf), runSum = new Float32Array(runSumBuf), final = new Float32Array(finalBuf);
+      const probeMapAt = probeIdx * layout.PROBE_MAP_STRIDE + layout.probeMapBase;
+      const gpuProbePos = [flat[probeMapAt], flat[probeMapAt + 1], flat[probeMapAt + 2]];
+      const gpuProbeIdxAsReadBack = flat[probeMapAt + 3];
+
       const gpuSteps = [];
       for (let i = 0; i < giParams.raysPerProbe; i++) {
+        const rayAt = i * layout.RAY_STRIDE + layout.rayRegionBase;
         gpuSteps.push({
           rayIndex: i,
-          dir: [dirHit[i * 4], dirHit[i * 4 + 1], dirHit[i * 4 + 2]], dist: dirHit[i * 4 + 3],
-          radiance: [radW[i * 4], radW[i * 4 + 1], radW[i * 4 + 2]], weight: radW[i * 4 + 3],
-          runningSum: [runSum[i * 4], runSum[i * 4 + 1], runSum[i * 4 + 2]],
+          dir: [flat[rayAt], flat[rayAt + 1], flat[rayAt + 2]], dist: flat[rayAt + 3],
+          radiance: [flat[rayAt + 4], flat[rayAt + 5], flat[rayAt + 6]], weight: flat[rayAt + 7],
+          runningSum: [flat[rayAt + 8], flat[rayAt + 9], flat[rayAt + 10]],
         });
       }
+      const gpuFinal = [flat[layout.finalBase], flat[layout.finalBase + 1], flat[layout.finalBase + 2]];
+      const gpuFinalWritten = flat[layout.finalBase + 3] === 1;
+
       const cpuTrace = cpuStepByStepTrace(probeIdx, cfg);
-      const stepCmp = compareStepByStepTrace(gpuSteps, cpuTrace.steps, [final[0], final[1], final[2]], cpuTrace.finalEstimate);
+      const stepCmp = compareStepByStepTrace(gpuSteps, cpuTrace.steps, gpuFinal, cpuTrace.finalEstimate);
       const posErr = Math.hypot(...gpuProbePos.map((v, k) => v - cpuTrace.probePos[k]));
       cmp.instrumented.push({
         probeIdx, gpuProbeIdxAsReadBack, gpuProbePos, cpuProbePos: cpuTrace.probePos, positionMatch: posErr < 1e-4,
+        gpuFinalWritten,
         ...stepCmp,
       });
     }
   }
 
   return { scene: name, updates: 1, hysteresis: 'disabled (alpha=0)', probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
+  }
 }
 
 /** Run both scenes. Returns an array of results (see runScene). */

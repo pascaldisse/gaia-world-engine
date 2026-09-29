@@ -563,6 +563,74 @@ live readback identifies exactly which field, on which ray, first departs
 from these numbers (per the parent's explicit "no more fixes without a
 live-readable discriminator").
 
+## Live-GPU root-cause pass #8 (09-29, parent rerun after pass #7 instrumentation)
+The pass-#7 instrumented kernel NEVER RAN. The parent's CDP driver had not
+been capturing the browser's Log domain until this round; once enabled it
+showed: `"The number of storage buffers (12) in the Compute stage exceeds
+the maximum per-stage limit (8)"` -> BindGroupLayout invalid -> pipeline
+invalid -> every dispatch silently dropped (NO thrown JS error). The
+instrumented readback (all zeros, `gpuProbePos [0,0,0]`) was uninitialized
+memory, not real data. A "control" run on the pre-instrumentation commit
+(0 validation errors, same old divergence pattern) confirmed the ORIGINAL
+bug is real and independent of this new self-inflicted one. Observed
+limits: adapter advertises max 10 storage buffers (Apple), the actual
+device only granted the WebGPU spec's default of 8 -- three.js requests
+default limits, not maxed.
+
+**Root cause of the 12**: pass #7's five separate debug storage buffers
+(`probeMapBuffer`, `debugDirHit`, `debugRadianceWeight`, `debugRunningSum`,
+`debugFinal`) on top of the update kernel's existing 7
+(`irradiance`, `occ.occupancy`, `touched`, `skyHits`,
+`lights.positions/colors/intensities`) = 12.
+
+**Fixed**: packed all five debug outputs into ONE flat `float` storage
+buffer (`computeDebugLayout()`, gi-nodes.js) with a fixed-stride layout:
+```
+[ probe map region: probeCount x 4 floats (probePos.xyz, probeIdx) ]
+[ ray region:        raysPerProbe x 12 floats (dir.xyz+dist, radiance.xyz+weight, runningSum.xyz+rayIndex) ]
+[ final region:       4 floats (newEstimate.xyz, writtenFlag) ]
+```
+`computeDebugLayout()` is exported and imported by BOTH gi-nodes.js (the
+writer, inside the kernel) and tools/gi-parity.mjs (the reader, in
+`runSingleUpdateCheck`), so the offset math can never drift between the
+two sides. Kernel storage-buffer count: 12 -> 8 (7 + 1 packed debug
+buffer), exactly at the observed limit, not over.
+
+**(1)(2) storage-buffer budget, verified without a device**:
+`countUpdateKernelStorageBuffers()`/`countDepthKernelStorageBuffers()`/
+`countDebugKernelStorageBuffers()` (gi-nodes.js, pure JS accounting,
+`STORAGE_BUFFER_LIMIT = 8`) mirror exactly which storage buffers each
+kernel constructor references. `test/gi-storage-buffer-budget.test.js`
+asserts the REAL usage (as GIController.configure() actually builds it)
+sits exactly at 8 (zero headroom), a removal mutant reproduces the exact
+"12" from the live error, an addition mutant proves adding ANY further
+optional buffer (e.g. wiring `bounceAtlas`, still unused in v0) would
+overflow, and a structural scan of the real kernel source cross-checks the
+accounting isn't just an assertion divorced from the code.
+
+**(3) GPU errors are never silent again**: `withGpuValidation()`
+(tools/gi-parity.mjs) wraps `runScene()`/`runSingleUpdateCheck()`'s entire
+body in a `device.pushErrorScope('validation')`/`popErrorScope()` pair
+PLUS a persistent `'uncapturederror'` listener on the renderer's real
+`GPUDevice` (`renderer.backend.device`) for the duration. Any validation
+error, uncaptured device error, or thrown JS error is collected into
+`result.gpuErrors` and forces `result.pass = false`, overriding whatever
+the (now known to be untrustworthy without this check) readback comparison
+said. Gracefully no-ops when no real device is reachable (so it's safe to
+call with any future test-only fake renderer). 9 tests
+(`test/gi-gpu-error-capture.test.js`) cover validation errors, uncaptured
+errors, both together, thrown errors, the no-device graceful path, and a
+mutant proving a harness that skips this check would report pass-#7's
+exact silent-zero failure as a legitimate result.
+
+**Still UNVERIFIED**: the actual GPU-side per-ray trace from the packed
+buffer, and whether the ORIGINAL bug (scene(i) all-0, scene(ii)'s wall-hit
+probes wrong) is still exactly the same now that the instrumentation can
+actually run without tripping the storage-buffer limit. This pass fixed
+the instrumentation's own self-inflicted breakage; the parent's next live
+run is the first one where the pass-#7 discriminator will actually produce
+data.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

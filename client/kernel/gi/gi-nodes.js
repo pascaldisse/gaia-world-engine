@@ -46,6 +46,64 @@ export function createTouchedBuffer(probeCount) {
   return instancedArray(probeCount, 'uint');
 }
 
+// ---------------------------------------------------------- storage-buffer budget
+// WebGPU compute-stage storage-buffer bind count is limited per-device
+// (parent live report 09-29, 8th pass: the observed device gave 8, despite
+// the adapter advertising a max of 10 -- three requests DEFAULT limits, not
+// maxed). Exceeding it fails BindGroupLayout validation and the WHOLE
+// pipeline becomes invalid -- every dispatch is then a silently-dropped
+// no-op (no thrown JS error, only visible via the browser's Log domain).
+// These pure JS accounting functions mirror EXACTLY which storage buffers
+// each kernel constructor references (cross-checked against the real
+// source by test/gi-storage-buffer-budget.test.js's structural scan), so
+// the budget can be verified with node --test, no device needed.
+export const STORAGE_BUFFER_LIMIT = 8; // PLACEHOLDER: the observed device limit; the WebGPU spec minimum is 8, some devices/adapters allow more (this one's adapter advertised 10 but the device only granted 8 -- always budget for the worst case unless the app explicitly requests higher limits)
+
+export function countUpdateKernelStorageBuffers({ touched = null, skyHits = null, lights = null, bounceAtlas = null } = {}) {
+  let count = 2; // irradiance atlas + occupancy
+  if (touched) count += 1;
+  if (skyHits) count += 1;
+  if (lights) count += 3; // positions, colors, intensities
+  if (bounceAtlas) count += 1;
+  count += 1; // the single PACKED debug buffer (always allocated, see computeDebugLayout)
+  return count;
+}
+
+export function countDepthKernelStorageBuffers({ lights = null } = {}) {
+  let count = 2; // depth atlas + occupancy
+  if (lights) count += 3;
+  return count;
+}
+
+export function countDebugKernelStorageBuffers() {
+  return 5; // occupancy + debugBuffer(dir+dist) + posDebugBuffer + radianceBuffer + normalBuffer (createRayDebugKernel never references lights: it always passes lights:null to traceAndShadeRayTSL)
+}
+
+/**
+ * Fixed-stride float layout for the update kernel's PACKED debug buffer
+ * (parent review 09-29, 8th pass: 5 separate storage buffers exceeded the
+ * device's compute-stage storage-buffer limit and silently invalidated the
+ * whole pipeline -- see createGIUpdateKernel's own comment). Exported as
+ * the single source of truth: gi-nodes.js writes at these offsets, and
+ * tools/gi-parity.mjs reads back at the SAME offsets, both importing this
+ * function so the layout can never drift between writer and reader.
+ *
+ * Layout: [probe map region][ray region][final region]
+ *   probe map region: probeCount x 4 floats (probePos.xyz, probeIdx)
+ *   ray region:        raysPerProbe x 12 floats (dir.xyz+dist, radiance.xyz+weight, runningSum.xyz+rayIndex)
+ *   final region:       4 floats (newEstimate.xyz, writtenFlag)
+ */
+export function computeDebugLayout({ probeCount, raysPerProbe }) {
+  const PROBE_MAP_STRIDE = 4;
+  const RAY_STRIDE = 12;
+  const FINAL_STRIDE = 4;
+  const probeMapBase = 0;
+  const rayRegionBase = probeCount * PROBE_MAP_STRIDE;
+  const finalBase = rayRegionBase + raysPerProbe * RAY_STRIDE;
+  const totalFloats = finalBase + FINAL_STRIDE;
+  return { PROBE_MAP_STRIDE, RAY_STRIDE, FINAL_STRIDE, probeMapBase, rayRegionBase, finalBase, totalFloats };
+}
+
 /** Per-probe count of rays that reported a MISS (sky) this update —
  *  parity-harness diagnostic (parent review 09-29, 2nd pass): distinguishes
  *  a probe that's legitimately enclosed (0 sky hits, matches CPU) from one
@@ -304,28 +362,28 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
   const probeOffset = uniform(0, 'uint');
   const skyColorU = uniform(vec3(...skyColor));
 
-  // ---- REAL-KERNEL instrumentation (parent review 09-29, 7th pass: "stop
-  // inferring from sibling kernels, instrument the REAL update kernel").
-  // `debugProbeUniform` defaults to a sentinel that no real probeIdx (a
-  // uint wrapped `% probeCount`) can ever equal, so ALL of this is a
-  // no-op (one extra cheap `If` per texel-0 thread, and per-ray writes
+  // ---- REAL-KERNEL instrumentation (parent review 09-29, 7th->8th pass).
+  // BUGFIX (8th pass): the FIVE separate debug storage buffers (7th pass)
+  // pushed this kernel's total storage-buffer bind count to 12 -- over the
+  // WebGPU compute-stage per-stage limit (8 on the device the live run
+  // actually got, despite the adapter advertising 10; three requests
+  // default limits, not maxed). BindGroupLayout creation failed validation
+  // SILENTLY (no thrown JS error -- only visible via the browser's Log
+  // domain, which the parent's driver hadn't been capturing), so the
+  // pipeline was invalid and every dispatch was a dropped no-op: the
+  // "instrumented" readback was reading UNINITIALIZED/zeroed memory the
+  // whole time, not real data (gpuProbePos [0,0,0] was the tell). Fixed by
+  // packing ALL debug outputs into ONE flat storage buffer (fixed-stride
+  // float layout, computeDebugLayout() below) -- 5 buffers -> 1, kernel
+  // total 12 -> 8 (at, not over, the observed limit).
+  // `debugProbeUniform` defaults to a sentinel no real probeIdx (a uint
+  // wrapped `% probeCount`) can ever equal, so ALL of this instrumentation
+  // is a no-op (one extra cheap `If` per texel-0 thread, per-ray writes
   // that never fire) unless the harness explicitly sets it.
   const DEBUG_PROBE_NONE = 0xffffffff;
   const debugProbeUniform = uniform(DEBUG_PROBE_NONE, 'uint');
-  // (C) probe -> position mapping AS THE KERNEL ITSELF COMPUTES IT, one
-  // entry per probe, written by every probe's own texel-0 thread every
-  // dispatch (cheap, always-on -- this is exactly the ground truth needed
-  // to confirm or refute a probe/position mapping bug independent of any
-  // shading question).
-  const probeMapBuffer = instancedArray(probeCount, 'vec4'); // probePos.xyz, probeIdx-as-float
-  // (A) per-ray trace for ONE probe's texel 0 only: dir+hitT,
-  // radiance+weight, and the RUNNING sum after each ray -- lets the
-  // harness diff ray-by-ray against a CPU step-by-step trace and report
-  // the FIRST diverging ray, not just the final aggregate.
-  const debugDirHit = instancedArray(raysPerProbe, 'vec4'); // dir.xyz, hitT
-  const debugRadianceWeight = instancedArray(raysPerProbe, 'vec4'); // radiance.xyz, weight(cos)
-  const debugRunningSum = instancedArray(raysPerProbe, 'vec4'); // cumulative sampleEstimate.xyz AFTER this ray, rayIndex-as-float
-  const debugFinal = instancedArray(1, 'vec4'); // newEstimate.xyz (post mcNorm, PRE hysteresis mix), 1=written
+  const debugLayout = computeDebugLayout({ probeCount, raysPerProbe });
+  const debugBuffer = instancedArray(debugLayout.totalFloats, 'float');
   const totalTexelsDefault = atlases.probeCount * irradianceRes * irradianceRes;
   // BUGFIX (parent live-GPU report 09-29, 3rd pass): WORKGROUP ROUNDING.
   // renderer.compute(kernel, count) dispatches ceil(count/workgroupSize)
@@ -376,9 +434,14 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
       );
 
       // (C) write the ACTUAL kernel-computed probe->position mapping,
-      // once per probe (texel 0 only, cheap, always on)
+      // once per probe (texel 0 only, cheap, always on), packed into the
+      // single debugBuffer's probe-map region
       If(localTexel.equal(0), () => {
-        probeMapBuffer.element(probeIdx).assign(vec4(probePos, float(probeIdx)));
+        const base = probeIdx.mul(debugLayout.PROBE_MAP_STRIDE).add(debugLayout.probeMapBase);
+        debugBuffer.element(base).assign(probePos.x);
+        debugBuffer.element(base.add(1)).assign(probePos.y);
+        debugBuffer.element(base.add(2)).assign(probePos.z);
+        debugBuffer.element(base.add(3)).assign(float(probeIdx));
       });
       const isDebugProbe = uint(probeIdx).equal(debugProbeUniform).and(localTexel.equal(0));
 
@@ -392,13 +455,24 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
         const w = max(0, dot(texelDir, dir));
         sampleEstimate.assign(sampleEstimate.add(radiance.mul(w)));
         // (A) per-ray instrumentation of the REAL kernel, for one selected
-        // probe's texel 0 only (parent review 09-29, 7th pass). `dist`
-        // matches traceSingleRay's own `dist` field exactly (hitT on a hit,
-        // maxDist on a miss) -- directly diffable against the CPU trace.
+        // probe's texel 0 only (parent review 09-29, 7th/8th pass), packed
+        // into the single debugBuffer's ray region. `dist` matches
+        // traceSingleRay's own `dist` field exactly (hitT on a hit, maxDist
+        // on a miss) -- directly diffable against the CPU trace.
         If(isDebugProbe, () => {
-          debugDirHit.element(i).assign(vec4(dir, dist));
-          debugRadianceWeight.element(i).assign(vec4(radiance, w));
-          debugRunningSum.element(i).assign(vec4(sampleEstimate, float(i)));
+          const rayBase = int(i).mul(debugLayout.RAY_STRIDE).add(debugLayout.rayRegionBase);
+          debugBuffer.element(rayBase).assign(dir.x);
+          debugBuffer.element(rayBase.add(1)).assign(dir.y);
+          debugBuffer.element(rayBase.add(2)).assign(dir.z);
+          debugBuffer.element(rayBase.add(3)).assign(dist);
+          debugBuffer.element(rayBase.add(4)).assign(radiance.x);
+          debugBuffer.element(rayBase.add(5)).assign(radiance.y);
+          debugBuffer.element(rayBase.add(6)).assign(radiance.z);
+          debugBuffer.element(rayBase.add(7)).assign(w);
+          debugBuffer.element(rayBase.add(8)).assign(sampleEstimate.x);
+          debugBuffer.element(rayBase.add(9)).assign(sampleEstimate.y);
+          debugBuffer.element(rayBase.add(10)).assign(sampleEstimate.z);
+          debugBuffer.element(rayBase.add(11)).assign(float(i));
         });
         // parity-harness diagnostic (parent review 09-29, 2nd pass): count sky
         // (miss) rays per probe, see createSkyHitsBuffer's doc comment
@@ -411,7 +485,11 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
       const mcNorm = float((4 * Math.PI) / raysPerProbe);
       const newEstimate = sampleEstimate.mul(mcNorm);
       If(isDebugProbe, () => {
-        debugFinal.element(0).assign(vec4(newEstimate, 1));
+        const base = int(debugLayout.finalBase);
+        debugBuffer.element(base).assign(newEstimate.x);
+        debugBuffer.element(base.add(1)).assign(newEstimate.y);
+        debugBuffer.element(base.add(2)).assign(newEstimate.z);
+        debugBuffer.element(base.add(3)).assign(float(1));
       });
 
       const old = irradiance.element(atlasIndex);
@@ -427,7 +505,7 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
   const kernel = updateFn().compute(totalTexels, [64]);
   return {
     kernel, alpha, probeOffset, validCount, totalTexels,
-    debugProbeUniform, probeMapBuffer, debugDirHit, debugRadianceWeight, debugRunningSum, debugFinal,
+    debugProbeUniform, debugBuffer, debugLayout,
   };
 }
 

@@ -114,13 +114,12 @@ test('mutant: comparing ONLY the final aggregate (not per-ray) would report "wro
 });
 
 // ----------------------------------------------------------- kernel construction
-test('createGIUpdateKernel exposes the new debug buffers (probeMapBuffer, debugDirHit, debugRadianceWeight, debugRunningSum, debugFinal, debugProbeUniform), all real TSL nodes', () => {
+test('createGIUpdateKernel exposes the PACKED debug buffer (one storage node, not five) + debugLayout + debugProbeUniform', () => {
   const gi = new GIController({});
   gi.configure({ enabled: true, spacing: 8, halfExtentXZ: 8, layersY: 1, heightRange: [0, 1] });
   const irr = gi.resources.irr;
-  for (const key of ['probeMapBuffer', 'debugDirHit', 'debugRadianceWeight', 'debugRunningSum', 'debugFinal']) {
-    assert.equal(irr[key].isNode, true, `${key} must be a real storage node`);
-  }
+  assert.equal(irr.debugBuffer.isNode, true, 'debugBuffer must be a real storage node');
+  assert.equal(typeof irr.debugLayout.totalFloats, 'number');
   assert.equal(irr.debugProbeUniform.value, 0xffffffff, 'default sentinel: no probe selected, instrumentation is a no-op');
 });
 

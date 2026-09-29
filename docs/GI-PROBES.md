@@ -409,6 +409,86 @@ itself; if it matches, the bug is specific to the multi-iteration
 hysteresis/round-robin path** (e.g. the validCount guard added in pass #3,
 or a probeOffset/atlasIndex interaction across many calls).
 
+## Live-GPU root-cause pass #6 (09-29, parent rerun after pass #5) — LIKELY ROOT CAUSE FOUND + FIXED
+Parent's `runSingleUpdateCheck()` result was decisive: with hysteresis fully
+disabled (alpha=0, one update), the atlas STILL diverges from CPU exactly
+where per-ray shading was ALREADY proven identical (dir/hitT/hit/N/radiance
+all matching, live-verified). The 80.552-vs-80.629 residual disappeared
+entirely at alpha=0, confirming it really was pure hysteresis-convergence
+rounding (not a bug). Pattern: probes where every ray misses (pure sky) read
+correctly; probes where ANY ray hits something read wrong (0, a truncated
+partial value, or the hit's contribution silently missing). Scene(i), walls
+everywhere so nearly every probe has an early hit → reads all 0.
+
+**Arg-by-arg diff of the two `traceAndShadeRayTSL` call sites** (parent's
+explicit request), gi-nodes.js:
+```
+update kernel (createGIUpdateKernel, inside Loop(raysPerProbe,...)):
+  traceAndShadeRayTSL({ occ, rayOrigin: probePos, rayDir: dir, maxDist,
+                         sun, lights, albedo, skyColor: skyColorU, bounceAtlas, bounceGrid })
+
+debug kernel (createRayDebugKernel, ONE ray per thread, no outer loop):
+  traceAndShadeRayTSL({ occ, rayOrigin: probePos, rayDir: dir, maxDist,
+                         sun, lights: null, albedo, skyColor: skyColorU, bounceAtlas: null, bounceGrid: null })
+```
+`occ` / `rayOrigin` / `rayDir` / `maxDist` / `sun` / `albedo` / `skyColor`
+are IDENTICAL (same values, and `occ`/`sun` are the literal SAME object
+references from `gi.resources`, pinned by `test/gi-kernel-shared-uniforms.test.js`).
+The ONLY difference: `lights`/`bounceAtlas`/`bounceGrid` (update kernel
+passes the real ones; debug kernel always passes `null`) — both are no-ops
+in these scenes (no point lights registered, no bounce atlas wired), BUT
+this difference is exactly what made the debug kernel accidentally immune
+to the real bug.
+
+**Root cause**: `marchOccupancyTSL` used `Break()` to early-exit its own
+step `Loop` once a hit was found. Safe when called with NO outer loop
+(the debug kernel: one ray per thread). But `createGIUpdateKernel`/
+`createGIDepthUpdateKernel` call it (via `traceAndShadeRayTSL`, up to 3x
+per ray: primary march + sun shadow + per-point-light shadow) from WITHIN
+their OWN outer `Loop(raysPerProbe,...)`. A `Break()` inside an inner Loop
+that's only reached by a function call made from within an outer Loop is
+exactly the kind of construct that breaks the WRONG (outer) loop in
+graph-based shader builders, whose `Break()` targets "the nearest
+enclosing Loop node as seen by the graph builder at the call site" — not
+necessarily the lexically-nearest one a human reader expects across a
+function-call boundary. This explains the symptom exactly: a probe whose
+rays never hit anything never calls `Break()`, so the outer ray-
+accumulation loop runs to completion normally (correct ~80.629); a probe
+where ANY ray hits something triggers `Break()`, which (per this
+hypothesis) silently terminates the OUTER per-thread ray loop too —
+leaving `sampleEstimate` with only whatever partial sum had accumulated
+before that ray, not all `raysPerProbe` rays. Scene(i)'s walls-everywhere
+geometry means nearly every probe's very first few rays already hit
+something → near-immediate truncation → atlas reads ~0 almost everywhere,
+matching the reported "scene i ALL 0" exactly.
+
+The SAME risky pattern existed in `traceAndShadeRayTSL`'s point-light loop
+(`Loop(lights.maxLights,...)` with an `If(...).../Break()` early-exit for
+`i>=lights.count`) — also nested inside the update kernel's outer ray loop,
+also never exercised by the debug kernel (which passes `lights: null`).
+
+**Fixed**: removed `Break()` from BOTH loops, replacing the early-exit
+pattern with an If-guarded body (skip the remaining work, don't break the
+loop) in both cases:
+- `marchOccupancyTSL`: `Loop(MAX_MARCH_STEPS,...)` now always runs its full
+  iteration count; each step's body executes only `If(stillSearching, ...)`
+  where `stillSearching = t < maxDist AND hitT < 0`.
+- point-light loop: `Loop(lights.maxLights,...)` always runs to completion;
+  each iteration's body executes only `If(i < lights.count, ...)`.
+
+Both are a real, accepted perf cost (no more early exit) for eliminating
+the nested-loop-break risk everywhere `marchOccupancyTSL`/the point-light
+loop are used — correctness first; revisit for perf once verified live.
+
+**Still UNVERIFIED**: whether TSL's `Break()` genuinely mis-targets the
+outer loop in this exact nested-function-call configuration is a
+HYPOTHESIS matching every observed symptom precisely, not something
+node --test can execute/confirm without a real GPU device (TSL Fn bodies
+don't expand into a walkable/runnable graph without a builder, as
+established in earlier passes). The fix is safe regardless of whether this
+exact mechanism is right, since it removes ALL Break() usage from any code
+path reachable from inside the update kernels' outer loop.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

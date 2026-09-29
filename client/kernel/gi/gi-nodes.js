@@ -13,7 +13,7 @@
 
 import {
   Fn, storage, instancedArray, uniform, vec2, vec3, vec4, float, int, uint,
-  Loop, If, Break, dot, max, normalize, mix, clamp, abs, select,
+  Loop, If, dot, max, normalize, mix, clamp, abs, select,
   floor, length, instanceIndex,
 } from 'three/tsl';
 import { IrradianceNode, StorageInstancedBufferAttribute } from 'three/webgpu';
@@ -106,9 +106,10 @@ function octUvToTexelIndexTSL(uv, res) {
 /**
  * Fixed-step DDA march against the occupancy storage buffer — the exact
  * mirror of voxelize.js's marchOccupancy (step=cellSize*0.5, bounded loop,
- * SAME x-fastest flat layout). Pushes Loop/If/Break onto whichever Fn body
- * is currently building (not wrapped in its own Fn(), so it composes
- * inline in either kernel below).
+ * SAME x-fastest flat layout). Pushes Loop/If onto whichever Fn body is
+ * currently building (not wrapped in its own Fn(), so it composes inline
+ * in either kernel below, AND inline inside the update kernels' own OUTER
+ * `Loop(raysPerProbe,...)` via traceAndShadeRayTSL — see the BUGFIX note).
  *
  * BUGFIX (parent live-GPU report 09-29, 2nd pass): a prior version CLAMPED
  * the world->voxel index into [0,dims) and unconditionally READ that
@@ -120,6 +121,36 @@ function octUvToTexelIndexTSL(uv, res) {
  * does the opposite: bounds-check FIRST, and treat out-of-range as "no
  * geometry there" (skip the occupancy read for that step, keep marching)
  * — never clamp-and-read. This mirrors that exactly.
+ *
+ * BUGFIX (parent live-GPU report 09-29, 6th pass — THE root cause of the
+ * atlas-vs-per-ray-debug divergence): this function used `Break()` to
+ * early-exit its own step Loop once a hit was found or maxDist was
+ * reached. That is safe when called from `createRayDebugKernel` (ONE ray
+ * per thread, no outer loop at all) — which is exactly why the per-ray
+ * debug trace proved correct radiance/hit/shadowT/N for every ray
+ * (parent's pass-#4/#5 live runs) and could never have caught this. But
+ * `createGIUpdateKernel`/`createGIDepthUpdateKernel` call this function
+ * (via `traceAndShadeRayTSL`, up to 3x per ray: primary march + sun
+ * shadow + per-point-light shadow) from WITHIN their OWN OUTER
+ * `Loop(raysPerProbe,...)`. A `Break()` inside an INNER Loop that is only
+ * reached by calling into a NESTED HELPER FUNCTION from within an OUTER
+ * Loop is exactly the kind of construct that breaks the WRONG (outer)
+ * loop in graph-based shader builders whose Break() targets "the nearest
+ * enclosing Loop node" as seen by the BUILDER at the call site, not
+ * necessarily the one a human reader would expect. This matches the
+ * reported symptom exactly: probes whose rays never hit anything (pure
+ * sky, no Break() ever triggered since the loop just runs its natural
+ * course) read correctly (~80.629); probes where ANY ray hits something
+ * (Break() fires) show corrupted/truncated atlas values, because the
+ * OUTER ray-accumulation loop for that thread silently stopped partway
+ * through, well before all `raysPerProbe` rays were summed into
+ * `sampleEstimate`. Fixed the same way as the point-light loop above:
+ * removed Break() entirely, replaced with an If-guarded body that just
+ * skips the remaining work once done — the Loop always runs its full
+ * MAX_MARCH_STEPS, but each iteration's body only executes while still
+ * actively searching. Real, accepted perf cost (no more early exit on a
+ * hit) for eliminating the nested-loop-break risk everywhere this
+ * function is used.
  * @returns a float Var: hit distance, or -1 if nothing was hit
  */
 function marchOccupancyTSL(occ, rayOrigin, rayDir, maxDist) {
@@ -128,25 +159,25 @@ function marchOccupancyTSL(occ, rayOrigin, rayDir, maxDist) {
   const t = float(0).toVar();
   const hitT = float(-1).toVar();
   Loop(MAX_MARCH_STEPS, () => {
-    If(t.greaterThanEqual(maxDist).or(hitT.greaterThanEqual(0)), () => {
-      Break();
-    });
-    const p = rayOrigin.add(rayDir.mul(t));
-    const rel = p.sub(voxelOrigin).div(cellSize);
-    const ix = int(floor(rel.x));
-    const iy = int(floor(rel.y));
-    const iz = int(floor(rel.z));
-    const inBounds = ix.greaterThanEqual(0).and(ix.lessThan(int(dims.x)))
-      .and(iy.greaterThanEqual(0)).and(iy.lessThan(int(dims.y)))
-      .and(iz.greaterThanEqual(0)).and(iz.lessThan(int(dims.z)));
-    If(inBounds, () => {
-      const idx = ix.add(int(dims.x).mul(iy.add(int(dims.y).mul(iz))));
-      const occVal = occupancy.element(idx);
-      If(occVal.greaterThan(uint(0)), () => {
-        hitT.assign(t);
+    const stillSearching = t.lessThan(maxDist).and(hitT.lessThan(0));
+    If(stillSearching, () => {
+      const p = rayOrigin.add(rayDir.mul(t));
+      const rel = p.sub(voxelOrigin).div(cellSize);
+      const ix = int(floor(rel.x));
+      const iy = int(floor(rel.y));
+      const iz = int(floor(rel.z));
+      const inBounds = ix.greaterThanEqual(0).and(ix.lessThan(int(dims.x)))
+        .and(iy.greaterThanEqual(0)).and(iy.lessThan(int(dims.y)))
+        .and(iz.greaterThanEqual(0)).and(iz.lessThan(int(dims.z)));
+      If(inBounds, () => {
+        const idx = ix.add(int(dims.x).mul(iy.add(int(dims.y).mul(iz))));
+        const occVal = occupancy.element(idx);
+        If(occVal.greaterThan(uint(0)), () => {
+          hitT.assign(t);
+        });
       });
+      t.addAssign(step);
     });
-    t.addAssign(step);
   });
   return hitT;
 }
@@ -198,20 +229,43 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
     direct.assign(direct.add(select(lit.and(ndotl.greaterThan(0)), sun.color.mul(ndotl).mul(sun.intensity), vec3(0, 0, 0))));
   }
   if (lights) {
+    // BUGFIX (parent live-GPU report 09-29, 6th pass): this function is
+    // called from WITHIN the update kernel's OUTER `Loop(raysPerProbe,...)`
+    // (gi-nodes.js: createGIUpdateKernel/createGIDepthUpdateKernel) -- a
+    // Break() inside THIS inner point-light Loop, nested via a function
+    // call inside that outer loop, is exactly the kind of construct that
+    // is fragile in graph-based shader builders (Break() must target only
+    // the nearest enclosing Loop node in the BUILT GRAPH, and this helper
+    // is shared with createRayDebugKernel, which calls it with NO outer
+    // loop at all -- the debug kernel passes `lights: null` and so never
+    // even builds this code path, which is exactly why per-ray debug
+    // parity (proven correct) could never have caught a bug here: the
+    // update kernel is the ONLY caller that ever exercises this loop, and
+    // it's the ONLY one nesting it inside another Loop). Replaced the
+    // early-exit Break() with an If-wrapped body (skip the work, don't
+    // break the loop) -- still zero real per-thread cost once i>=count
+    // (the branch body just never executes), with no loop-nesting risk at
+    // all. `lights.maxLights` is currently a fixed PLACEHOLDER pool size
+    // (16, see GI_DEFAULTS.maxPointLights) run to completion every ray
+    // regardless of `lights.count`, unlike the old early-exit -- a real
+    // cost tradeoff for a correctness fix; if this turns out to matter for
+    // perf once verified live, revisit with a compacted/sorted light list
+    // instead of reintroducing Break().
     Loop(lights.maxLights, ({ i }) => {
-      If(uint(i).greaterThanEqual(lights.count), () => { Break(); });
-      const lpos = lights.positions.element(i);
-      const toLight = lpos.sub(hitPos);
-      const dist = length(toLight);
-      const Ldir = toLight.div(max(dist, 1e-4));
-      const ndotl = max(0, dot(N, Ldir));
-      const atten = float(1).div(max(dist.mul(dist), 1e-4));
-      const shadowOrigin = hitPos.add(Ldir.mul(shadowStep));
-      const shadowT = marchOccupancyTSL(occ, shadowOrigin, Ldir, dist);
-      const lit = shadowT.lessThan(0);
-      const intensity = lights.intensities.element(i).mul(lights.lightScale);
-      const contrib = lights.colors.element(i).mul(ndotl).mul(atten).mul(intensity);
-      direct.assign(direct.add(select(lit, contrib, vec3(0, 0, 0))));
+      If(uint(i).lessThan(lights.count), () => {
+        const lpos = lights.positions.element(i);
+        const toLight = lpos.sub(hitPos);
+        const dist = length(toLight);
+        const Ldir = toLight.div(max(dist, 1e-4));
+        const ndotl = max(0, dot(N, Ldir));
+        const atten = float(1).div(max(dist.mul(dist), 1e-4));
+        const shadowOrigin = hitPos.add(Ldir.mul(shadowStep));
+        const shadowT = marchOccupancyTSL(occ, shadowOrigin, Ldir, dist);
+        const lit = shadowT.lessThan(0);
+        const intensity = lights.intensities.element(i).mul(lights.lightScale);
+        const contrib = lights.colors.element(i).mul(ndotl).mul(atten).mul(intensity);
+        direct.assign(direct.add(select(lit, contrib, vec3(0, 0, 0))));
+      });
     });
   }
 

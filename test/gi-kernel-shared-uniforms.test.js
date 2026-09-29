@@ -105,7 +105,7 @@ test('gi-nodes.js: the point-light loop inside traceAndShadeRayTSL also no longe
   // check for the actual CODE call (semicolon), not this function's own
   // prose comments explaining the fix, which legitimately say "Break()"
   assert.ok(!body.includes('Break();'), 'no live Break() call must remain in the point-light loop body');
-  assert.ok(body.includes('If(uint(i).lessThan(lights.count)'));
+  assert.ok(body.includes('If(uint(lightI).lessThan(lights.count)'), '10th pass renamed the point-light loop index to lightI (name collision fix)');
 });
 
 test('mutant: reintroducing Break() in marchOccupancyTSL (the pre-fix state) is exactly the bug that made the atlas diverge from the per-ray debug trace despite both using traceAndShadeRayTSL', () => {

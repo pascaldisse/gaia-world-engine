@@ -238,7 +238,26 @@ function marchOccupancyTSL(occ, rayOrigin, rayDir, maxDist) {
   // code is reached, which is exactly once per ray.
   t.assign(0);
   hitT.assign(-1);
-  Loop(MAX_MARCH_STEPS, () => {
+  // BUGFIX (parent live-GPU report 09-29, 10th pass -- THE actual root
+  // cause, read directly from the captured WGSL, pass #9's own new tool):
+  // TSL's Loop() names its loop counter 'i' by DEFAULT (LoopNode.getVarName),
+  // independently per Loop() call -- so this march-step loop and the
+  // update kernel's OUTER ray loop both generate `for (var i: i32 = 0; ...)`.
+  // WGSL lexical scoping means the INNER (this) loop's `i` SHADOWS the
+  // outer ray loop's `i` inside these braces. TSL evaluates node
+  // expressions LAZILY at their point of use -- `fibonacciDirTSL(i,...)`'s
+  // `i` reference (the OUTER ray loop's index) gets emitted as the bare
+  // identifier "i" wherever `dir` is actually USED, and since `dir` is
+  // used INSIDE this march loop's body (`rayOrigin.add(rayDir.mul(t))`),
+  // the generated WGSL identifier "i" there resolves to the WRONG (inner,
+  // march-step) variable -- dir ends up depending on the MARCH STEP index,
+  // not the ray index, so it's identical for every ray of a probe (only
+  // depends on how far into ITS OWN march it got), matching the exact
+  // reported symptom (march dist constant per probe across every ray).
+  // Explicit `name` here (even though this loop doesn't reference its own
+  // index) prevents ANY future/other outer loop nesting this function from
+  // colliding on 'i' again.
+  Loop({ start: 0, end: MAX_MARCH_STEPS, type: 'int', name: 'stepI' }, () => {
     const stillSearching = t.lessThan(maxDist).and(hitT.lessThan(0));
     If(stillSearching, () => {
       const p = rayOrigin.add(rayDir.mul(t));
@@ -338,9 +357,12 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
     // cost tradeoff for a correctness fix; if this turns out to matter for
     // perf once verified live, revisit with a compacted/sorted light list
     // instead of reintroducing Break().
-    Loop(lights.maxLights, ({ i }) => {
-      If(uint(i).lessThan(lights.count), () => {
-        const lpos = lights.positions.element(i);
+    // BUGFIX (10th pass, same class as marchOccupancyTSL's rename above):
+    // an explicit distinct name avoids colliding with the outer ray loop's
+    // (or any other enclosing loop's) index variable.
+    Loop({ start: 0, end: lights.maxLights, type: 'int', name: 'lightI' }, ({ lightI }) => {
+      If(uint(lightI).lessThan(lights.count), () => {
+        const lpos = lights.positions.element(lightI);
         const toLight = lpos.sub(hitPos);
         const dist = length(toLight);
         const Ldir = toLight.div(max(dist, 1e-4));
@@ -349,8 +371,8 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
         const shadowOrigin = hitPos.add(Ldir.mul(shadowStep));
         const shadowT = marchOccupancyTSL(occ, shadowOrigin, Ldir, dist);
         const lit = shadowT.lessThan(0);
-        const intensity = lights.intensities.element(i).mul(lights.lightScale);
-        const contrib = lights.colors.element(i).mul(ndotl).mul(atten).mul(intensity);
+        const intensity = lights.intensities.element(lightI).mul(lights.lightScale);
+        const contrib = lights.colors.element(lightI).mul(ndotl).mul(atten).mul(intensity);
         direct.assign(direct.add(select(lit, contrib, vec3(0, 0, 0))));
       });
     });
@@ -444,7 +466,11 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
       // `texelIndex` instead (the pre-fix bug) only coincidentally matched
       // when probeOffset==0 (every update() call in every scene tested before
       // this fix used updateFraction:1, which keeps offset permanently 0).
-      const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
+      // BUGFIX (10th pass): materialized via .toVar() -- forces a REAL
+      // WGSL variable holding a frozen copy of this value, immune to the
+      // lazy-inlining-into-a-differently-scoped-loop bug documented below
+      // regardless of any naming collision elsewhere.
+      const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount)).toVar();
       const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
 
       const tu = localTexel.mod(int(irradianceRes));
@@ -460,7 +486,7 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
         probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
         probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
         probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
-      );
+      ).toVar();
 
       // (C) write the ACTUAL kernel-computed probe->position mapping,
       // once per probe (texel 0 only, cheap, always on), packed into the
@@ -475,8 +501,29 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
       const isDebugProbe = uint(probeIdx).equal(debugProbeUniform).and(localTexel.equal(0));
 
       const sampleEstimate = vec3(0, 0, 0).toVar();
-      Loop(raysPerProbe, ({ i }) => {
-        const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
+      // BUGFIX (parent live-GPU report 09-29, 10th pass -- THE actual root
+      // cause, read directly from the captured WGSL, pass #9's own new
+      // tool): TSL's Loop() names its loop counter 'i' by DEFAULT
+      // (LoopNode.getVarName), independently per Loop() call -- this ray
+      // loop and marchOccupancyTSL's OWN step loop (called from within it,
+      // via traceAndShadeRayTSL) both generated `for (var i: i32 = 0; ...)`.
+      // WGSL lexical scoping means the INNER (march-step) loop's `i`
+      // SHADOWS this OUTER (ray) loop's `i` inside the march's braces. TSL
+      // evaluates node expressions LAZILY at their point of use --
+      // `fibonacciDirTSL(i,...)`'s `i` reference got emitted as the bare
+      // identifier "i" wherever `dir` was actually USED, which is INSIDE
+      // the march loop's body (`rayOrigin.add(rayDir.mul(t))`) -- so the
+      // generated WGSL there resolved to the WRONG (inner, march-step)
+      // variable: dir ended up depending on the MARCH STEP, not the ray,
+      // identical for every ray of a probe -- matching the exact reported
+      // symptom (march dist constant per probe across every ray). Fixed
+      // two ways, both applied: (1) an explicit distinct name here
+      // ('rayI') so nothing can collide with it again, and (2) `dir`
+      // materialized via `.toVar()` right below so its VALUE is frozen
+      // into a real variable at ray-loop scope, immune to being
+      // re-evaluated/re-inlined wherever it's later referenced.
+      Loop({ start: 0, end: raysPerProbe, type: 'int', name: 'rayI' }, ({ rayI }) => {
+        const dir = fibonacciDirTSL(rayI, raysPerProbe, rotation).toVar();
         const { radiance, hit, dist } = traceAndShadeRayTSL({
           occ, rayOrigin: probePos, rayDir: dir, maxDist,
           sun, lights, albedo, skyColor: skyColorU, bounceAtlas, bounceGrid,
@@ -489,7 +536,7 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
         // traceSingleRay's own `dist` field exactly (hitT on a hit, maxDist
         // on a miss) -- directly diffable against the CPU trace.
         If(isDebugProbe, () => {
-          const rayBase = int(i).mul(debugLayout.RAY_STRIDE).add(debugLayout.rayRegionBase);
+          const rayBase = int(rayI).mul(debugLayout.RAY_STRIDE).add(debugLayout.rayRegionBase);
           debugBuffer.element(rayBase).assign(dir.x);
           debugBuffer.element(rayBase.add(1)).assign(dir.y);
           debugBuffer.element(rayBase.add(2)).assign(dir.z);
@@ -501,7 +548,7 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
           debugBuffer.element(rayBase.add(8)).assign(sampleEstimate.x);
           debugBuffer.element(rayBase.add(9)).assign(sampleEstimate.y);
           debugBuffer.element(rayBase.add(10)).assign(sampleEstimate.z);
-          debugBuffer.element(rayBase.add(11)).assign(float(i));
+          debugBuffer.element(rayBase.add(11)).assign(float(rayI));
         });
         // parity-harness diagnostic (parent review 09-29, 2nd pass): count sky
         // (miss) rays per probe, see createSkyHitsBuffer's doc comment
@@ -573,7 +620,7 @@ export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProb
       const probeLocal = int(texelIndex).div(texelsPerProbe);
       const localTexel = int(texelIndex).mod(texelsPerProbe);
       // BUGFIX — same class of bug as createGIUpdateKernel above, see its comment.
-      const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
+      const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount)).toVar();
       const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
 
       const tu = localTexel.mod(int(depthRes));
@@ -589,13 +636,15 @@ export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProb
         probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
         probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
         probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
-      );
+      ).toVar();
 
       const wSum = float(0).toVar();
       const dSum = float(0).toVar();
       const d2Sum = float(0).toVar();
-      Loop(raysPerProbe, ({ i }) => {
-        const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
+      // BUGFIX (10th pass) — same class of bug + same fix as the irradiance
+      // update kernel above: distinct loop name + materialized `dir`.
+      Loop({ start: 0, end: raysPerProbe, type: 'int', name: 'rayI' }, ({ rayI }) => {
+        const dir = fibonacciDirTSL(rayI, raysPerProbe, rotation).toVar();
         const { dist } = traceAndShadeRayTSL({
           occ, rayOrigin: probePos, rayDir: dir, maxDist,
           sun, lights, albedo, skyColor: skyColorU,
@@ -640,9 +689,18 @@ export function createGIQueryNode({ atlases, worldPositionNode, normalNode, prob
     const total = vec3(0, 0, 0).toVar();
     const weightSum = float(0).toVar();
 
-    Loop(2, ({ i: ox }) => {
-      Loop(2, ({ i: oy }) => {
-        Loop(2, ({ i: oz }) => {
+    // BUGFIX (10th pass, same class as the update/depth kernels' ray loop
+    // vs march loop collision): each of these 3 nested loops previously
+    // used TSL's DEFAULT loop-variable name 'i' (only the JS-side
+    // destructuring alias differed: {i:ox}/{i:oy}/{i:oz}) -- the
+    // UNDERLYING generated WGSL variable was 'i' for all three, so the
+    // innermost loop's 'i' shadowed the outer two within its own braces,
+    // corrupting any lazily-inlined expression referencing `ox`/`oy`
+    // wherever it's used inside a more-nested loop's body (exactly like
+    // `dir` in the ray/march loops). Explicit distinct names close this.
+    Loop({ start: 0, end: 2, type: 'int', name: 'cx' }, ({ cx: ox }) => {
+      Loop({ start: 0, end: 2, type: 'int', name: 'cy' }, ({ cy: oy }) => {
+        Loop({ start: 0, end: 2, type: 'int', name: 'cz' }, ({ cz: oz }) => {
           const ixf = clamp(base.x.add(float(ox)), 0, dims.x - 1);
           const iyf = clamp(base.y.add(float(oy)), 0, dims.y - 1);
           const izf = clamp(base.z.add(float(oz)), 0, dims.z - 1);

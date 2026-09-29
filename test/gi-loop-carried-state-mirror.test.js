@@ -46,7 +46,7 @@ test('marchOccupancyTSL: t.assign(0) and hitT.assign(-1) appear IMMEDIATELY afte
   const declIdx = body.indexOf('const hitT = float(-1).toVar();');
   const resetIdx = body.indexOf('t.assign(0);');
   const resetIdx2 = body.indexOf('hitT.assign(-1);');
-  const loopIdx = body.indexOf('Loop(MAX_MARCH_STEPS');
+  const loopIdx = body.indexOf("Loop({ start: 0, end: MAX_MARCH_STEPS, type: 'int', name: 'stepI' }");
   assert.ok(declIdx !== -1 && resetIdx !== -1 && resetIdx2 !== -1 && loopIdx !== -1);
   assert.ok(resetIdx > declIdx, 't.assign(0) must come after the .toVar() declarations');
   assert.ok(resetIdx2 > declIdx, 'hitT.assign(-1) must come after the .toVar() declarations');
@@ -60,7 +60,8 @@ test('mutant: relying on .toVar()\'s own initial value alone (no explicit .assig
   const t = float(0).toVar();
   const hitT = float(-1).toVar();
   Loop(MAX_MARCH_STEPS, () => {`;
-  assert.ok(!SRC.includes(preFixMarch), 'the exact pre-fix (no explicit reset) source pattern must not reappear');
+  assert.ok(!SRC.includes(preFixMarch), 'the exact pre-fix (no explicit reset, default-named loop) source pattern must not reappear');
+  assert.ok(!SRC.includes("Loop(MAX_MARCH_STEPS, () =>"), '10th pass: the march loop must never use the default (unnamed, collision-prone) Loop(count, cb) form again');
 });
 
 // -------------------------------------------------- traceAndShadeRayTSL (shadowTOut, direct)

@@ -701,6 +701,76 @@ declaration/initialization placement for `t`/`hitT`/`shadowTOut`/`direct`
 that pass #9's fix targets, confirming (or further narrowing) the exact
 generated-code shape of the loop-carried-state bug.
 
+## Live-GPU root-cause pass #10 (09-29, parent rerun after pass #9) — REAL ROOT CAUSE, READ DIRECTLY FROM CAPTURED WGSL
+Pass #9's reset fix changed NOTHING live (dists still constant per probe).
+The pass-#9 WGSL capture tool (built for exactly this) let the parent read
+the ACTUAL generated code and find the real cause directly:
+```
+for ( var i : i32 = 0; i < 32; i ++ ) {      // ray loop
+  for ( var i : i32 = 0; i < 64; i ++ ) {    // march loop -- SAME NAME i, shadows
+    nodeVar7 = ( f32( i ) * 2.399963229728653 );   // fibonacciDirTSL(i) INLINED inside the march
+    nodeVar10 = probePos + dir(i)*t ...
+```
+**Root cause**: TSL's `Loop()` names its loop counter `'i'` by DEFAULT
+(`LoopNode.getVarName`), independently per `Loop()` call. The update
+kernel's outer ray loop and `marchOccupancyTSL`'s inner step loop (reached
+via a plain-function-call boundary, `traceAndShadeRayTSL` -> 
+`marchOccupancyTSL`) both generated `for (var i: i32 = 0; ...)`. WGSL
+lexical scoping means the INNER loop's `i` SHADOWS the OUTER loop's `i`
+inside its own braces. TSL evaluates node expressions LAZILY at their
+point of use -- `fibonacciDirTSL(i,...)`'s `i` reference (the ray loop's
+index) is just the bare identifier `"i"`, emitted wherever `dir` is
+actually USED. Since `dir` is used INSIDE the march loop's body
+(`rayOrigin.add(rayDir.mul(t))`), the generated `"i"` there resolves to
+the WRONG (inner, march-STEP) variable -- `dir` ends up depending on how
+far into ITS OWN march the code got, identical for every ray of a probe
+(the march-step loop's range 0..63 is the same regardless of which ray),
+matching the reported symptom exactly (constant `dist` per probe). The
+shadow march (nested inside the point-light loop too) has the exact same
+issue; post-march shading OUTSIDE any inner loop reads the correct `i`
+(which is why some fields looked fine). The ray-debug kernel has NO outer
+loop at all (one ray per GPU thread) so this specific collision was
+structurally impossible there -- explaining every prior pass's "debug
+kernel correct, update kernel wrong" observation back to the first report.
+This is DIFFERENT FROM (and explains why) pass #9's reset fix did nothing:
+the values were never stale-carried, they were being COMPUTED WRONG the
+whole time via the wrong `i`.
+
+**Fixed (both parts, as specified)**:
+1. **Every** `Loop()` call in gi-nodes.js now uses the explicit-name object
+   form (`Loop({ start, end, type: 'int', name: '<unique>' }, ({ name }) => ...)`,
+   confirmed against `node_modules/three/src/nodes/utils/LoopNode.js`'s own
+   `param.name || this.getVarName(i)` handling) with a name that cannot
+   collide with any loop it might be nested inside, directly OR across a
+   plain-function-call boundary: the ray loop -> `rayI` (both update AND
+   depth kernels), the march-step loop -> `stepI`, the point-light loop ->
+   `lightI`, and (same bug class, found while auditing every `Loop()` call
+   in the file, latent but not yet live-tested since `createGIQueryNode`
+   isn't wired into any material yet) the query node's 3 nested corner
+   loops -> `cx`/`cy`/`cz` (previously all silently named `'i'` too, only
+   the JS-side destructuring alias `{i:ox}` differed cosmetically).
+2. **`dir` materialized via `.toVar()`** right after `fibonacciDirTSL(...)`
+   in both update kernels' ray loops -- a genuine frozen WGSL variable
+   holding the per-ray value, immune to being re-inlined/re-evaluated
+   wherever later referenced, regardless of naming elsewhere. `probeIdx`
+   and `probePos` also materialized defensively (they don't reference a
+   loop index directly, but freezing them is cheap insurance against this
+   whole bug class recurring for any future refactor).
+
+`test/gi-loop-naming-mirror.test.js` (8 tests) pins both parts: no bare
+(default-named) `Loop()` call remains anywhere in the file (regex scan
+with comments stripped, since several comments legitimately quote the
+OLD/buggy call text as documentation), every introduced name is present
+and non-colliding (`rayI` is the only intentionally-repeated name, across
+the two SEPARATE top-level update kernels which can never nest inside each
+other), `dir`'s `.toVar()` materialization appears exactly twice, and
+mutants reproducing each of the three specific pre-fix patterns (bare ray
+loop, un-materialized `dir`, cosmetic-only query-loop rename).
+
+Pass #9's `.assign()` resets and pass #6's `Break()` removal are NOT
+harmful (per parent's instruction to revert only if so) -- left in place
+as additional defense-in-depth even though neither was THE actual cause.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

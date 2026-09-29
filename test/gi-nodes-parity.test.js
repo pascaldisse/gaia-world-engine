@@ -48,12 +48,13 @@ test('irradiance kernel source wires occupancy march, sun N.L, point lights, bou
   const f = fixture();
   const { kernel } = createGIUpdateKernel({ ...f, raysPerProbe: 8, hysteresis: {} });
   const src = kernel.computeNode.shaderNode.jsFunc.toString();
-  const ops = ['traceAndShadeRayTSL', 'fibonacciDirTSL', 'decodeOctTSL', 'Loop(raysPerProbe', 'mix(newEstimate'];
+  const rayLoopSig = "Loop({ start: 0, end: raysPerProbe, type: 'int', name: 'rayI' }";
+  const ops = ['traceAndShadeRayTSL', 'fibonacciDirTSL', 'decodeOctTSL', rayLoopSig, 'mix(newEstimate'];
   for (const op of ops) {
     assert.ok(src.includes(op), `missing op "${op}" in the built kernel source`);
   }
   // mix(...) (the hysteresis write) must come AFTER the ray loop, not before
-  assert.ok(src.indexOf('mix(newEstimate') > src.indexOf('Loop(raysPerProbe'), 'hysteresis blend must follow ray accumulation');
+  assert.ok(src.indexOf('mix(newEstimate') > src.indexOf(rayLoopSig), 'hysteresis blend must follow ray accumulation');
 });
 
 test('depth kernel source shares the SAME traceAndShadeRayTSL call (single ray-march implementation, not a forked copy)', () => {
@@ -78,11 +79,18 @@ test('query node source wires real 8-corner nested loop, trilinear weight, octah
   const f = fixture();
   const node = createGIQueryNode({ atlases: f.atlases, worldPositionNode: vec3(1, 2, 3), normalNode: vec3(0, 1, 0), probeGrid: f.probeGrid });
   const src = node.shaderNode.jsFunc.toString();
-  for (const op of ['Loop(2', 'trilW', 'encodeOctTSL', 'octUvToTexelIndexTSL', 'chebyshev', 'backface']) {
+  for (const op of ["Loop({ start: 0, end: 2, type: 'int', name: 'cx' }", 'trilW', 'encodeOctTSL', 'octUvToTexelIndexTSL', 'chebyshev', 'backface']) {
     assert.ok(src.includes(op), `missing op "${op}" in the built query source`);
   }
-  // real 8 corners = three NESTED Loop(2, ...) calls, not one flat Loop(8, ...)
-  assert.equal((src.match(/Loop\(2,/g) || []).length, 3, 'expected 3 nested Loop(2,...) for ox/oy/oz');
+  // real 8 corners = three NESTED, DISTINCTLY-NAMED Loop calls (cx/cy/cz;
+  // 10th pass: they were previously all unnamed Loop(2,...) which
+  // generated the SAME default WGSL loop-variable name 'i' for all three,
+  // an instance of the exact name-collision bug class found live), not
+  // one flat Loop(8, ...)
+  for (const name of ['cx', 'cy', 'cz']) {
+    assert.ok(src.includes(`name: '${name}'`), `expected a distinctly-named corner loop '${name}'`);
+  }
+  assert.equal((src.match(/type: 'int', name: 'c[xyz]' \}/g) || []).length, 3, 'expected exactly 3 distinctly-named corner loops');
 });
 
 test('mutant: the pre-review query (cornerIdx = i, reading probes 0..7 for every pixel) is exactly the bug the parent flagged', () => {

@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { GIController, GI_DEFAULTS } from './gi/gi-controller.js';
 
 // World mood as data: fog, sky, sun, exposure, bloom — all patchable live.
 // Falls back to the kernel defaults when the component is removed.
@@ -10,6 +11,9 @@ export class Environment {
     this.sun = sun;
     this.post = post;
     this.audio = audio;
+    // probe-based dynamic GI (docs/GI-PROBES.md) — opt-in, default off; the
+    // controller allocates zero GPU resources until apply({gi:{enabled:true}})
+    this.gi = new GIController({ renderer });
     this.flashLevel = 0;
     this.flashColor = new THREE.Color('#b9c4ee');
     this.exposure = renderer.toneMappingExposure;
@@ -51,6 +55,7 @@ export class Environment {
       bloom: { strength: 0.35, radius: 0.4, threshold: 0.85 },
       ambient: { color: '#b8c6e6', intensity: 0 },
       lightScale: 1,
+      gi: { ...GI_DEFAULTS },
     };
     this.current.ambientIntensity = 0;
   }
@@ -93,6 +98,9 @@ export class Environment {
     // remembered so the editor's post toggle can hand bloom back exactly
     this.currentBloom = { ...this.defaults.bloom, ...(p.bloom ?? {}) };
     this.post?.setBloom(this.currentBloom);
+    // gated in GIController.configure(): enabled:false (the default) never
+    // allocates a probe grid, storage buffer, or compute kernel
+    this.gi?.configure({ ...GI_DEFAULTS, ...(p.gi ?? {}) });
     if (p.audio) this.audio?.applyBus(p.audio);
     this.current = {
       sunIntensity: sun.intensity,

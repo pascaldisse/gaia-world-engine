@@ -69,12 +69,11 @@ test('§2 decorrelation: mixSeed(seed,saltA) != mixSeed(seed,saltB); rand01 keye
   assert.ok(Math.abs(s / 2000 - 0.5) < 0.05);
 });
 
-test('oracle: exactly-closed set whose points sit closer than the quantum is still watertight (exact keys tried first)', () => {
-  const box = boxTriangles(V(0, 0, 0), V(1000, 1000, 1000));
-  const eps = 1e-9; // << quantum (1e-9 * diag) merges these two distinct-but-exactly-consistent points
-  const a = { x: 0, y: 0, z: 0 }, a2 = { x: eps, y: 0, z: 0 };
-  // split one triangle's corner into two points and patch the neighbour edge consistently
-  const tris = box.map(t => t.map(p => (p.x === 0 && p.y === 0 && p.z === 0 ? a : p)));
-  assert.equal(isWatertight(tris), true);
-  assert.notEqual(a.x, a2.x);
+test('oracle: exactly-closed set with distinct points closer than the quantum is still watertight (exact keys tried first)', () => {
+  // tetrahedron, diag ~1e3 -> quantum ~1.7e-6; B and C differ by 1e-10 so quantised keys merge them and the fixed-precision
+  // check alone sees a repeated/degenerate edge set, while the exact edge structure is a perfect closed surface.
+  const A = V(0, 0, 0), B = V(1000, 0, 0), C = V(1000, 1e-10, 0), D = V(500, 500, 800);
+  const tetra = [[A, C, B], [A, B, D], [B, C, D], [C, A, D]]; // outward-consistent
+  assert.equal(isWatertight(tetra), true);
+  assert.equal(isWatertight(tetra.slice(1)), false);
 });

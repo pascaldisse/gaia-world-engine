@@ -11,9 +11,10 @@ import { buildProbeGrid, recenterGrid } from './probe-grid.js';
 import { voxelizeTriangles } from './voxelize.js';
 import {
   createOccupancyStorage, createProbeAtlases, createPointLightPool,
-  createGIUpdateKernel, createGIDepthUpdateKernel,
+  createGIUpdateKernel, createGIDepthUpdateKernel, createGIQueryNode,
 } from './gi-nodes.js';
-import { uniform, vec3 } from 'three/tsl';
+import { GISceneAttachment } from './gi-attach.js';
+import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
 
 export const GI_DEFAULTS = {
   enabled: false,
@@ -35,8 +36,9 @@ export const GI_DEFAULTS = {
 };
 
 export class GIController {
-  constructor({ renderer } = {}) {
+  constructor({ renderer, scene } = {}) {
     this.renderer = renderer;
+    this.scene = scene ?? null;
     this.enabled = false;
     this.resources = null;
     this.params = { ...GI_DEFAULTS };
@@ -45,6 +47,7 @@ export class GIController {
     this._probeCursor = 0;
     this._originArr = [0, 0, 0];
     this._voxelConfig = null; // {dims, voxelOriginArr, cellSize} — plain JS, CPU-side
+    this._attachment = null; // GISceneAttachment, alive across an enabled span so disable can restore it
   }
 
   // -------------------------------------------------------------- config
@@ -54,7 +57,10 @@ export class GIController {
     this.params = p;
     if (!p.enabled) {
       // LAW: default/disabled path allocates zero storage buffers, zero
-      // compute kernels, zero probe grid — not "disabled but built".
+      // compute kernels, zero probe grid — not "disabled but built". Restore
+      // every material GI ever attached to first (parent review E).
+      this._attachment?.detachAll();
+      this._attachment = null;
       this.enabled = false;
       this.resources = null;
       return false;
@@ -89,8 +95,18 @@ export class GIController {
       hysteresis: p, albedo: p.albedo, skyColor: p.skyColor, maxDist: p.voxelMaxDist,
     });
 
-    this.resources = { grid, atlases, lights, sun, probeGrid, occ, irr, dep, params: p };
+    // shared query node: positionWorld/normalWorld are three's own
+    // per-fragment builtins, so ONE query graph is correct for every
+    // material it gets attached to below (not rebuilt per-material)
+    const queryNode = createGIQueryNode({ atlases, worldPositionNode: positionWorld, normalNode: normalWorld, probeGrid });
+
+    this.resources = { grid, atlases, lights, sun, probeGrid, occ, irr, dep, queryNode, params: p };
     this._probeCursor = 0;
+
+    // wire E: attach to every eligible material already in the scene
+    this._attachment = new GISceneAttachment();
+    this._attachment.attachAll(this.scene, queryNode);
+
     return true;
   }
 
@@ -141,7 +157,7 @@ export class GIController {
    */
   update(dt, cameraPos = [0, 0, 0]) {
     if (!this.enabled || !this.resources) return { dispatched: false };
-    const { grid, probeGrid, irr, dep, params: p } = this.resources;
+    const { grid, probeGrid, irr, dep, queryNode, params: p } = this.resources;
 
     const rec = recenterGrid(this._originArr, [cameraPos[0], 0, cameraPos[2]], p.spacing, p.halfExtentXZ, this._originArr[1]);
     this._originArr = rec.origin;
@@ -156,10 +172,16 @@ export class GIController {
     this.renderer?.compute(irr.kernel);
     this.renderer?.compute(dep.kernel);
 
-    return { dispatched: true, probeOffset: dispatchedOffset, recentered: rec.shifted };
+    // wire E: a cheap mesh-count check catches meshes added after enable
+    // and attaches them without re-scanning already-attached materials
+    const newlyAttached = this._attachment?.syncNewMeshes(this.scene, queryNode) ?? 0;
+
+    return { dispatched: true, probeOffset: dispatchedOffset, recentered: rec.shifted, newlyAttached };
   }
 
   dispose() {
+    this._attachment?.detachAll();
+    this._attachment = null;
     this.enabled = false;
     this.resources = null;
   }

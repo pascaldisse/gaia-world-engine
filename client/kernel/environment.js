@@ -13,7 +13,7 @@ export class Environment {
     this.audio = audio;
     // probe-based dynamic GI (docs/GI-PROBES.md) — opt-in, default off; the
     // controller allocates zero GPU resources until apply({gi:{enabled:true}})
-    this.gi = new GIController({ renderer });
+    this.gi = new GIController({ renderer, scene });
     this.flashLevel = 0;
     this.flashColor = new THREE.Color('#b9c4ee');
     this.exposure = renderer.toneMappingExposure;

@@ -33,6 +33,7 @@ export const GI_DEFAULTS = {
   albedo: 0.5, // PLACEHOLDER flat GPU-side albedo (no per-voxel color storage in v0, see docs)
   skyColor: [0.4, 0.5, 0.7], // PLACEHOLDER miss/ambient color
   maxPointLights: 16, // PLACEHOLDER pooled point-light cap
+  sun: { direction: [0, -1, 0], color: [1, 1, 1], intensity: 1 }, // PLACEHOLDER default sun (straight down, white)
 };
 
 export class GIController {
@@ -75,9 +76,9 @@ export class GIController {
     });
     const lights = createPointLightPool(p.maxPointLights);
     const sun = {
-      direction: uniform(vec3(0, -1, 0)),
-      color: uniform(vec3(1, 1, 1)),
-      intensity: uniform(1),
+      direction: uniform(vec3(...p.sun.direction)),
+      color: uniform(vec3(...p.sun.color)),
+      intensity: uniform(p.sun.intensity),
     };
     this._originArr = [0, grid.baseY, 0];
     const probeGrid = { origin: uniform(vec3(...this._originArr)), spacing: p.spacing, dims: grid.dims };

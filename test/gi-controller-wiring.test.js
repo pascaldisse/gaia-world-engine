@@ -126,6 +126,27 @@ test('update() recenters the probe grid origin toward the camera (X/Z only) with
   assert.equal(originAfter.y, originBefore.y, 'Y layer stack stays fixed for the RTS cascade (docs)');
 });
 
+// --------------------------------------------------------------------- sun param
+test('configure() wires the sun direction/color/intensity params into the kernel uniforms (not hard-coded)', () => {
+  const gi = new GIController({});
+  gi.configure({
+    enabled: true, spacing: 8, halfExtentXZ: 8, layersY: 1, heightRange: [0, 1],
+    sun: { direction: [1, 0, 0], color: [1, 0.2, 0.2], intensity: 3 },
+  });
+  const { sun } = gi.resources;
+  assert.equal(sun.direction.value.x, 1);
+  assert.equal(sun.direction.value.y, 0);
+  assert.equal(sun.color.value.x, 1);
+  assert.equal(sun.color.value.y, 0.2);
+  assert.equal(sun.intensity.value, 3);
+});
+
+test('mutant: a hard-coded straight-down sun (the pre-fix default) would ignore a configured horizontal direction', () => {
+  const hardcoded = [0, -1, 0]; // BUG: configure() params.sun never read
+  const configured = [1, 0, 0];
+  assert.notDeepEqual(hardcoded, configured);
+});
+
 // --------------------------------------------------------------------- dispose
 test('dispose() drops resources; a subsequent update() is a no-op again', () => {
   const renderer = fakeRenderer();

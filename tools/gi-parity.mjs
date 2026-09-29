@@ -213,7 +213,7 @@ function extractCpuReferenceInputs(gi) {
   const dims = grid.dims;
   const occArr = voxelizeTriangles(gi._sceneTriangles, gi._voxelConfig.voxelOriginArr, gi._voxelConfig.cellSize, gi._voxelConfig.dims);
   return {
-    origin, spacing, dims,
+    origin, spacing, dims, voxelDims: gi._voxelConfig.dims,
     occupancy: occArr, voxelOrigin: gi._voxelConfig.voxelOriginArr, cellSize: gi._voxelConfig.cellSize,
     sun: {
       direction: [sun.direction.value.x, sun.direction.value.y, sun.direction.value.z],
@@ -235,7 +235,7 @@ function computeCpuReferenceAtlas(cfg) {
         const pIdx = probeIndex(ix, iy, iz, dims);
         const probePos = [origin[0] + ix * spacing, origin[1] + iy * spacing, origin[2] + iz * spacing];
         const { irradianceTexels } = referenceUpdateProbe({
-          probePos, occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims,
+          probePos, occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.voxelDims ?? dims,
           maxDist: cfg.maxDist, raysPerProbe: cfg.raysPerProbe, rotation: null,
           sun: cfg.sun, albedo: cfg.albedo, skyColor: cfg.skyColor,
           irradianceRes, depthRes: cfg.depthRes,
@@ -280,7 +280,7 @@ export function debugProbeRaysCPU(probeIdx, cfg, raysToCapture) {
   const dirs = fibonacciSphereDirs(cfg.raysPerProbe, null).slice(0, raysToCapture);
   return dirs.map((dir) => ({
     dir,
-    hitT: marchOccupancy(cfg.occupancy, cfg.dims, cfg.voxelOrigin, cfg.cellSize, probePos, dir, cfg.maxDist),
+    hitT: marchOccupancy(cfg.occupancy, cfg.voxelDims ?? cfg.dims, cfg.voxelOrigin, cfg.cellSize, probePos, dir, cfg.maxDist),
   }));
 }
 

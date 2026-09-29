@@ -31,7 +31,8 @@ test('configure({enabled:true}) builds a real probe grid + storage atlases + com
   assert.equal(built, true);
   assert.ok(gi.resources);
   assert.equal(gi.resources.atlases.probeCount, gi.resources.grid.count);
-  assert.equal(gi.resources.kernel.isComputeNode, true);
+  assert.equal(gi.resources.irr.kernel.isComputeNode, true);
+  assert.equal(gi.resources.dep.kernel.isComputeNode, true);
 });
 
 test('disabling after having been enabled tears the resources back down (no stale GPU handles)', () => {

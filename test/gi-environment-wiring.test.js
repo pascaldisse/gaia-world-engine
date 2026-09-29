@@ -49,7 +49,7 @@ test('apply({gi:{enabled:true, ...}}) builds real resources through the componen
   env.apply({ gi: { enabled: true, spacing: 8, halfExtentXZ: 16, layersY: 2, heightRange: [0, 4], raysPerProbe: 8 } });
   assert.equal(env.gi.enabled, true);
   assert.ok(env.gi.resources);
-  assert.equal(env.gi.resources.kernel.isComputeNode, true);
+  assert.equal(env.gi.resources.irr.kernel.isComputeNode, true);
 });
 
 test('switching a scene\'s environment params (no gi key) after GI was enabled does not silently keep it enabled (apply always re-derives from defaults+params)', () => {

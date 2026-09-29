@@ -192,6 +192,54 @@ raysPerProbe/updateFraction, the cutoff is real and needs a harder fix
 dispatches); if `writtenCount === probes` and results now match, the
 mitigation was sufficient.
 
+## Live-GPU root-cause pass #2 (09-29, parent rerun after pass #1)
+Pass #1's fixes worked (`writtenCount` 9/9 and 25/25 -- every probe's atlas
+slot really was written by a real dispatch, refuting the timeout/TDR
+hypothesis), and where a probe WAS nonzero its value was EXACT vs the CPU
+reference (shading itself confirmed correct). But a SPATIAL (not random)
+subset of probes still read exactly 0 -- clustered near scene(ii)'s wall,
+not scattered.
+
+Root cause (`test/gi-occupancy-bounds-mirror.test.js` CPU-mirrors both
+strategies and proves the divergence): `marchOccupancyTSL` CLAMPED an
+out-of-grid world position into `[0,dims)` and read that clamped cell
+UNCONDITIONALLY every march step -- so once a ray's march position left
+the grid, every remaining step kept re-sampling the SAME boundary cell. If
+that boundary cell happened to be occupied (exactly the case for a wall
+whose own AABB gets clamped to the grid edge at WRITE time too --
+voxelize.js does this intentionally, see its own docs), every ray that
+exited the grid on that side falsely registered a PERMANENT hit at the
+first step (t=0), zeroing the whole probe (every one of its rays "hits",
+none reach sky). voxelize.js's own `marchOccupancy` (the CPU reference)
+does the opposite: bounds-check FIRST, treat out-of-range as "no geometry
+there" and skip the read, never clamp-and-read. The bug is silent whenever
+the boundary cell happens to be empty (most of a scene) -- explaining why
+it only showed up spatially near actual occluding geometry near the grid
+edge, not everywhere.
+
+**Fixed**: `marchOccupancyTSL` now bounds-checks per step
+(`ix/iy/iz >= 0 and < dims`) and only reads+tests occupancy when in range;
+out-of-bounds is unconditionally treated as empty, exactly matching
+voxelize.js. The old `worldToVoxelIndexTSL` clamp-and-read helper is gone.
+
+**New diagnostics added** (both requested for the next live run):
+- `compareOccupancy()` (tools/gi-parity.mjs): elementwise compares the
+  GPU occupancy storage buffer's readback against `voxelizeTriangles()`'s
+  CPU output for the identical scene -- reports `mismatches` count +
+  `firstMismatchIndex`. Scalar `uint32` storage has no padding quirk (that
+  was vec3-specific), so no unpad step is needed here.
+- `createSkyHitsBuffer()` (gi-nodes.js): a per-probe counter of rays that
+  reported a miss (sky), wired through `GIController.resources.skyHits`
+  and read back by the harness as `skyHits: number[]`. Approximate
+  (non-atomic across up to irradianceRes^2 threads per probe, each
+  re-tracing the same ray set -- see its doc comment) but sufficient to
+  tell "legitimately zero misses" from "nonzero" per probe, cross-checked
+  against the occupancy comparison above: if a probe reads 0 irradiance
+  AND has `skyHits[i]===0` AND `occupancy.mismatches===0`, it's genuinely
+  enclosed (correct); if `skyHits[i]===0` but the occupancy comparison
+  shows mismatches, the fix above didn't fully land or there's a further
+  bug still to find.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

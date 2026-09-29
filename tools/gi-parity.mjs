@@ -53,6 +53,30 @@ export function unpadVec3(a, expectedLength) {
   return out;
 }
 
+/**
+ * Elementwise compare the GPU occupancy storage buffer's readback (uint32,
+ * one element per cell -- NO vec3-style padding, scalars pack tightly in
+ * WGSL storage arrays) against the CPU voxelize.js output for the SAME
+ * scene. Pure, GPU-free -- the actual GPU array is read by runScene() and
+ * handed to this function. §GI-PROBES.md, parent review 09-29 2nd pass.
+ */
+export function compareOccupancy(actualUint32, expectedUint8) {
+  if (actualUint32.length !== expectedUint8.length) {
+    return { mismatches: -1, firstMismatchIndex: -1, total: 0, reason: `length mismatch: ${actualUint32.length} vs ${expectedUint8.length}` };
+  }
+  let mismatches = 0;
+  let firstMismatchIndex = -1;
+  for (let i = 0; i < actualUint32.length; i++) {
+    const a = actualUint32[i] ? 1 : 0;
+    const e = expectedUint8[i] ? 1 : 0;
+    if (a !== e) {
+      mismatches++;
+      if (firstMismatchIndex === -1) firstMismatchIndex = i;
+    }
+  }
+  return { mismatches, firstMismatchIndex, total: actualUint32.length };
+}
+
 export function compareAtlas(actual, expected, tolerance = DEFAULT_TOLERANCE) {
   if (actual.length !== expected.length) {
     return { pass: false, maxAbsErr: Infinity, meanAbsErr: Infinity, count: 0, firstFailIndex: -1, reason: `length mismatch: ${actual.length} vs ${expected.length}` };
@@ -263,8 +287,22 @@ export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
   const touchedBuf = await renderer.getArrayBufferAsync(touchedAttr);
   const written = Array.from(new Uint32Array(touchedBuf)).map((v) => v !== 0);
 
+  // parity-harness diagnostic (parent review 09-29, 2nd pass): per-probe
+  // sky (miss) ray count, approximate (see createSkyHitsBuffer's doc)
+  const skyHitsAttr = gi.resources.skyHits.value;
+  const skyHitsBuf = await renderer.getArrayBufferAsync(skyHitsAttr);
+  const skyHits = Array.from(new Uint32Array(skyHitsBuf));
+
   const cfg = extractCpuReferenceInputs(gi);
   const expected = computeCpuReferenceAtlas(cfg);
+
+  // occupancy readback vs the CPU voxelize.js output for the identical
+  // scene -- the direct test of "did the GPU end up marching against the
+  // SAME solid geometry the CPU reference used"
+  const occAttr = gi.resources.occ.occupancy.value;
+  const occBuf = await renderer.getArrayBufferAsync(occAttr);
+  const occActual = new Uint32Array(occBuf);
+  const occCompare = compareOccupancy(occActual, cfg.occupancy);
 
   const cmp = compareAtlas(unpadVec3(actual, expected.length), expected);
   cmp.expectedMax = Math.max(...expected); cmp.actualMax = Math.max(...unpadVec3(actual, expected.length));
@@ -272,6 +310,8 @@ export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
   cmp.perProbeActual = per(unpadVec3(actual, expected.length)); cmp.perProbeExpected = per(expected); cmp.probePositions = cfg.probePositions ?? null;
   cmp.written = written;
   cmp.writtenCount = written.filter(Boolean).length;
+  cmp.skyHits = skyHits;
+  cmp.occupancy = occCompare;
   return { scene: name, updates: K, probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
 }
 

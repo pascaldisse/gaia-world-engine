@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  compareAtlas, computeUpdateCount, DEFAULT_TOLERANCE,
+  compareAtlas, compareOccupancy, computeUpdateCount, DEFAULT_TOLERANCE,
   buildClosedBoxScene, buildOpenPlaneRedWallScene,
   runScene, runAll,
 } from '../tools/gi-parity.mjs';
@@ -63,6 +63,36 @@ test('compareAtlas: mismatched lengths fail cleanly instead of throwing', () => 
 test('mutant: a comparator that ignores relTol (absolute-only) would wrongly fail the large-magnitude case above', () => {
   const absOnly = (actual, expected, absTol) => Math.abs(actual[0] - expected[0]) <= absTol; // BUG: no relTol term
   assert.equal(absOnly([101], [100], DEFAULT_TOLERANCE.absTol), false, 'the absolute-only mutant rejects a value the real relTol-aware comparator accepts');
+});
+
+// -------------------------------------------------------------- compareOccupancy
+test('compareOccupancy: identical occupancy arrays report zero mismatches', () => {
+  const r = compareOccupancy(new Uint32Array([1, 0, 0, 1]), new Uint8Array([1, 0, 0, 1]));
+  assert.equal(r.mismatches, 0);
+  assert.equal(r.firstMismatchIndex, -1);
+  assert.equal(r.total, 4);
+});
+
+test('compareOccupancy: reports the count AND the first mismatching index', () => {
+  const r = compareOccupancy(new Uint32Array([1, 0, 1, 0, 1]), new Uint8Array([1, 0, 0, 0, 0]));
+  assert.equal(r.mismatches, 2);
+  assert.equal(r.firstMismatchIndex, 2);
+});
+
+test('compareOccupancy: treats any nonzero uint32 as "occupied" (not just exactly 1)', () => {
+  const r = compareOccupancy(new Uint32Array([7]), new Uint8Array([1]));
+  assert.equal(r.mismatches, 0, 'a stray nonzero value should still normalize to "occupied", matching the boolean semantics both sides use');
+});
+
+test('compareOccupancy: mismatched lengths fail cleanly instead of throwing', () => {
+  const r = compareOccupancy(new Uint32Array([1, 2]), new Uint8Array([1, 2, 3]));
+  assert.equal(r.mismatches, -1);
+  assert.match(r.reason, /length mismatch/);
+});
+
+test('mutant: comparing raw values instead of normalizing to boolean would wrongly flag GPU\'s uint32(1) vs CPU\'s uint8(1) as equal by luck but break on any other nonzero encoding', () => {
+  const rawEqual = (a, b) => a === b; // BUG: no boolean normalization
+  assert.equal(rawEqual(7, 1), false, 'a raw-equality mutant would wrongly report occupancy mismatch for a nonzero-but-not-1 GPU value');
 });
 
 // ---------------------------------------------------------- computeUpdateCount

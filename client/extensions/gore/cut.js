@@ -28,8 +28,12 @@ function partPlane(three, mesh, part) {
     case 'head': return { point: [midX, min.y + 0.85 * height, midZ], normal: [0, 1, 0] };
     case 'leftArm': return { point: [min.x + width / 3, min.y + 0.65 * height, midZ], normal: normalize([-1, 0.15, 0]) };
     case 'rightArm': return { point: [min.x + (2 * width) / 3, min.y + 0.65 * height, midZ], normal: normalize([1, 0.15, 0]) };
-    case 'leftLeg': return { point: [midX, midY, midZ], normal: normalize([-1, -1, 0]) };
-    case 'rightLeg': return { point: [midX, midY, midZ], normal: normalize([1, -1, 0]) };
+    // x-coefficient dominant over y so the boundary line x = -y*(1/3) never
+    // runs off the box's own x-range for any y within it (unlike a 45°
+    // diagonal, which degenerates to "full width" at the box's y extremes
+    // and made leftLeg/rightLeg bounding-box-identical).
+    case 'leftLeg': return { point: [midX, midY, midZ], normal: normalize([-3, -1, 0]) };
+    case 'rightLeg': return { point: [midX, midY, midZ], normal: normalize([3, -1, 0]) };
     default: return null;
   }
 }

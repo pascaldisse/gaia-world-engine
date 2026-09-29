@@ -168,3 +168,13 @@ test('#20 raycast: two spheres along a ray -> NEARER id; miss/maxDistance/behind
   assert.equal(ho.id, o);
   assert.ok(Math.abs(ho.distance - (5 - Math.sqrt(3))) < 1e-9, 'OBB tested by conservative bounding sphere r=|halfExtents|');
 });
+
+test('step(0) applies no motion but still lifts a just-activated body out of the ground (consumer first-tick dt=0)', () => {
+  const w = new RFWorld();
+  const id = w.addBody({ position: v(0, 0.1, 0), shape: sph(0.5), kinematic: true });
+  w.step(0); assert.equal(w.getBody(id).position.y, 0.1, 'kinematic untouched');
+  w.getBody(id).kinematic = false;
+  w.step(0);
+  assert.equal(w.getBody(id).position.y, 0.5);
+  assert.deepEqual(w.getBody(id).velocity, v(0, 0, 0));
+});

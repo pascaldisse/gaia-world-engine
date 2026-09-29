@@ -49,6 +49,7 @@ export class RFWorld {
   getBody(id) { return this.bodies.get(id); }
 
   step(dt) {
+    if (dt === 0) { this._resolveGround(); return; } // no time passes, but a just-activated body must never sit below the plane
     if (!(dt > 0) || !Number.isFinite(dt)) return;
     const g = this.gravity, restThreshold = Math.abs(g.y) * dt * 2; // approach speeds this small = resting contact, not a bounce
     const damp = Math.max(0, 1 - this.friction * dt);
@@ -70,6 +71,14 @@ export class RFWorld {
       if (grounded && speed < this.sleepLinear) {
         if (++b.sleepCounter >= this.sleepFrames) { b.awake = false; v.x = v.y = v.z = 0; w.x = w.y = w.z = 0; }
       } else b.sleepCounter = 0;
+    }
+  }
+
+  _resolveGround() {
+    for (const b of this.bodies.values()) {
+      if (b.kinematic || !b.awake) continue;
+      const lo = this.groundY + extentY(b.shape);
+      if (b.position.y < lo) { b.position.y = lo; if (b.velocity.y < 0) b.velocity.y = 0; }
     }
   }
 

@@ -101,6 +101,37 @@ described (`vec3(0, 0, 0)` accumulation, `cornerIdx = i`,
 (golden angle `FIB_PHI`) are cross-checked bit-exact against
 `irradiance.js`'s own formula.
 
+## GPU parity harness (09-29, parent review stage F)
+`tools/gi-parity.mjs` + `tools/gi-parity.html` — for Pascal to run live (this
+agent has no browser). Drives a REAL `GIController` against a REAL
+`THREE.WebGPURenderer`, runs enough `update()` calls for the round-robin
+probe rotation to fully cycle AND each touched probe's hysteresis to
+converge (`computeUpdateCount()`), reads the irradiance atlas back via
+`renderer.getArrayBufferAsync()`, and compares it texel-for-texel to
+`gi-reference.js` run on the identical occupancy/probe-positions/sun
+(`compareAtlas()`, float32 + fixed-step-march tolerance documented in the
+file). Two scenes: (i) closed double-shell box, sun outside (expect ~0
+everywhere); (ii) open plane + wall pillar, sun with a horizontal component
+(a purely vertical sun cannot light a vertical face at all — the harness
+asserts this as a discriminator on itself). Results print to
+`window.__giParity` and `document.body` as JSON.
+
+**Serve** (node_modules here is a symlink OUTSIDE this worktree —
+`readlink node_modules` — which breaks Vite's default `server.fs.allow`
+sandbox; plain `http.server` has no such sandbox):
+```
+cd /Users/pascaldisse/projects/GAIA-World-Engine-wt/lampas-gi
+python3 -m http.server 8420
+```
+**Open**: `http://localhost:8420/tools/gi-parity.html` in a WebGPU-capable
+browser (Chrome/Edge 113+).
+
+Discovered while building this: `gi-controller.js`'s `sun` param was
+hard-coded (straight down, white) until this stage — fixed (now reads
+`params.sun`), otherwise scene (ii)'s wall face could never receive direct
+light (`ndotl` always 0 for a vertical face under a vertical sun) and the
+harness would have nothing meaningful to compare on that scene.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GI probe parity: GPU vs gi-reference.js</title>
+<style>
+  body { background:#111; color:#ddd; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; padding:2em; white-space:pre-wrap; }
+  h1 { color:#8fb3ff; font-size:14px; }
+  .pass { color:#7ee787; } .fail { color:#ff7b72; }
+</style>
+</head>
+<body>
+<h1>running GI probe parity harness…</h1>
+
+<!--
+  §GI-PROBES.md, parent review stage F. Serve + open (from the WORKTREE
+  root, i.e. this repo's own root, NOT tools/):
+
+    cd /Users/pascaldisse/projects/GAIA-World-Engine-wt/lampas-gi
+    python3 -m http.server 8420
+    # then open http://localhost:8420/tools/gi-parity.html
+
+  Why python3's http.server, not `npx vite`: node_modules here is a SYMLINK
+  pointing OUTSIDE this worktree (to a sibling checkout's node_modules, see
+  `readlink node_modules`). Vite's dev server enforces `server.fs.allow` by
+  default and denies requests whose REAL (symlink-resolved) path falls
+  outside the project root -- exactly this situation -- so `npx vite` will
+  404/403 on every /node_modules/three/... import unless you add
+  `server: { fs: { allow: ['..', '../../<target-of-readlink-node_modules>'] } }`
+  to a vite.config.js first. `python3 -m http.server` has no such sandbox
+  (plain filesystem access, symlinks transparent) and needs zero config --
+  use it unless you specifically want Vite.
+
+  The importmap below resolves the SAME three r180 build files
+  client/kernel/*.js import under Node (three/package.json "exports":
+  "./webgpu" -> build/three.webgpu.js, "./tsl" -> build/three.tsl.js),
+  just via browser-native import maps instead of Node's package resolution.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/webgpu": "/node_modules/three/build/three.webgpu.js",
+    "three/tsl": "/node_modules/three/build/three.tsl.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+  import { runAll } from './gi-parity.mjs';
+
+  const out = document.body;
+  const h1 = document.querySelector('h1');
+
+  function render(results) {
+    const allPass = results.every((r) => r.pass);
+    h1.textContent = allPass ? 'GI probe parity: ALL PASS' : 'GI probe parity: FAILURES';
+    h1.className = allPass ? 'pass' : 'fail';
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(results, null, 2);
+    out.appendChild(pre);
+  }
+
+  (async () => {
+    try {
+      if (!navigator.gpu) throw new Error('navigator.gpu unavailable -- this needs a WebGPU-capable browser (Chrome/Edge 113+, or Firefox with the flag)');
+      const results = await runAll();
+      // §requirement: printed to window.__giParity AND document.body text JSON
+      window.__giParity = results;
+      render(results);
+    } catch (err) {
+      h1.textContent = 'GI probe parity: ERROR';
+      h1.className = 'fail';
+      const pre = document.createElement('pre');
+      pre.textContent = (err && err.stack) || String(err);
+      out.appendChild(pre);
+      window.__giParity = { error: String(err && err.message || err) };
+    }
+  })();
+</script>
+</body>
+</html>

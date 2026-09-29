@@ -49,7 +49,10 @@ export class BloodParticles {
     this.geometry = new three.BoxGeometry(0.03, 0.03, 0.03);
     this.material = new three.MeshBasicNodeMaterial({ transparent: true, depthWrite: false });
     this.colorAttr = new three.InstancedBufferAttribute(new Float32Array(n * 4), 4);
-    this.geometry.setAttribute('gInstanceColor', this.colorAttr);
+    // goreX-prefixed: an attribute name becomes a WGSL identifier verbatim,
+    // and a plain word (e.g. 'meta') can collide with a WGSL keyword/reserved
+    // word and fail shader compilation -- see wgsl-keywords.js.
+    this.geometry.setAttribute('goreXParticleColor', this.colorAttr);
     this.material.colorNode = tsl.instancedBufferAttribute(this.colorAttr, 'vec4');
 
     this.mesh = new three.InstancedMesh(this.geometry, this.material, n);

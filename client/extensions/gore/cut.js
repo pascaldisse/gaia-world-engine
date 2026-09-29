@@ -106,6 +106,7 @@ export class GoreCut {
   constructor(gpu, scene, opts = {}) {
     this.three = gpu.three; this.scene = scene; this.seed = opts.seed ?? 1;
     this.pieces = []; // [{ mesh, velocity }] -- §1 update() integrates these
+    this.stumps = []; // kept only for dispose(); stumps do not move
   }
 
   _cloneBodyMaterial(material) {
@@ -145,6 +146,7 @@ export class GoreCut {
 
     this.scene.add(stumpMesh);
     this.scene.add(pieceMesh);
+    this.stumps.push(stumpMesh);
 
     const velocity = Array.isArray(options.impulse) ? [options.impulse[0], options.impulse[1], options.impulse[2]] : [0, 0, 0];
     pieceMesh.userData.gore = { velocity };

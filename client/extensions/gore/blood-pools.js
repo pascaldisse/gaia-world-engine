@@ -47,7 +47,10 @@ export class BloodPools {
     this.geometry = new three.CircleGeometry(1, 24);
     this.material = new three.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 });
     this.colorAttr = new three.InstancedBufferAttribute(new Float32Array(n * 4), 4);
-    this.geometry.setAttribute('gInstanceColor', this.colorAttr);
+    // goreX-prefixed: an attribute name becomes a WGSL identifier verbatim,
+    // and a plain word (e.g. 'meta') can collide with a WGSL keyword/reserved
+    // word and fail shader compilation -- see wgsl-keywords.js.
+    this.geometry.setAttribute('goreXDecalColor', this.colorAttr);
     this.material.colorNode = tsl.instancedBufferAttribute(this.colorAttr, 'vec4');
 
     this.mesh = new three.InstancedMesh(this.geometry, this.material, n);

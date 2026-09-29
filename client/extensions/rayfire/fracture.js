@@ -11,7 +11,7 @@ import { chainLoops, capPolygons, closeBoundaries, closeOpenShell } from './clos
 import { hullFaces } from './hull.js';
 
 const SALT_SEEDS = 0x5eed0001, SALT_COUNT = 0x5eed0002;
-export const VOLUME_EPS_REL = 1e-12; // × diag³: below this a cell is a flat sliver (§3.6)
+export const VOLUME_EPS_REL = 1e-9; // × diag³: below this a cell is a flat sliver / float-noise volume (§3.6)
 
 function normalizeOpts(o = {}) {
   return {
@@ -70,25 +70,24 @@ function clipHalfSpace(faces, n, d, interiorMaterial) {
     for (let i = 0; i < m; i++) { const dd = n.x * v[i].x + n.y * v[i].y + n.z * v[i].z - d; ds[i] = dd; if (dd > 0) pos++; else neg++; }
     if (pos === 0) { out.push(f); continue; }
     if (neg === 0) continue;
-    const poly = []; let exitPt = null;
+    const poly = [], kind = []; // kind: 0 plain vertex, 1 exit crossing, 2 entry crossing
     for (let i = 0; i < m; i++) {
       const a = v[i], b = v[(i + 1) % m], ia = ds[i] <= 0, ib = ds[(i + 1) % m] <= 0;
-      if (ia) poly.push(a);
-      if (ia !== ib) {
-        const x = cutPoint(a, b, ds[i], ds[(i + 1) % m]);
-        poly.push(x);
-        if (ia) exitPt = x; else if (exitPt) { cut.push({ a: exitPt, b: x }); exitPt = null; }
-        else cut.push({ a: null, b: x }); // entry seen before exit (wrap-around): resolved below
-      }
+      if (ia) { poly.push(a); kind.push(0); }
+      if (ia !== ib) { poly.push(cutPoint(a, b, ds[i], ds[(i + 1) % m])); kind.push(ia ? 1 : 2); }
     }
-    // wrap-around: polygon started outside -> first entry precedes the exit
-    const wrap = cut.length && cut[cut.length - 1].a === null;
-    if (wrap) { const e = cut.pop(); if (exitPt) cut.push({ a: exitPt, b: e.b }); }
-    // dedupe consecutive identical points
-    const clean = [];
-    for (const p of poly) if (!clean.length || !same(clean[clean.length - 1], p)) clean.push(p);
-    while (clean.length > 1 && same(clean[0], clean[clean.length - 1])) clean.pop();
-    if (clean.length >= 3) out.push({ verts: clean, interior: f.interior, materialId: f.materialId });
+    // dedupe consecutive identical points (carrying the crossing kind of the survivor)
+    const clean = [], ck = [];
+    for (let i = 0; i < poly.length; i++) {
+      const last = clean.length - 1;
+      if (last >= 0 && same(clean[last], poly[i])) { if (kind[i]) ck[last] = kind[i]; continue; }
+      clean.push(poly[i]); ck.push(kind[i]);
+    }
+    while (clean.length > 1 && same(clean[0], clean[clean.length - 1])) { if (ck[clean.length - 1] && !ck[0]) ck[0] = ck[clean.length - 1]; clean.pop(); ck.pop(); }
+    if (clean.length < 3) continue;
+    // plane edges of the clipped polygon: exit crossing followed (cyclically) by entry crossing
+    for (let i = 0; i < clean.length; i++) { const j = (i + 1) % clean.length; if (ck[i] === 1 && ck[j] === 2) cut.push({ a: clean[i], b: clean[j] }); }
+    out.push({ verts: clean, interior: f.interior, materialId: f.materialId });
   }
   // cut edges X1->X2 need the cap to supply X2->X1; opposite pairs already satisfy each other
   const cnt = new Map();
@@ -149,12 +148,15 @@ function finishCell(cell, o, volEps) {
     faces = q.faces;
   }
   if (!isWatertight(faces)) {
+    const ab = boundsOfFaces(cell.faces), dg = diagonalOf(ab);
+    const dims = [ab.max.x - ab.min.x, ab.max.y - ab.min.y, ab.max.z - ab.min.z].sort((p, q) => p - q);
+    if (!(dims[0] > dg * 1e-9)) return null; // flat sheet: no volume to keep, and a hull of it would invent one
     const pts = [];
     for (const f of cell.faces) for (const p of f.verts) pts.push({ x: p.x, y: p.y, z: p.z, exterior: !f.interior });
     faces = hullFaces(pts, o).faces; hull = true;
   }
   let vol = facesVolume(faces);
-  if (vol < 0) { faces = flipFaces(faces); vol = -vol; }
+  if (vol < 0) { faces = flipFaces(faces); vol = facesVolume(faces); }
   if (!(vol > volEps)) return null;
   return { faces, uncappedLoops: uncapped, hullFallback: hull, volume: vol };
 }
@@ -177,3 +179,4 @@ export function fractureCells(triangles, opts) {
   }
   return cells;
 }
+export const _internals = { buildCell, finishCell, clipHalfSpace };

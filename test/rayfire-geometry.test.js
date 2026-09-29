@@ -68,3 +68,13 @@ test('§2 decorrelation: mixSeed(seed,saltA) != mixSeed(seed,saltB); rand01 keye
   let s = 0; for (let i = 0; i < 2000; i++) s += rand01(1, i);
   assert.ok(Math.abs(s / 2000 - 0.5) < 0.05);
 });
+
+test('oracle: exactly-closed set whose points sit closer than the quantum is still watertight (exact keys tried first)', () => {
+  const box = boxTriangles(V(0, 0, 0), V(1000, 1000, 1000));
+  const eps = 1e-9; // << quantum (1e-9 * diag) merges these two distinct-but-exactly-consistent points
+  const a = { x: 0, y: 0, z: 0 }, a2 = { x: eps, y: 0, z: 0 };
+  // split one triangle's corner into two points and patch the neighbour edge consistently
+  const tris = box.map(t => t.map(p => (p.x === 0 && p.y === 0 && p.z === 0 ? a : p)));
+  assert.equal(isWatertight(tris), true);
+  assert.notEqual(a.x, a2.x);
+});

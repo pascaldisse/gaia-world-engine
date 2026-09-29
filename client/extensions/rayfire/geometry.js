@@ -64,17 +64,20 @@ export function quantumFor(polys) {
 }
 
 // Directed-edge oracle: every directed edge has exactly one reverse twin and no directed edge repeats.
+// Keys: exact coordinates first (what the producers guarantee — cut points are computed canonically), else fixed-
+// precision keys (scale-relative quantum) so float-noisy inputs still count as closed. Either passing = watertight.
 export function isWatertight(input, quantum) {
   const polys = input.map(f => (isFace(f) ? f.verts : f));
   if (!polys.length) return false;
-  const q = quantum ?? quantumFor(polys);
+  if (checkClosed(polys, 0)) return true;
+  return checkClosed(polys, quantum ?? quantumFor(polys));
+}
+
+function checkClosed(polys, q) {
   const ids = new Map();
-  const idOf = p => {
-    const k = `${Math.round(p.x / q)},${Math.round(p.y / q)},${Math.round(p.z / q)}`;
-    let id = ids.get(k);
-    if (id === undefined) { id = ids.size; ids.set(k, id); }
-    return id;
-  };
+  const idOf = q > 0
+    ? p => { const k = `${Math.round(p.x / q)},${Math.round(p.y / q)},${Math.round(p.z / q)}`; let id = ids.get(k); if (id === undefined) { id = ids.size; ids.set(k, id); } return id; }
+    : p => { const k = `${p.x},${p.y},${p.z}`; let id = ids.get(k); if (id === undefined) { id = ids.size; ids.set(k, id); } return id; };
   const SH = 67108864; // 2^26 ids per axis: key stays an exact double
   const dir = new Set();
   let edges = 0;

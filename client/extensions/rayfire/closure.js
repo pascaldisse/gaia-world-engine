@@ -8,6 +8,7 @@
 import { sub, cross, dot, len, boundsOf, diagonalOf } from './geometry.js';
 
 export const WELD_REL = 1e-7;
+export const FLAT_COMPONENT_REL = 1e-7; // |volume| ≤ this × diag³ ⇒ component is a flat sheet
 
 const keyOf = (p, q) => (q > 0 ? `${Math.round(p.x / q)},${Math.round(p.y / q)},${Math.round(p.z / q)}` : `${p.x},${p.y},${p.z}`);
 
@@ -32,7 +33,7 @@ function centroidFan(pts) {
 
 // Loop (CCW about its own Newell normal) -> convex polygons whose perimeter edges are exactly the loop edges
 // (plus internal diagonals that cancel pairwise). Returns vec[][] polygons.
-export function capPolygons(loop) {
+export function capPolygons(loop, conflict = null) {
   const pts = [];
   for (const p of loop) { const l = pts[pts.length - 1]; if (!l || l.x !== p.x || l.y !== p.y || l.z !== p.z) pts.push(p); }
   while (pts.length > 1 && pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y && pts[0].z === pts[pts.length - 1].z) pts.pop();
@@ -52,7 +53,14 @@ export function capPolygons(loop) {
     if (dot(cross(sub(b, a), sub(c, b)), un) < -ext * ext * 1e-9) convex = false;
   }
   if (convex) return [pts];
-  return earClip(pts, un) ?? centroidFan(pts);
+  const ears = earClip(pts, un);
+  if (!ears) return centroidFan(pts);
+  if (conflict) { // an ear-clip diagonal that coincides with an existing mesh edge would repeat a directed edge
+    const dir = new Map(); const K = p => `${p.x},${p.y},${p.z}`;
+    for (const t of ears) for (let i = 0; i < 3; i++) dir.set(K(t[i]) + '>' + K(t[(i + 1) % 3]), [t[i], t[(i + 1) % 3]]);
+    for (const [k, [a, b]] of dir) if (dir.has(K(b) + '>' + K(a)) && (conflict(a, b) || conflict(b, a))) return centroidFan(pts);
+  }
+  return ears;
 }
 
 function earClip(pts, un) {
@@ -140,7 +148,8 @@ export function closeBoundaries(faces, { interiorMaterial = 1, quantum = 0 } = {
   if (!need.length) return { faces, capped: 0, uncapped: false };
   const { loops, dangling } = chainLoops(need, quantum);
   const out = faces.slice(); let capped = 0;
-  for (const loop of loops) for (const poly of capPolygons(loop)) { out.push({ verts: poly, interior: true, materialId: interiorMaterial }); capped++; }
+  const conflict = (a, b) => cnt.has(idOf(a) * SH + idOf(b));
+  for (const loop of loops) for (const poly of capPolygons(loop, conflict)) { out.push({ verts: poly, interior: true, materialId: interiorMaterial }); capped++; }
   return { faces: out, capped, uncapped: dangling > 0 };
 }
 
@@ -168,11 +177,24 @@ export function closeOpenShell(triangles, { exteriorMaterial = 0, interiorMateri
     seenTri.add(key); tris.push([a, b, c]);
   }
   if (orient) orientConsistently(tris);
+  tris = dropRepeatedEdges(tris);
   let faces = tris.map(([a, b, c]) => ({ verts: [verts[a], verts[b], verts[c]], interior: false, materialId: exteriorMaterial }));
   const closed = closeBoundaries(faces, { interiorMaterial, quantum: 0 });
   faces = closed.faces;
   if (orient) faces = fixComponentSigns(faces);
   return { faces, uncappedLoops: closed.uncapped, capped: closed.capped, aabb };
+}
+
+// A directed edge may appear at most once (a repeat = non-manifold fin no cap can ever repair): greedily drop the
+// triangle that would repeat one. Afterwards boundary in/out degrees balance at every vertex, so capping always closes.
+function dropRepeatedEdges(tris) {
+  const SH = 67108864, dir = new Set(), kept = [];
+  for (const t of tris) {
+    const k0 = t[0] * SH + t[1], k1 = t[1] * SH + t[2], k2 = t[2] * SH + t[0];
+    if (dir.has(k0) || dir.has(k1) || dir.has(k2)) continue;
+    dir.add(k0); dir.add(k1); dir.add(k2); kept.push(t);
+  }
+  return kept;
 }
 
 // Make triangle winding consistent across edge-manifold neighbours (BFS), in place.
@@ -217,5 +239,20 @@ function fixComponentSigns(faces) {
     }
     vol.set(c, (vol.get(c) ?? 0) + s / 6);
   }
-  return faces.map(f => (vol.get(find(idx(f.verts[0]))) < 0 ? { ...f, verts: f.verts.slice().reverse() } : f));
+  // per-component extent (flat-sheet test below)
+  const lo = new Map(), hi = new Map();
+  for (const f of faces) {
+    const c = find(idx(f.verts[0]));
+    let l = lo.get(c), h = hi.get(c);
+    if (!l) { l = [Infinity, Infinity, Infinity]; h = [-Infinity, -Infinity, -Infinity]; lo.set(c, l); hi.set(c, h); }
+    for (const p of f.verts) { if (p.x < l[0]) l[0] = p.x; if (p.y < l[1]) l[1] = p.y; if (p.z < l[2]) l[2] = p.z; if (p.x > h[0]) h[0] = p.x; if (p.y > h[1]) h[1] = p.y; if (p.z > h[2]) h[2] = p.z; }
+  }
+  const flat = c => { const d = Math.hypot(hi.get(c)[0] - lo.get(c)[0], hi.get(c)[1] - lo.get(c)[1], hi.get(c)[2] - lo.get(c)[2]); return Math.abs(vol.get(c)) <= FLAT_COMPONENT_REL * d * d * d; };
+  const out = [];
+  for (const f of faces) {
+    const c = find(idx(f.verts[0]));
+    if (flat(c)) continue; // zero-volume sheet (+ its own cap): no fragment can come from it, and its coincident faces would only poison cuts
+    out.push(vol.get(c) < 0 ? { ...f, verts: f.verts.slice().reverse() } : f);
+  }
+  return out;
 }

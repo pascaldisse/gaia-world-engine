@@ -171,3 +171,18 @@ test('purity: fractureCells has no hidden state (call order / interleaving irrel
   assert.equal(a1, a2);
   assert.ok(meshVolume(BOX2()) > 0);
 });
+
+test('mixed part: solid box + a loose flat sheet (real-asset pattern) -> sheet ignored, box conserved, no hull fallback', () => {
+  const sheet = [[V(3, 0, 0.5), V(5, 0, 0.5), V(5, 2, 0.5)], [V(3, 0, 0.5), V(5, 2, 0.5), V(3, 2, 0.5)]];
+  const cells = fractureCells([...boxTriangles(V(0, 0, 0), V(2, 2, 2)), ...sheet], { amount: 12, seed: 4 });
+  assert.ok(cells.length > 4);
+  for (const c of cells) { assert.equal(isWatertight(c.faces), true); assert.ok(facesVolume(c.faces) > 0); assert.equal(c.hullFallback, false); }
+  assert.ok(Math.abs(sumVol(cells) - 8) / 8 < 1e-6);
+  // a source made ONLY of a flat sheet has no volume -> no fragments, no throw
+  assert.deepEqual(fractureCells(sheet, { amount: 6, seed: 4 }), []);
+});
+
+test('empty / degenerate-only input -> [] (no throw)', () => {
+  assert.deepEqual(fractureCells([], { amount: 5 }), []);
+  assert.deepEqual(fractureCells([[V(0, 0, 0), V(0, 0, 0), V(1, 1, 1)]], { amount: 5 }), []);
+});

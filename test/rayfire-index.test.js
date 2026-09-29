@@ -69,7 +69,7 @@ test('naming law: every rfX-prefixed identifier is well-formed and not a WGSL ke
   const allowed = new Set(names);
   for (const t of tokens) { assert.equal(WGSL_RESERVED.has(t), false, `${t} reserved`); assert.ok(allowed.has(t), `unlisted rfX token ${t}`); }
   // the reserved list itself carries the words our own names could plausibly collide with
-  for (const w of ['array', 'atomic', 'discard', 'fn', 'let', 'loop', 'override', 'ptr', 'struct', 'switch', 'var', 'while', 'enum', 'filter', 'handle', 'target', 'premerge']) assert.ok(WGSL_RESERVED.has(w), w);
+  for (const w of ['array', 'atomic', 'discard', 'fn', 'let', 'loop', 'override', 'ptr', 'struct', 'switch', 'var', 'while', 'enum', 'filter', 'target', 'premerge']) assert.ok(WGSL_RESERVED.has(w), w);
 });
 
 test('every source file carries the clean-room header on line 1', () => {

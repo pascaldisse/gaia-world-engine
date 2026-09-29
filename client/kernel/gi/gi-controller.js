@@ -11,7 +11,7 @@ import { buildProbeGrid, recenterGrid } from './probe-grid.js';
 import { voxelizeTriangles } from './voxelize.js';
 import {
   createOccupancyStorage, createProbeAtlases, createPointLightPool,
-  createGIUpdateKernel, createGIDepthUpdateKernel, createGIQueryNode, createTouchedBuffer,
+  createGIUpdateKernel, createGIDepthUpdateKernel, createGIQueryNode, createTouchedBuffer, createSkyHitsBuffer,
 } from './gi-nodes.js';
 import { GISceneAttachment } from './gi-attach.js';
 import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
@@ -92,10 +92,11 @@ export class GIController {
     // of 0 can be told apart from "never ran" vs "legitimately converged
     // to 0" (see docs/GI-PROBES.md and test/gi-kernel-index-mirror.test.js)
     const touched = createTouchedBuffer(grid.count);
+    const skyHits = createSkyHitsBuffer(grid.count);
 
     const irr = createGIUpdateKernel({
       atlases, occ, probeGrid, raysPerProbe: p.raysPerProbe, sun, lights,
-      hysteresis: p, albedo: p.albedo, skyColor: p.skyColor, maxDist: p.voxelMaxDist, touched,
+      hysteresis: p, albedo: p.albedo, skyColor: p.skyColor, maxDist: p.voxelMaxDist, touched, skyHits,
     });
     const dep = createGIDepthUpdateKernel({
       atlases, occ, probeGrid, raysPerProbe: p.raysPerProbe, sun, lights,
@@ -107,7 +108,7 @@ export class GIController {
     // material it gets attached to below (not rebuilt per-material)
     const queryNode = createGIQueryNode({ atlases, worldPositionNode: positionWorld, normalNode: normalWorld, probeGrid });
 
-    this.resources = { grid, atlases, lights, sun, probeGrid, occ, irr, dep, queryNode, touched, params: p };
+    this.resources = { grid, atlases, lights, sun, probeGrid, occ, irr, dep, queryNode, touched, skyHits, params: p };
     this._probeCursor = 0;
 
     // wire E: attach to every eligible material already in the scene

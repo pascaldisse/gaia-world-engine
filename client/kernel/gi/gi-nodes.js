@@ -46,6 +46,20 @@ export function createTouchedBuffer(probeCount) {
   return instancedArray(probeCount, 'uint');
 }
 
+/** Per-probe count of rays that reported a MISS (sky) this update —
+ *  parity-harness diagnostic (parent review 09-29, 2nd pass): distinguishes
+ *  a probe that's legitimately enclosed (0 sky hits, matches CPU) from one
+ *  falsely reading "always occupied" due to an occupancy march bug (also 0
+ *  sky hits, but for the WRONG reason) — cross-referenced against the
+ *  occupancy-buffer readback comparison in tools/gi-parity.mjs. Approximate
+ *  (non-atomic increment across up to irradianceRes^2 threads per probe,
+ *  each re-tracing the full ray set — see createGIUpdateKernel's own
+ *  texel-parallel-recompute note) — good enough to tell "zero" from
+ *  "nonzero", not an exact count. */
+export function createSkyHitsBuffer(probeCount) {
+  return instancedArray(probeCount, 'uint');
+}
+
 export function createProbeAtlases({ probeCount, irradianceRes = 8, depthRes = 16 }) {
   const irradianceTexelsPerProbe = irradianceRes * irradianceRes;
   const depthTexelsPerProbe = depthRes * depthRes;
@@ -89,20 +103,23 @@ function octUvToTexelIndexTSL(uv, res) {
   return tu.add(int(res).mul(tv));
 }
 
-/** worldToVoxelIndex: world pos -> flat occupancy index, clamped (voxelize.js layout). */
-function worldToVoxelIndexTSL(p, voxelOrigin, cellSize, dims) {
-  const rel = p.sub(voxelOrigin).div(cellSize);
-  const ix = clamp(int(floor(rel.x)), int(0), int(dims.x - 1));
-  const iy = clamp(int(floor(rel.y)), int(0), int(dims.y - 1));
-  const iz = clamp(int(floor(rel.z)), int(0), int(dims.z - 1));
-  return ix.add(int(dims.x).mul(iy.add(int(dims.y).mul(iz))));
-}
-
 /**
  * Fixed-step DDA march against the occupancy storage buffer — the exact
- * mirror of voxelize.js's marchOccupancy (step=cellSize*0.5, bounded loop).
- * Pushes Loop/If/Break onto whichever Fn body is currently building (not
- * wrapped in its own Fn(), so it composes inline in either kernel below).
+ * mirror of voxelize.js's marchOccupancy (step=cellSize*0.5, bounded loop,
+ * SAME x-fastest flat layout). Pushes Loop/If/Break onto whichever Fn body
+ * is currently building (not wrapped in its own Fn(), so it composes
+ * inline in either kernel below).
+ *
+ * BUGFIX (parent live-GPU report 09-29, 2nd pass): a prior version CLAMPED
+ * the world->voxel index into [0,dims) and unconditionally READ that
+ * clamped cell every step — so a ray that exits the grid keeps re-sampling
+ * the SAME boundary cell for every remaining step, and if that boundary
+ * cell happens to be occupied (e.g. the last cell of a wall's own AABB,
+ * clamped there at WRITE time too), every ray that leaves the grid on that
+ * side falsely reports a permanent hit. voxelize.js's OWN marchOccupancy
+ * does the opposite: bounds-check FIRST, and treat out-of-range as "no
+ * geometry there" (skip the occupancy read for that step, keep marching)
+ * — never clamp-and-read. This mirrors that exactly.
  * @returns a float Var: hit distance, or -1 if nothing was hit
  */
 function marchOccupancyTSL(occ, rayOrigin, rayDir, maxDist) {
@@ -115,10 +132,19 @@ function marchOccupancyTSL(occ, rayOrigin, rayDir, maxDist) {
       Break();
     });
     const p = rayOrigin.add(rayDir.mul(t));
-    const idx = worldToVoxelIndexTSL(p, voxelOrigin, cellSize, dims);
-    const occVal = occupancy.element(idx);
-    If(occVal.greaterThan(uint(0)), () => {
-      hitT.assign(t);
+    const rel = p.sub(voxelOrigin).div(cellSize);
+    const ix = int(floor(rel.x));
+    const iy = int(floor(rel.y));
+    const iz = int(floor(rel.z));
+    const inBounds = ix.greaterThanEqual(0).and(ix.lessThan(int(dims.x)))
+      .and(iy.greaterThanEqual(0)).and(iy.lessThan(int(dims.y)))
+      .and(iz.greaterThanEqual(0)).and(iz.lessThan(int(dims.z)));
+    If(inBounds, () => {
+      const idx = ix.add(int(dims.x).mul(iy.add(int(dims.y).mul(iz))));
+      const occVal = occupancy.element(idx);
+      If(occVal.greaterThan(uint(0)), () => {
+        hitT.assign(t);
+      });
     });
     t.addAssign(step);
   });
@@ -200,7 +226,7 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
   const tint = vec3(albedo, albedo, albedo);
   const radiance = select(hit, tint.mul(incident), skyColor);
   const dist = select(hit, hitT, float(maxDist));
-  return { radiance, dist };
+  return { radiance, dist, hit };
 }
 
 /**
@@ -212,7 +238,7 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
  * (irradiance.js integrateProbeIrradiance, mirrored) before hysteresis
  * blending into the atlas.
  */
-export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, sun, lights, hysteresis, albedo = 0.5, skyColor = [0.4, 0.5, 0.7], maxDist = 64, rotation = null, bounceAtlas = null, bounceGrid = null, touched = null }) {
+export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, sun, lights, hysteresis, albedo = 0.5, skyColor = [0.4, 0.5, 0.7], maxDist = 64, rotation = null, bounceAtlas = null, bounceGrid = null, touched = null, skyHits = null }) {
   const { irradiance, irradianceRes, probeCount } = atlases;
   const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97);
   const probeOffset = uniform(0, 'uint');
@@ -252,12 +278,19 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
     const sampleEstimate = vec3(0, 0, 0).toVar();
     Loop(raysPerProbe, ({ i }) => {
       const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
-      const { radiance } = traceAndShadeRayTSL({
+      const { radiance, hit } = traceAndShadeRayTSL({
         occ, rayOrigin: probePos, rayDir: dir, maxDist,
         sun, lights, albedo, skyColor: skyColorU, bounceAtlas, bounceGrid,
       });
       const w = max(0, dot(texelDir, dir));
       sampleEstimate.assign(sampleEstimate.add(radiance.mul(w)));
+      // parity-harness diagnostic (parent review 09-29, 2nd pass): count sky
+      // (miss) rays per probe, see createSkyHitsBuffer's doc comment
+      if (skyHits) {
+        If(hit.not(), () => {
+          skyHits.element(probeIdx).assign(skyHits.element(probeIdx).add(uint(1)));
+        });
+      }
     });
     const mcNorm = float((4 * Math.PI) / raysPerProbe);
     const newEstimate = sampleEstimate.mul(mcNorm);

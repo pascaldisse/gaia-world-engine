@@ -381,6 +381,27 @@ async function defaultRendererFactory() {
  * this code path via runScene/runSingleUpdateCheck anyway (those always
  * construct a real renderer).
  */
+/**
+ * Read back the ACTUAL generated WGSL source for a compute kernel, after
+ * at least one `renderer.compute(kernel)` dispatch has built its pipeline
+ * (parent review 09-29, 9th pass: "capture generated WGSL of the update
+ * kernel in-browser ... so I can SEE the var decl/init placement").
+ * `renderer._nodes`/`Pipelines.getForCompute` (three r180 internals) cache
+ * the built `NodeBuilder` state per compute node; `.computeShader` is the
+ * literal WGSL string three.js's WGSLNodeBuilder generated. Returns null
+ * gracefully if the renderer hasn't built this kernel yet, or exposes a
+ * different internal shape in a future three version (never throws --
+ * this is a diagnostic extra, not something that should fail a scene run).
+ */
+export function captureComputeWGSL(renderer, kernel) {
+  try {
+    const state = renderer?._nodes?.getForCompute?.(kernel);
+    return state?.computeShader ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function withGpuValidation(renderer, fn) {
   const device = renderer?.backend?.device;
   const uncaptured = [];
@@ -642,6 +663,14 @@ export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory
 
   gi.update(1 / 60, [0, 0, 0]); // EXACTLY one update -- no convergence loop
 
+  // (parent review 09-29, 9th pass, item 1) the REAL generated WGSL for
+  // the update kernel, so a human can directly read the var decl/init
+  // placement rather than infer it from readback numbers alone
+  const wgsl = {
+    irradianceUpdateKernel: captureComputeWGSL(renderer, gi.resources.irr.kernel),
+    depthUpdateKernel: captureComputeWGSL(renderer, gi.resources.dep.kernel),
+  };
+
   const attr = gi.resources.atlases.irradiance.value;
   const buf = await renderer.getArrayBufferAsync(attr);
   const actual = new Float32Array(buf);
@@ -703,7 +732,7 @@ export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory
     }
   }
 
-  return { scene: name, updates: 1, hysteresis: 'disabled (alpha=0)', probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
+  return { scene: name, updates: 1, hysteresis: 'disabled (alpha=0)', probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, wgsl, ...cmp };
   }
 }
 

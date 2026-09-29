@@ -9,7 +9,7 @@
 // `result.pass = false` with the actual message, instead of silence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { withGpuValidation } from '../tools/gi-parity.mjs';
+import { withGpuValidation, captureComputeWGSL } from '../tools/gi-parity.mjs';
 
 function fakeRenderer({ scopeError = null, uncapturedEvents = [], throwOnPop = false } = {}) {
   const listeners = [];
@@ -103,6 +103,29 @@ test('mutant: forgetting removeEventListener would leak one listener per withGpu
   device.addEventListener('uncapturederror', () => {});
   device.addEventListener('uncapturederror', () => {});
   assert.equal(renderer._listeners.length, 2, 'confirms the fake correctly accumulates when nothing removes -- the real code must not do this');
+});
+
+// ------------------------------------------------------------- captureComputeWGSL
+// (parent review 09-29, 9th pass, item 1: "capture generated WGSL of the
+// update kernel in-browser ... so I can SEE the var decl/init placement")
+test('captureComputeWGSL returns the computeShader string when renderer._nodes.getForCompute has built it', () => {
+  const fakeRenderer = { _nodes: { getForCompute: (kernel) => (kernel === 'the-kernel' ? { computeShader: 'fn main() { /* wgsl */ }' } : undefined) } };
+  assert.equal(captureComputeWGSL(fakeRenderer, 'the-kernel'), 'fn main() { /* wgsl */ }');
+});
+
+test('captureComputeWGSL returns null (not throws) when the kernel has not been built yet', () => {
+  const fakeRenderer = { _nodes: { getForCompute: () => undefined } };
+  assert.equal(captureComputeWGSL(fakeRenderer, 'unbuilt-kernel'), null);
+});
+
+test('captureComputeWGSL returns null (not throws) when renderer._nodes is entirely missing (e.g. a mock renderer, or a future three internal-shape change)', () => {
+  assert.equal(captureComputeWGSL({}, 'anything'), null);
+  assert.doesNotThrow(() => captureComputeWGSL(null, 'anything'));
+});
+
+test('mutant: a captureComputeWGSL that lets an internal-shape-mismatch THROW instead of returning null would crash the whole harness run over a diagnostic-only feature', () => {
+  const throwingRenderer = { _nodes: { getForCompute: () => { throw new Error('internal three.js shape changed'); } } };
+  assert.doesNotThrow(() => captureComputeWGSL(throwingRenderer, 'k'), 'the real function must catch this, not propagate it');
 });
 
 // ------------------------------------------------------------------ mutant

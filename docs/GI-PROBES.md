@@ -684,6 +684,23 @@ one) -- includes a mutant reproducing the exact pre-fix source pattern and
 a mutant demonstrating what an unreset `direct` accumulator would do
 (ever-growing wrong sum across rays, not just a stuck value).
 
+## WGSL capture (09-29, pass #9 item 1)
+`captureComputeWGSL(renderer, kernel)` (tools/gi-parity.mjs) reads the
+ACTUAL generated WGSL for a compute kernel via three r180's internal
+`renderer._nodes.getForCompute(kernel).computeShader` -- the exact string
+`Pipelines.getForCompute()` uses to build the `ProgrammableStage`
+internally, so it's the real, final generated source, not an
+approximation. Wired into `runSingleUpdateCheck()`'s result as
+`result.wgsl.irradianceUpdateKernel` / `.depthUpdateKernel`, captured right
+after the first `gi.update()` call (which is what actually triggers
+pipeline/shader build on first dispatch). Returns `null` gracefully (never
+throws) if the kernel hasn't been built yet or three's internal shape ever
+changes -- this is a diagnostic extra, not something that should fail a
+scene run if it can't be read. Lets the parent directly inspect the `var`
+declaration/initialization placement for `t`/`hitT`/`shadowTOut`/`direct`
+that pass #9's fix targets, confirming (or further narrowing) the exact
+generated-code shape of the loop-carried-state bug.
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

@@ -11,7 +11,7 @@ import { buildProbeGrid, recenterGrid } from './probe-grid.js';
 import { voxelizeTriangles } from './voxelize.js';
 import {
   createOccupancyStorage, createProbeAtlases, createPointLightPool,
-  createGIUpdateKernel, createGIDepthUpdateKernel, createGIQueryNode,
+  createGIUpdateKernel, createGIDepthUpdateKernel, createGIQueryNode, createTouchedBuffer,
 } from './gi-nodes.js';
 import { GISceneAttachment } from './gi-attach.js';
 import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
@@ -87,9 +87,15 @@ export class GIController {
     const occArr = this._runVoxelize();
     const occ = createOccupancyStorage(occArr, this._voxelConfig.dims, this._voxelConfig.voxelOriginArr, p.voxelCellSize);
 
+    // parity-harness diagnostic (parent review 09-29): a per-probe "was
+    // this slot actually written by a real dispatch" flag, so a readback
+    // of 0 can be told apart from "never ran" vs "legitimately converged
+    // to 0" (see docs/GI-PROBES.md and test/gi-kernel-index-mirror.test.js)
+    const touched = createTouchedBuffer(grid.count);
+
     const irr = createGIUpdateKernel({
       atlases, occ, probeGrid, raysPerProbe: p.raysPerProbe, sun, lights,
-      hysteresis: p, albedo: p.albedo, skyColor: p.skyColor, maxDist: p.voxelMaxDist,
+      hysteresis: p, albedo: p.albedo, skyColor: p.skyColor, maxDist: p.voxelMaxDist, touched,
     });
     const dep = createGIDepthUpdateKernel({
       atlases, occ, probeGrid, raysPerProbe: p.raysPerProbe, sun, lights,
@@ -101,7 +107,7 @@ export class GIController {
     // material it gets attached to below (not rebuilt per-material)
     const queryNode = createGIQueryNode({ atlases, worldPositionNode: positionWorld, normalNode: normalWorld, probeGrid });
 
-    this.resources = { grid, atlases, lights, sun, probeGrid, occ, irr, dep, queryNode, params: p };
+    this.resources = { grid, atlases, lights, sun, probeGrid, occ, irr, dep, queryNode, touched, params: p };
     this._probeCursor = 0;
 
     // wire E: attach to every eligible material already in the scene
@@ -170,8 +176,22 @@ export class GIController {
     const dispatchedOffset = this._probeCursor;
     this._probeCursor = (this._probeCursor + probesPerBatch) % grid.count;
 
-    this.renderer?.compute(irr.kernel);
-    this.renderer?.compute(dep.kernel);
+    // BUGFIX (parent live-GPU report 09-29): the round-robin design exists
+    // to amortize GPU cost across frames by only shading `probesPerBatch`
+    // of the grid per update() call — but the kernel's BAKED-IN dispatch
+    // count (totalTexels, from createGIUpdateKernel) always covers the
+    // FULL atlas, so every single update() call was dispatching the WHOLE
+    // grid's worth of threads regardless of updateFraction, defeating the
+    // amortization (and making updateFraction<1 dispatch MORE threads than
+    // probesPerBatch*texelsPerProbe needs, most of them redundant re-shades
+    // of probes this call was never supposed to touch). renderer.compute()
+    // accepts an explicit dispatch count override as its 2nd argument —
+    // pass the ACTUAL batch size instead of relying on the kernel's static
+    // full-atlas default.
+    const irrTexelsPerProbe = this.resources.atlases.irradianceRes * this.resources.atlases.irradianceRes;
+    const depTexelsPerProbe = this.resources.atlases.depthRes * this.resources.atlases.depthRes;
+    this.renderer?.compute(irr.kernel, probesPerBatch * irrTexelsPerProbe);
+    this.renderer?.compute(dep.kernel, probesPerBatch * depTexelsPerProbe);
 
     // wire E: a cheap mesh-count check catches meshes added after enable
     // and attaches them without re-scanning already-attached materials

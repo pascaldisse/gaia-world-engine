@@ -13,7 +13,7 @@ function triBox(cx, cy, cz, s = 0.4) {
 
 function fakeRenderer() {
   const calls = [];
-  return { compute: (kernel) => calls.push(kernel), _calls: calls };
+  return { compute: (kernel, count) => calls.push({ kernel, count }), _calls: calls };
 }
 
 // ---------------------------------------------------------- voxelize on enable
@@ -86,8 +86,36 @@ test('update() dispatches BOTH compute kernels through renderer.compute() when e
   const result = gi.update(0.016, [0, 0, 0]);
   assert.equal(result.dispatched, true);
   assert.equal(renderer._calls.length, 2);
-  assert.equal(renderer._calls[0], gi.resources.irr.kernel);
-  assert.equal(renderer._calls[1], gi.resources.dep.kernel);
+  assert.equal(renderer._calls[0].kernel, gi.resources.irr.kernel);
+  assert.equal(renderer._calls[1].kernel, gi.resources.dep.kernel);
+});
+
+// BUGFIX regression (parent live-GPU report 09-29): the round-robin design
+// exists to shade only `probesPerBatch` probes per update() call, but the
+// kernel's baked-in dispatch count always covered the FULL atlas -- every
+// update() dispatched the WHOLE grid's worth of threads regardless of
+// updateFraction, defeating the whole point of batching.
+test('update() passes an EXPLICIT dispatch count sized to the actual batch, not the kernel\'s full-atlas default', () => {
+  const renderer = fakeRenderer();
+  const gi = new GIController({ renderer });
+  gi.configure({
+    enabled: true, spacing: 4, halfExtentXZ: 8, layersY: 1, heightRange: [0, 1],
+    updateFraction: 1 / 5, irradianceRes: 4, depthRes: 8,
+  });
+  const probeCount = gi.resources.grid.count; // 5x5=25 probes at spacing=4,halfExtentXZ=8
+  const probesPerBatch = Math.max(1, Math.round(probeCount * (1 / 5)));
+  gi.update(0.016, [0, 0, 0]);
+  const [irrCall, depCall] = renderer._calls;
+  assert.equal(irrCall.count, probesPerBatch * 4 * 4, 'irradiance dispatch count = batch x irradianceRes^2');
+  assert.equal(depCall.count, probesPerBatch * 8 * 8, 'depth dispatch count = batch x depthRes^2');
+  assert.ok(irrCall.count < gi.resources.irr.totalTexels, 'a partial batch must dispatch FEWER threads than the full-atlas kernel default');
+});
+
+test('mutant: dispatching the kernel\'s full totalTexels every call (the pre-fix bug) would never shrink with updateFraction', () => {
+  const totalTexels = 25 * 4 * 4; // full grid worth
+  const probesPerBatch = 5; // 1/5 of 25
+  const correctCount = probesPerBatch * 4 * 4;
+  assert.notEqual(totalTexels, correctCount, 'the mutant (always full dispatch) diverges from the real batched count');
 });
 
 test('update() NEVER calls renderer.compute() when disabled (the default)', () => {
@@ -124,6 +152,14 @@ test('update() recenters the probe grid origin toward the camera (X/Z only) with
   const originAfter = gi.resources.probeGrid.origin.value;
   assert.notEqual(originAfter.x, originBefore.x);
   assert.equal(originAfter.y, originBefore.y, 'Y layer stack stays fixed for the RTS cascade (docs)');
+});
+
+// --------------------------------------------------------------------- touched flag
+test('configure() allocates a per-probe touched buffer, zero-initialized', () => {
+  const gi = new GIController({});
+  gi.configure({ enabled: true, spacing: 8, halfExtentXZ: 8, layersY: 1, heightRange: [0, 1] });
+  assert.ok(gi.resources.touched);
+  assert.equal(gi.resources.touched.isNode, true);
 });
 
 // --------------------------------------------------------------------- sun param

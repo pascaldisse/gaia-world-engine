@@ -40,6 +40,12 @@ export function createOccupancyStorage(occupancyUint8Array, dims, voxelOrigin, c
   return { occupancy, dims, voxelOrigin: uniform(vec3(...voxelOrigin)), cellSize, count };
 }
 
+/** Per-probe "was this slot actually written by a real dispatch" flag —
+ *  parity-harness diagnostic (parent review 09-29), see createGIUpdateKernel. */
+export function createTouchedBuffer(probeCount) {
+  return instancedArray(probeCount, 'uint');
+}
+
 export function createProbeAtlases({ probeCount, irradianceRes = 8, depthRes = 16 }) {
   const irradianceTexelsPerProbe = irradianceRes * irradianceRes;
   const depthTexelsPerProbe = depthRes * depthRes;
@@ -206,8 +212,8 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
  * (irradiance.js integrateProbeIrradiance, mirrored) before hysteresis
  * blending into the atlas.
  */
-export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, sun, lights, hysteresis, albedo = 0.5, skyColor = [0.4, 0.5, 0.7], maxDist = 64, rotation = null, bounceAtlas = null, bounceGrid = null }) {
-  const { irradiance, irradianceRes } = atlases;
+export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, sun, lights, hysteresis, albedo = 0.5, skyColor = [0.4, 0.5, 0.7], maxDist = 64, rotation = null, bounceAtlas = null, bounceGrid = null, touched = null }) {
+  const { irradiance, irradianceRes, probeCount } = atlases;
   const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97);
   const probeOffset = uniform(0, 'uint');
   const skyColorU = uniform(vec3(...skyColor));
@@ -217,7 +223,16 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
     const texelsPerProbe = int(irradianceRes * irradianceRes);
     const probeLocal = int(texelIndex).div(texelsPerProbe);
     const localTexel = int(texelIndex).mod(texelsPerProbe);
-    const probeIdx = probeOffset.add(uint(probeLocal));
+    // BUGFIX (parent live-GPU report 09-29, test/gi-kernel-index-mirror.test.js):
+    // the GLOBAL probe this thread shades is probeOffset+probeLocal, wrapped
+    // to the grid size (a round-robin batch can straddle the end of the
+    // grid) — both the probe's WORLD POSITION *and* the ATLAS SLOT it
+    // writes into must use this wrapped id. Writing via the raw thread-local
+    // `texelIndex` instead (the pre-fix bug) only coincidentally matched
+    // when probeOffset==0 (every update() call in every scene tested before
+    // this fix used updateFraction:1, which keeps offset permanently 0).
+    const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
+    const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
 
     const tu = localTexel.mod(int(irradianceRes));
     const tv = localTexel.div(int(irradianceRes));
@@ -225,9 +240,9 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
     const octv = float(tv).add(0.5).div(irradianceRes).mul(2).sub(1);
     const texelDir = decodeOctTSL(vec2(octu, octv));
 
-    const ix = int(probeIdx).mod(int(probeGrid.dims.x));
-    const iy = int(probeIdx).div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
-    const iz = int(probeIdx).div(int(probeGrid.dims.x * probeGrid.dims.y));
+    const ix = probeIdx.mod(int(probeGrid.dims.x));
+    const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
+    const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
     const probePos = vec3(
       probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
       probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
@@ -247,8 +262,12 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
     const mcNorm = float((4 * Math.PI) / raysPerProbe);
     const newEstimate = sampleEstimate.mul(mcNorm);
 
-    const old = irradiance.element(texelIndex);
-    irradiance.element(texelIndex).assign(mix(newEstimate, old, alpha));
+    const old = irradiance.element(atlasIndex);
+    irradiance.element(atlasIndex).assign(mix(newEstimate, old, alpha));
+    // parity-harness diagnostic (§GI-PROBES.md, parent review): mark this
+    // probe as actually touched by a real dispatch, so a readback of 0 can
+    // be told apart from "never ran" vs "legitimately converged to 0"
+    if (touched) touched.element(probeIdx).assign(uint(1));
   });
 
   const totalTexels = atlases.probeCount * irradianceRes * irradianceRes;
@@ -276,7 +295,7 @@ function decodeOctTSL(uv) {
  * (gi-reference.js's depth-texel loop, mirrored).
  */
 export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, sun, lights, hysteresis, albedo = 0.5, skyColor = [0.4, 0.5, 0.7], maxDist = 64, rotation = null }) {
-  const { depth, depthRes } = atlases;
+  const { depth, depthRes, probeCount } = atlases;
   const alpha = uniform(hysteresis?.depthAlpha ?? 0.9);
   const probeOffset = uniform(0, 'uint');
   const skyColorU = uniform(vec3(...skyColor));
@@ -286,7 +305,9 @@ export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProb
     const texelsPerProbe = int(depthRes * depthRes);
     const probeLocal = int(texelIndex).div(texelsPerProbe);
     const localTexel = int(texelIndex).mod(texelsPerProbe);
-    const probeIdx = probeOffset.add(uint(probeLocal));
+    // BUGFIX — same class of bug as createGIUpdateKernel above, see its comment.
+    const probeIdx = int(probeOffset.add(uint(probeLocal))).mod(int(probeCount));
+    const atlasIndex = probeIdx.mul(texelsPerProbe).add(localTexel);
 
     const tu = localTexel.mod(int(depthRes));
     const tv = localTexel.div(int(depthRes));
@@ -294,9 +315,9 @@ export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProb
     const octv = float(tv).add(0.5).div(depthRes).mul(2).sub(1);
     const texelDir = decodeOctTSL(vec2(octu, octv));
 
-    const ix = int(probeIdx).mod(int(probeGrid.dims.x));
-    const iy = int(probeIdx).div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
-    const iz = int(probeIdx).div(int(probeGrid.dims.x * probeGrid.dims.y));
+    const ix = probeIdx.mod(int(probeGrid.dims.x));
+    const iy = probeIdx.div(int(probeGrid.dims.x)).mod(int(probeGrid.dims.y));
+    const iz = probeIdx.div(int(probeGrid.dims.x * probeGrid.dims.y));
     const probePos = vec3(
       probeGrid.origin.x.add(float(ix).mul(probeGrid.spacing)),
       probeGrid.origin.y.add(float(iy).mul(probeGrid.spacing)),
@@ -321,8 +342,8 @@ export function createGIDepthUpdateKernel({ atlases, occ, probeGrid, raysPerProb
     const newMean = dSum.div(safeW);
     const newMean2 = d2Sum.div(safeW);
 
-    const old = depth.element(texelIndex);
-    depth.element(texelIndex).assign(mix(vec2(newMean, newMean2), old, alpha));
+    const old = depth.element(atlasIndex);
+    depth.element(atlasIndex).assign(mix(vec2(newMean, newMean2), old, alpha));
   });
 
   const totalTexels = atlases.probeCount * depthRes * depthRes;

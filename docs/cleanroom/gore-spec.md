@@ -3,7 +3,7 @@ Source of these requirements = OUR game code only (EE `client/gore-fx.js` + `cli
 Implementer reads: this file · engine WT (kernel, extension contract `client/kernel/extensions.js`, `client/extensions/timeline` as example) · three r180 webgpu/tsl docs · public refs below. NOT: any `boomtown-rampage/Assets/**`, any `lampas-ee-fx|lampas-gore` `client/extensions/gore/**`, `tools/gore/**`, `test/*gore*`.
 
 ## §1 Module + API (drop-in; served `/extensions/gore/index.js`)
-- `export function createGore({ three, tsl, scene }, opts) → gore`. `opts = { recipes?, blood?: { seed?, capacity?: { decal? }, textures?, meshes? }, cut?: { seed? } }`. `recipes/textures/meshes` = OPTIONAL overrides; absent → built-in procedural look (§2). Unknown keys ignored.
+- `export function createGore({ three, tsl, scene }, opts) → gore`. `opts = { recipes?, blood?: { seed?, capacity?: { decal? }, textures?, meshes? }, cut?: { seed?, lifetime? } }`. `recipes/textures/meshes` = OPTIONAL overrides; absent → built-in procedural look (§2). Unknown keys ignored.
 - `export function register(ctx)` per engine extension contract (ctx.three/ctx.tsl may be absent → no-op, no throw).
 - `gore.blood.splash(pos[3], normal[3], strength>0) → int` particles emitted (0 if capped/invalid).
 - `gore.blood.pool(pos[3], normal[3], size>0) → handle|null` ground decal that grows to `size` m radius.
@@ -11,6 +11,8 @@ Implementer reads: this file · engine WT (kernel, extension contract `client/ke
 - `gore.cut(mesh, { plane: { point[3], normal[3] } }) → { stump, piece } | null` — world-space plane.
   - `stump`,`piece` = `three.Mesh` added to `scene` (the `createGore` scene), world transforms baked; `piece.userData.gore.velocity` = mutable length-3 array (caller overwrites in place), integrated by `update`.
   - null when plane misses mesh / result would be empty / degenerate. Never throws on valid mesh; bad input → null.
+- `gore.release(obj) → boolean` — `obj` = a `stump` or `piece` returned by `cut`. Removes it from ALL internal lists + `scene`, disposes its geometry+materials. Idempotent (2nd call → false); unknown/invalid obj (null, foreign mesh, `{}`) → false, no throw. Releasing piece never touches its stump (independent). Released piece is no longer simulated by `update`.
+- `opts.cut.lifetime?: number` (seconds, default absent/0 = never) — auto-expiry: piece AND stump auto-`release`d `lifetime` s after `cut`, driven by `update(dt)`. Bounds per-frame cost over long matches; callers may instead call `release` themselves.
 - `gore.update(dt seconds)` advances particles, pools, piece motion (gravity, ground y=0 rest, damping).
 - `gore.setRecipes(recipes)` = reset to initial state: clears ALL live particles/pools/decals; keeps GPU buffers.
 - `gore.stats() → { particles, decals, pools, pieces }` (ints, live counts).
@@ -49,6 +51,8 @@ Implementer reads: this file · engine WT (kernel, extension contract `client/ke
 12. piece motion: velocity set → update moves piece, rests at y≥0; mutant: velocity ignored → RED.
 13. register(ctx without three) → no throw.
 14. real three r180 webgpu+tsl construct test (skip only if module missing; report skip count).
+
+15. release(piece|stump) → true, stats.pieces & internal lists back to 0, off scene, geometry disposed; 2nd call/unknown → false; cut.lifetime auto-expiry empties lists; mutants: release not splicing list / not disposing / expiry off → RED.
 
 ## §6 UNSPECIFIED (implementer free)
 exact colours, droplet shape, pool noise, cap material look, arm/leg band fractions, damping constants, file layout.

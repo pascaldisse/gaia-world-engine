@@ -106,7 +106,11 @@ export class GoreCut {
   constructor(gpu, scene, opts = {}) {
     this.three = gpu.three; this.scene = scene; this.seed = opts.seed ?? 1;
     this.pieces = []; // [{ mesh, velocity }] -- §1 update() integrates these
-    this.stumps = []; // kept only for dispose(); stumps do not move
+    this.stumps = []; // [{ mesh, age }] stumps do not move; tracked for release/expiry/dispose
+    // auto-expiry: seconds after cut() before piece+stump are released. 0/absent/non-positive = never
+    // (default preserves prior behaviour; callers opt in, or call release() themselves).
+    const lt = Number(opts.lifetime);
+    this.lifetime = Number.isFinite(lt) && lt > 0 ? lt : 0;
   }
 
   _cloneBodyMaterial(material) {
@@ -146,7 +150,7 @@ export class GoreCut {
 
     this.scene.add(stumpMesh);
     this.scene.add(pieceMesh);
-    this.stumps.push(stumpMesh);
+    this.stumps.push({ mesh: stumpMesh, age: 0 });
 
     const velocity = Array.isArray(options.impulse) ? [options.impulse[0], options.impulse[1], options.impulse[2]] : [0, 0, 0];
     pieceMesh.userData.gore = { velocity };
@@ -157,13 +161,14 @@ export class GoreCut {
     // lowest vertex, not against a naive position.y<=0.
     pieceGeo.computeBoundingBox();
     const groundOffset = -pieceGeo.boundingBox.min.y;
-    this.pieces.push({ mesh: pieceMesh, velocity, groundOffset });
+    this.pieces.push({ mesh: pieceMesh, velocity, groundOffset, age: 0 });
 
     return { stump: stumpMesh, piece: pieceMesh };
   }
 
   /** §1 gravity, ground y=0 rest, damping -- reads velocity from userData.gore.velocity IN PLACE each call (caller may overwrite it). */
   update(dt) {
+    if (this.lifetime > 0) this._expire(dt);
     for (const rec of this.pieces) {
       const v = rec.mesh.userData.gore.velocity;
       v[1] -= GRAVITY * dt;
@@ -186,9 +191,40 @@ export class GoreCut {
     for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.dispose();
   }
 
+  /** Age every tracked piece/stump; release those past `lifetime`. Backward loops: safe splice. */
+  _expire(dt) {
+    for (let i = this.pieces.length - 1; i >= 0; i--) {
+      const rec = this.pieces[i];
+      rec.age += dt;
+      if (rec.age >= this.lifetime) this.release(rec.mesh);
+    }
+    for (let i = this.stumps.length - 1; i >= 0; i--) {
+      const rec = this.stumps[i];
+      rec.age += dt;
+      if (rec.age >= this.lifetime) this.release(rec.mesh);
+    }
+  }
+
+  /**
+   * Remove a cut piece or stump from every internal list + the scene and
+   * dispose its geometry/materials. Idempotent; unknown/invalid = no-op.
+   * @returns {boolean} true only if this call released it
+   */
+  release(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    let found = false;
+    const pi = this.pieces.findIndex((r) => r.mesh === obj);
+    if (pi >= 0) { this.pieces.splice(pi, 1); found = true; }
+    const si = this.stumps.findIndex((r) => r.mesh === obj);
+    if (si >= 0) { this.stumps.splice(si, 1); found = true; }
+    if (!found) return false;
+    this._disposeMesh(obj);
+    return true;
+  }
+
   dispose() {
     for (const rec of this.pieces) this._disposeMesh(rec.mesh);
-    for (const mesh of this.stumps) this._disposeMesh(mesh);
+    for (const rec of this.stumps) this._disposeMesh(rec.mesh);
     this.pieces = []; this.stumps = [];
   }
 }

@@ -12,7 +12,7 @@ import { makeRng } from './rng.js';
 /**
  * @param {{ three:any, tsl:any, scene:import('three').Scene }} gpu
  * @param {{ recipes?:any, blood?:{ seed?:number, capacity?:{decal?:number,particles?:number} },
- *           cut?:{ seed?:number } }} [opts]
+ *           cut?:{ seed?:number, lifetime?:number } }} [opts]
  */
 export function createGore({ three, tsl, scene }, opts = {}) {
   if (!three || !tsl || !scene) throw new Error('createGore requires { three, tsl, scene }');
@@ -30,7 +30,7 @@ export function createGore({ three, tsl, scene }, opts = {}) {
     capacity: particleCapacity,
     onGroundContact: (pos, normal, size) => pools.decal(pos, normal, size),
   });
-  const cut = new GoreCut({ three }, scene, { seed: cutSeed });
+  const cut = new GoreCut({ three }, scene, { seed: cutSeed, lifetime: opts.cut?.lifetime });
 
   const gore = {
     blood: {
@@ -38,6 +38,8 @@ export function createGore({ three, tsl, scene }, opts = {}) {
       pool: (pos, normal, size) => pools.pool(pos, normal, size),
     },
     cut: (mesh, options) => cut.cut(mesh, options),
+    // release a cut stump/piece: off all lists + scene, geometry disposed. Idempotent; unknown = false.
+    release: (obj) => cut.release(obj),
     update(dt) {
       particles.update(dt);
       pools.update(dt);

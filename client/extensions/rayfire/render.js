@@ -2,7 +2,8 @@
 // §4-5 render conversion + THREE scene glue. With hull.js, the ONLY files that import THREE.
 import * as THREE from 'three';
 import { fractureCells } from './fracture.js';
-import { boundsOfFaces } from './geometry.js';
+import { boundsOfFaces, facesVolume } from './geometry.js';
+import { RFWorld } from './world.js';
 
 // Face set -> one non-indexed triangle-soup BufferGeometry: position + FLAT per-triangle normals,
 // group 0 = exterior faces (material slot 0), group 1 = interior/cut faces (material slot 1).
@@ -74,7 +75,36 @@ export function fracture(input, opts = {}) {
   return cells.map(cell => {
     const mesh = new THREE.Mesh(facesToBufferGeometry(cell.faces), mats);
     if (source) { mesh.matrixAutoUpdate = false; mesh.matrix.copy(source.matrixWorld); mesh.matrixWorldNeedsUpdate = true; }
-    mesh.userData.rayfire = { index: cell.index, centroidLocal: centroidOf(cell.faces), aabbLocal: boundsOfFaces(cell.faces) };
+    mesh.userData.rayfire = { index: cell.index, centroidLocal: centroidOf(cell.faces), aabbLocal: boundsOfFaces(cell.faces), volume: Math.abs(facesVolume(cell.faces)) };
     return mesh;
   });
+}
+
+
+// Fracture + spawn one dynamic rigid body per fragment (in a supplied or fresh RFWorld) + point impulse on the fragment whose
+// WORLD-space centroid is nearest `point`. Returns { meshes, world, bodies, closest } (closest = -1 without a point).
+export function demolish(target, opts = {}) {
+  const meshes = fracture(target, opts);
+  const world = opts.world ?? new RFWorld(opts.worldOptions);
+  const bodies = [], centres = [];
+  const tmp = new THREE.Vector3();
+  for (const mesh of meshes) {
+    const rf = mesh.userData.rayfire, c = rf.centroidLocal, m = mesh.matrix;
+    tmp.set(c.x, c.y, c.z).applyMatrix4(m);
+    const centre = { x: tmp.x, y: tmp.y, z: tmp.z };
+    const sx = Math.hypot(m.elements[0], m.elements[1], m.elements[2]), sy = Math.hypot(m.elements[4], m.elements[5], m.elements[6]), sz = Math.hypot(m.elements[8], m.elements[9], m.elements[10]);
+    const size = rf.aabbLocal, mean = ((size.max.x - size.min.x) * sx + (size.max.y - size.min.y) * sy + (size.max.z - size.min.z) * sz) / 3;
+    const id = world.addBody({ position: centre, shape: { type: 'sphere', radius: Math.max(0.01, mean / 2) }, mass: Math.max(1e-3, rf.volume * sx * sy * sz) });
+    rf.bodyId = id;
+    bodies.push(world.getBody(id)); centres.push(centre);
+  }
+  let closest = -1;
+  const p = opts.point;
+  if (p && centres.length) {
+    let best = Infinity;
+    centres.forEach((c, i) => { const d = (c.x - p.x) ** 2 + (c.y - p.y) ** 2 + (c.z - p.z) ** 2; if (d < best) { best = d; closest = i; } });
+    const imp = typeof opts.impulse === 'number' ? { x: 0, y: opts.impulse, z: 0 } : opts.impulse;
+    if (imp) world.applyImpulse(bodies[closest].id, imp, opts.impulseMode ?? 'impulse');
+  }
+  return { meshes, world, bodies, closest };
 }

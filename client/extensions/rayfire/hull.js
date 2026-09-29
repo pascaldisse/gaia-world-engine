@@ -5,6 +5,7 @@
 // keep the first result the watertight oracle accepts; absolute final fallback = padded AABB box.
 import { ConvexHull } from 'three/addons/math/ConvexHull.js';
 import { Vector3 } from 'three';
+import { RFX_NAMES } from './names.js';
 import { boundsOf, diagonalOf, isWatertight, cross, sub, len } from './geometry.js';
 
 export const HULL_WELD_LADDER = Object.freeze([1e-5, 1e-4, 3e-4, 1e-3, 1e-2, 1e-1]);
@@ -25,7 +26,7 @@ export function hullFaces(points, { exteriorMaterial = 0, interiorMaterial = 1 }
       }
       const welded = [...cl.values()];
       if (welded.length < 4) continue;
-      const vs = welded.map(p => { const v = new Vector3(p.x, p.y, p.z); v.rfXExterior = p.exterior; return v; });
+      const vs = welded.map(p => { const v = new Vector3(p.x, p.y, p.z); v[RFX_NAMES.hullExterior] = p.exterior; return v; });
       const hull = new ConvexHull().setFromPoints(vs);
       const faces = [];
       for (const f of hull.faces) {
@@ -35,7 +36,7 @@ export function hullFaces(points, { exteriorMaterial = 0, interiorMaterial = 1 }
           const tri = [pts[0], pts[i], pts[i + 1]];
           const a = { x: tri[0].x, y: tri[0].y, z: tri[0].z }, b = { x: tri[1].x, y: tri[1].y, z: tri[1].z }, c = { x: tri[2].x, y: tri[2].y, z: tri[2].z };
           if (len(cross(sub(b, a), sub(c, a))) <= eps * eps * 1e-3) continue; // zero-area sliver
-          const ext = tri.every(t => t.rfXExterior === true);
+          const ext = tri.every(t => t[RFX_NAMES.hullExterior] === true);
           faces.push({ verts: [a, b, c], interior: !ext, materialId: ext ? exteriorMaterial : interiorMaterial });
         }
       }

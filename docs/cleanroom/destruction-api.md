@@ -39,7 +39,7 @@ Derived from OUR consumers (read-only): EE `client/destruction-rayfire.js`, `cli
 - `facesToBufferGeometry(faces) -> THREE.BufferGeometry` non-indexed; `position`+`normal`; flat normals; groups: 0=exterior(mat 0), 1=interior(mat 1) (group 1 absent if no interior faces); bbox+sphere computed.
 - `geometryToTriangles(geometry) -> soup` (indexed or not)
 - `fracture(input, opts) -> THREE.Mesh[]` input Object3D-with-`.geometry` | BufferGeometry, else throws `/fracture: input/`. Mesh `material=[outer,inner]` (`opts.materials` `{outer,inner}` or defaults); Object3D input ⇒ `matrixAutoUpdate=false`, `matrix.copy(source.matrixWorld)`; `userData.rayfire={index,centroidLocal,aabbLocal}`.
-- `demolish(target, opts) -> { meshes, world, bodies, closest }` opts: fracture opts + `point`(vec/Vector3 world) `impulse`(vec | number ⇒ along +y) `world`(RFWorld, else new) `impulseMode`. `bodies`=body objects (1/fragment, dynamic, sphere shape from aabb, world centroid); `mesh.userData.rayfire.bodyId` set; `closest`=index of fragment with world-centroid nearest `point` (impulsed one). No `point` ⇒ closest=-1, no impulse.
+- `demolish(target, opts) -> { meshes, world, bodies, closest }` opts: fracture opts + `point`(vec/Vector3 world) `impulse`(vec | number ⇒ along +y) `world`(RFWorld, else new) `impulseMode`. `bodies`=body objects (1/fragment, dynamic, sphere shape from aabb, world centroid); `mesh.userData.rayfire.bodyId` set (+`volume` extra key on every fragment mesh); `closest`=index of fragment with world-centroid nearest `point` (impulsed one). No `point` ⇒ closest=-1, no impulse.
 ### rigid sim
 - `class RFWorld({gravity=v3(0,-9.81,0), groundY=0, sleepLinear=0.02, sleepFrames=10, restitution=0.05, friction=0.6})`
   - `bodies: Map<id,body>` (ids strictly increasing, never reused) · `gravity` `groundY` readable
@@ -75,8 +75,21 @@ Derived from OUR consumers (read-only): EE `client/destruction-rayfire.js`, `cli
 - `explode(world, fragments, position, {range=5,strength=1,variation=50,chaos=30,forceByMass=true,seed=1}) -> affected[]` fragments need `bodyId`; affected=`[{index,bodyId,distance,magnitude}]`
 - `shoot(world, origin, direction, {strength=10,maxDistance=1000}) -> {hit,impulse}|null` hit=raycast result; mode velocityChange.
 
+## Export list (machine-checked: test/rayfire-index.test.js parses this block)
+```
+v3 createRng mixSeed rand01 RFX_NAMES
+meshVolume facesVolume isWatertight closeOpenShell fractureCells nextFragmentAmount DEMOLITION_DEFAULTS demolishMesh
+facesToBufferGeometry geometryToTriangles fracture demolish
+RFWorld RF_WORLD_DEFAULTS
+pointInBox markUnyielding buildAdjacency assignJointStrength breakJoints connectedComponents partitionByUnyielding computeSupport tickErosion
+CollapseType removeByArea removeBySize removeRandom collapseStep runCollapseSteps COLLAPSE_DEFAULTS
+createActivationState shouldActivate activate
+FadeType createFadeState tickFade FADE_DEFAULTS
+explode shoot
+```
+
 ## Naming law
-Any attribute/uniform/varying identifier the extension emits (none required today: debris uses stock materials, flat normals are position-derived) MUST start `rfX`, ∉ WGSL reserved words (W3C WGSL §keywords/§reserved-words, https://www.w3.org/TR/WGSL/#keyword-summary, #reserved-words). `RFX_NAMES` is the single table; test `rayfire-index.test.js` scans sources.
+Any attribute/uniform/varying identifier the extension emits (none required today: debris uses stock materials, flat normals are position-derived) MUST start `rfX`, ∉ WGSL reserved words (W3C WGSL §keywords/§reserved-words, https://www.w3.org/TR/WGSL/#keyword-summary, #reserved-words). `RFX_NAMES` (= `{hullExterior:'rfXExterior'}`, hull-sliver point tag) is the single table; test `rayfire-index.test.js` scans sources.
 
 ## Consumer-relied behaviours (test-pinned)
 - `createCrumble` loop: `world.bodies.size` after N addBody/removeBody exact; `world.getBody(removedId)===undefined`.

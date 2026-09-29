@@ -25,6 +25,7 @@ import { referenceUpdateProbe, traceSingleRay } from '../client/kernel/gi/gi-ref
 import { voxelizeTriangles } from '../client/kernel/gi/voxelize.js';
 import { probeIndex } from '../client/kernel/gi/probe-grid.js';
 import { fibonacciSphereDirs } from '../client/kernel/gi/irradiance.js';
+import { decodeOct } from '../client/kernel/gi/octahedral.js';
 
 // ---------------------------------------------------------------- tolerance
 // Documented tolerance (§GI-PROBES.md UNVERIFIED — needs a real GPU frame to
@@ -483,7 +484,80 @@ export async function runScene(name, sceneBuilder, { rendererFactory, debugProbe
  * Loop+weighted-sum+MC-normalize accumulation itself; if it MATCHES, the
  * bug is specific to the multi-iteration hysteresis/round-robin path.
  */
-export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory } = {}) {
+// -------------------------------------------------- (A)(C) real-kernel instrumentation
+// parent review 09-29, 7th pass: "stop inferring from sibling kernels,
+// instrument the REAL update kernel". Pure CPU half first (node-testable);
+// the GPU half (runSingleUpdateCheck's debugProbeIndices option, below)
+// reads back createGIUpdateKernel's own debugDirHit/debugRadianceWeight/
+// debugRunningSum/debugFinal/probeMapBuffer and diffs them against this.
+
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/**
+ * Step-by-step CPU trace of EXACTLY what the update kernel computes for one
+ * probe's texel 0: for each ray, {dir, dist, radiance, weight, runningSum},
+ * plus the final MC-normalized estimate -- using the SAME traceSingleRay +
+ * texel-0 octahedral direction + MC normalization the real kernel uses.
+ */
+export function cpuStepByStepTrace(probeIdx, cfg) {
+  const { ix, iy, iz } = decomposeProbeIndex(probeIdx, cfg.dims);
+  const probePos = [cfg.origin[0] + ix * cfg.spacing, cfg.origin[1] + iy * cfg.spacing, cfg.origin[2] + iz * cfg.spacing];
+  const res = cfg.irradianceRes;
+  // texel 0: tu=0%res=0, tv=0/res=0 -- SAME formula createGIUpdateKernel uses
+  const octu = ((0 + 0.5) / res) * 2 - 1;
+  const octv = ((0 + 0.5) / res) * 2 - 1;
+  const texelDir = decodeOct([octu, octv]);
+  const dirs = fibonacciSphereDirs(cfg.raysPerProbe, null);
+  let runningSum = [0, 0, 0];
+  const steps = dirs.map((dir, i) => {
+    const ray = traceSingleRay({
+      probePos, dir, occupancy: cfg.occupancy, voxelOrigin: cfg.voxelOrigin, cellSize: cfg.cellSize, dims: cfg.voxelDims ?? cfg.dims,
+      maxDist: cfg.maxDist, sun: cfg.sun, albedo: cfg.albedo, skyColor: cfg.skyColor,
+    });
+    const weight = Math.max(0, dot3(texelDir, dir));
+    runningSum = [runningSum[0] + weight * ray.radiance[0], runningSum[1] + weight * ray.radiance[1], runningSum[2] + weight * ray.radiance[2]];
+    return { rayIndex: i, dir, dist: ray.dist, radiance: ray.radiance, weight, runningSum: [...runningSum] };
+  });
+  const mcNorm = (4 * Math.PI) / cfg.raysPerProbe;
+  const finalEstimate = runningSum.map((v) => v * mcNorm);
+  return { probePos, texelDir, steps, finalEstimate };
+}
+
+/**
+ * Diff a GPU per-ray trace (read back from createGIUpdateKernel's debug
+ * buffers) against cpuStepByStepTrace's steps, ray by ray, reporting the
+ * FIRST diverging ray/field (not just an aggregate pass/fail). Pure,
+ * node-testable.
+ */
+export function compareStepByStepTrace(gpuSteps, cpuSteps, gpuFinal, cpuFinal, tolerance = { dirTol: 1e-3, distTol: 5e-2, radianceTol: 5e-2, weightTol: 1e-3, sumTol: 1e-1 }) {
+  let firstDivergingRay = -1;
+  const fields = [];
+  for (let i = 0; i < cpuSteps.length; i++) {
+    const g = gpuSteps[i];
+    const c = cpuSteps[i];
+    if (!g) { firstDivergingRay = i; fields.push('missing GPU ray'); break; }
+    const dirErr = Math.hypot(...g.dir.map((v, k) => v - c.dir[k]));
+    const distErr = Math.abs(g.dist - c.dist);
+    const radErr = Math.hypot(...g.radiance.map((v, k) => v - c.radiance[k]));
+    const weightErr = Math.abs(g.weight - c.weight);
+    const sumErr = Math.hypot(...g.runningSum.map((v, k) => v - c.runningSum[k]));
+    const bad = [];
+    if (dirErr > tolerance.dirTol) bad.push('dir');
+    if (distErr > tolerance.distTol) bad.push('dist');
+    if (radErr > tolerance.radianceTol) bad.push('radiance');
+    if (weightErr > tolerance.weightTol) bad.push('weight');
+    if (sumErr > tolerance.sumTol) bad.push('runningSum');
+    if (bad.length > 0 && firstDivergingRay === -1) {
+      firstDivergingRay = i;
+      fields.push(...bad);
+    }
+  }
+  const finalErr = Math.hypot(...gpuFinal.map((v, k) => v - cpuFinal[k]));
+  const finalMatch = finalErr <= tolerance.radianceTol * Math.max(1, Math.hypot(...cpuFinal));
+  return { pass: firstDivergingRay === -1 && finalMatch, firstDivergingRay, divergingFields: fields, gpuFinal, cpuFinal, finalMatch };
+}
+
+export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory, debugProbeIndices = [] } = {}) {
   const { triangles, giParams: baseParams } = sceneBuilder();
   const giParams = { ...baseParams, irradianceAlpha: 0, depthAlpha: 0, updateFraction: 1 };
   const renderer = await (rendererFactory ?? defaultRendererFactory)();
@@ -505,6 +579,52 @@ export async function runSingleUpdateCheck(name, sceneBuilder, { rendererFactory
   const per = (arr) => { const n = cfg.dims.x * cfg.dims.y * cfg.dims.z, k = arr.length / n; return Array.from({ length: n }, (_, p) => +arr.slice(p * k, (p + 1) * k).reduce((x, y) => x + y, 0).toFixed(3)); };
   cmp.perProbeActual = per(unpadVec3(actual, expected.length));
   cmp.perProbeExpected = per(expected);
+
+  // (A)(C) real-kernel instrumentation (parent review 09-29, 7th pass):
+  // re-run the (idempotent at alpha=0) single update once per requested
+  // debug probe, with debugProbeUniform set, then read back the REAL
+  // update kernel's own per-ray trace + probe->position map and diff
+  // against a CPU step-by-step trace. Reports the FIRST diverging ray.
+  if (debugProbeIndices.length > 0) {
+    cmp.instrumented = [];
+    for (const probeIdx of debugProbeIndices) {
+      gi.resources.irr.debugProbeUniform.value = probeIdx;
+      // eslint-disable-next-line no-await-in-loop -- sequential, diagnostic-only
+      gi.update(1 / 60, [0, 0, 0]); // re-run: same inputs + alpha=0 -> same atlas, freshly populates this probe's debug buffers
+
+      // eslint-disable-next-line no-await-in-loop
+      const probeMapBuf = await renderer.getArrayBufferAsync(gi.resources.irr.probeMapBuffer.value);
+      const probeMapArr = new Float32Array(probeMapBuf);
+      const gpuProbePos = [probeMapArr[probeIdx * 4], probeMapArr[probeIdx * 4 + 1], probeMapArr[probeIdx * 4 + 2]];
+      const gpuProbeIdxAsReadBack = probeMapArr[probeIdx * 4 + 3];
+
+      // eslint-disable-next-line no-await-in-loop
+      const [dirHitBuf, radWBuf, runSumBuf, finalBuf] = await Promise.all([
+        renderer.getArrayBufferAsync(gi.resources.irr.debugDirHit.value),
+        renderer.getArrayBufferAsync(gi.resources.irr.debugRadianceWeight.value),
+        renderer.getArrayBufferAsync(gi.resources.irr.debugRunningSum.value),
+        renderer.getArrayBufferAsync(gi.resources.irr.debugFinal.value),
+      ]);
+      const dirHit = new Float32Array(dirHitBuf), radW = new Float32Array(radWBuf), runSum = new Float32Array(runSumBuf), final = new Float32Array(finalBuf);
+      const gpuSteps = [];
+      for (let i = 0; i < giParams.raysPerProbe; i++) {
+        gpuSteps.push({
+          rayIndex: i,
+          dir: [dirHit[i * 4], dirHit[i * 4 + 1], dirHit[i * 4 + 2]], dist: dirHit[i * 4 + 3],
+          radiance: [radW[i * 4], radW[i * 4 + 1], radW[i * 4 + 2]], weight: radW[i * 4 + 3],
+          runningSum: [runSum[i * 4], runSum[i * 4 + 1], runSum[i * 4 + 2]],
+        });
+      }
+      const cpuTrace = cpuStepByStepTrace(probeIdx, cfg);
+      const stepCmp = compareStepByStepTrace(gpuSteps, cpuTrace.steps, [final[0], final[1], final[2]], cpuTrace.finalEstimate);
+      const posErr = Math.hypot(...gpuProbePos.map((v, k) => v - cpuTrace.probePos[k]));
+      cmp.instrumented.push({
+        probeIdx, gpuProbeIdxAsReadBack, gpuProbePos, cpuProbePos: cpuTrace.probePos, positionMatch: posErr < 1e-4,
+        ...stepCmp,
+      });
+    }
+  }
+
   return { scene: name, updates: 1, hysteresis: 'disabled (alpha=0)', probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
 }
 
@@ -519,10 +639,15 @@ export async function runAll({ rendererFactory } = {}) {
     // eslint-disable-next-line no-await-in-loop -- scenes must run sequentially, each owns its own renderer/device
     results.push(await runScene(name, builder, { rendererFactory, debugProbeIndices }));
   }
+  // parent's exact request (09-29, 7th pass): scene(i) probe 4, scene(ii)
+  // probes 13 AND 14 (both named -- 13 reads wrong per the live report,
+  // 14 was already covered by runScene's rayDebug but gets the full
+  // instrumented per-ray trace here too)
+  const instrumentedProbes = { 'closed-box-scene-i': [4], 'open-plane-wall-scene-ii': [13, 14] };
   const singleUpdateResults = [];
   for (const [name, builder] of scenes) {
     // eslint-disable-next-line no-await-in-loop
-    singleUpdateResults.push(await runSingleUpdateCheck(name, builder, { rendererFactory }));
+    singleUpdateResults.push(await runSingleUpdateCheck(name, builder, { rendererFactory, debugProbeIndices: instrumentedProbes[name] ?? [] }));
   }
   return { scenes: results, singleUpdate: singleUpdateResults };
 }

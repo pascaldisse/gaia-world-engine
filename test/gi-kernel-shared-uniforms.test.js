@@ -64,7 +64,7 @@ test('mutant: a harness that re-derived a FRESH occ/probeGrid/sun instead of rea
 // ---------------------------------------------- arg-by-arg call-site diff
 test('traceAndShadeRayTSL call sites: update kernel and debug kernel pass identical occ/rayOrigin/rayDir/maxDist/sun/albedo/skyColor; only lights and bounceAtlas/bounceGrid differ (both effectively no-op for these scenes)', () => {
   const src = readFileSync(new URL('../client/kernel/gi/gi-nodes.js', import.meta.url), 'utf8');
-  const updateCall = src.slice(src.indexOf('const { radiance, hit } = traceAndShadeRayTSL({'), src.indexOf('const { radiance, hit } = traceAndShadeRayTSL({') + 220);
+  const updateCall = src.slice(src.indexOf('const { radiance, hit, dist } = traceAndShadeRayTSL({'), src.indexOf('const { radiance, hit, dist } = traceAndShadeRayTSL({') + 220);
   const debugCall = src.slice(src.indexOf('const { radiance, hit, shadowT, N } = traceAndShadeRayTSL({'), src.indexOf('const { radiance, hit, shadowT, N } = traceAndShadeRayTSL({') + 220);
   for (const sharedArg of ['occ,', 'rayOrigin: probePos', 'rayDir: dir', 'maxDist,', 'sun,', 'albedo,']) {
     assert.ok(updateCall.includes(sharedArg), `update call site missing ${sharedArg}`);

@@ -303,6 +303,29 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
   const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97);
   const probeOffset = uniform(0, 'uint');
   const skyColorU = uniform(vec3(...skyColor));
+
+  // ---- REAL-KERNEL instrumentation (parent review 09-29, 7th pass: "stop
+  // inferring from sibling kernels, instrument the REAL update kernel").
+  // `debugProbeUniform` defaults to a sentinel that no real probeIdx (a
+  // uint wrapped `% probeCount`) can ever equal, so ALL of this is a
+  // no-op (one extra cheap `If` per texel-0 thread, and per-ray writes
+  // that never fire) unless the harness explicitly sets it.
+  const DEBUG_PROBE_NONE = 0xffffffff;
+  const debugProbeUniform = uniform(DEBUG_PROBE_NONE, 'uint');
+  // (C) probe -> position mapping AS THE KERNEL ITSELF COMPUTES IT, one
+  // entry per probe, written by every probe's own texel-0 thread every
+  // dispatch (cheap, always-on -- this is exactly the ground truth needed
+  // to confirm or refute a probe/position mapping bug independent of any
+  // shading question).
+  const probeMapBuffer = instancedArray(probeCount, 'vec4'); // probePos.xyz, probeIdx-as-float
+  // (A) per-ray trace for ONE probe's texel 0 only: dir+hitT,
+  // radiance+weight, and the RUNNING sum after each ray -- lets the
+  // harness diff ray-by-ray against a CPU step-by-step trace and report
+  // the FIRST diverging ray, not just the final aggregate.
+  const debugDirHit = instancedArray(raysPerProbe, 'vec4'); // dir.xyz, hitT
+  const debugRadianceWeight = instancedArray(raysPerProbe, 'vec4'); // radiance.xyz, weight(cos)
+  const debugRunningSum = instancedArray(raysPerProbe, 'vec4'); // cumulative sampleEstimate.xyz AFTER this ray, rayIndex-as-float
+  const debugFinal = instancedArray(1, 'vec4'); // newEstimate.xyz (post mcNorm, PRE hysteresis mix), 1=written
   const totalTexelsDefault = atlases.probeCount * irradianceRes * irradianceRes;
   // BUGFIX (parent live-GPU report 09-29, 3rd pass): WORKGROUP ROUNDING.
   // renderer.compute(kernel, count) dispatches ceil(count/workgroupSize)
@@ -352,15 +375,31 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
         probeGrid.origin.z.add(float(iz).mul(probeGrid.spacing)),
       );
 
+      // (C) write the ACTUAL kernel-computed probe->position mapping,
+      // once per probe (texel 0 only, cheap, always on)
+      If(localTexel.equal(0), () => {
+        probeMapBuffer.element(probeIdx).assign(vec4(probePos, float(probeIdx)));
+      });
+      const isDebugProbe = uint(probeIdx).equal(debugProbeUniform).and(localTexel.equal(0));
+
       const sampleEstimate = vec3(0, 0, 0).toVar();
       Loop(raysPerProbe, ({ i }) => {
         const dir = fibonacciDirTSL(i, raysPerProbe, rotation);
-        const { radiance, hit } = traceAndShadeRayTSL({
+        const { radiance, hit, dist } = traceAndShadeRayTSL({
           occ, rayOrigin: probePos, rayDir: dir, maxDist,
           sun, lights, albedo, skyColor: skyColorU, bounceAtlas, bounceGrid,
         });
         const w = max(0, dot(texelDir, dir));
         sampleEstimate.assign(sampleEstimate.add(radiance.mul(w)));
+        // (A) per-ray instrumentation of the REAL kernel, for one selected
+        // probe's texel 0 only (parent review 09-29, 7th pass). `dist`
+        // matches traceSingleRay's own `dist` field exactly (hitT on a hit,
+        // maxDist on a miss) -- directly diffable against the CPU trace.
+        If(isDebugProbe, () => {
+          debugDirHit.element(i).assign(vec4(dir, dist));
+          debugRadianceWeight.element(i).assign(vec4(radiance, w));
+          debugRunningSum.element(i).assign(vec4(sampleEstimate, float(i)));
+        });
         // parity-harness diagnostic (parent review 09-29, 2nd pass): count sky
         // (miss) rays per probe, see createSkyHitsBuffer's doc comment
         if (skyHits) {
@@ -371,6 +410,9 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
       });
       const mcNorm = float((4 * Math.PI) / raysPerProbe);
       const newEstimate = sampleEstimate.mul(mcNorm);
+      If(isDebugProbe, () => {
+        debugFinal.element(0).assign(vec4(newEstimate, 1));
+      });
 
       const old = irradiance.element(atlasIndex);
       irradiance.element(atlasIndex).assign(mix(newEstimate, old, alpha));
@@ -383,7 +425,10 @@ export function createGIUpdateKernel({ atlases, occ, probeGrid, raysPerProbe, su
 
   const totalTexels = totalTexelsDefault;
   const kernel = updateFn().compute(totalTexels, [64]);
-  return { kernel, alpha, probeOffset, validCount, totalTexels };
+  return {
+    kernel, alpha, probeOffset, validCount, totalTexels,
+    debugProbeUniform, probeMapBuffer, debugDirHit, debugRadianceWeight, debugRunningSum, debugFinal,
+  };
 }
 
 /** decodeOct: [-1,1]^2 -> unit dir (octahedral.js, mirrored). */

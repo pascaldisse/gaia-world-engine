@@ -489,6 +489,80 @@ established in earlier passes). The fix is safe regardless of whether this
 exact mechanism is right, since it removes ALL Break() usage from any code
 path reachable from inside the update kernels' outer loop.
 
+## Live-GPU root-cause pass #7 (09-29, parent rerun after pass #6: Break() fix REFUTED)
+Parent's live rerun (CDP cache disabled, fresh tab, confirmed served tree)
+showed the Break()-removal fix changed NOTHING — atlas + singleUpdate results
+identical to pass #5's to 3 decimals. The nested-loop-Break() hypothesis is
+REFUTED as the (or at least THE ONLY) cause. Parent's instruction: stop
+inferring from the debug/reference kernels entirely, instrument the REAL
+update kernel directly.
+
+**(B) grep, as requested**: exactly ONE definition each of
+`marchOccupancyTSL`/`traceAndShadeRayTSL` in gi-nodes.js (confirmed,
+`test/gi-instrumented-kernel.test.js`) — no inlined/older copy exists for
+the update kernel to be accidentally using instead of the patched one.
+Ray rotation: `GIController` never passes a `rotation` option into
+`createGIUpdateKernel`, so both the GPU update kernel and the CPU
+single-update trace use the default `rotation=null` identically (confirmed
+by source inspection, not just assumption).
+
+**Instrumented the REAL update kernel** (parent's exact spec, part A+C):
+`createGIUpdateKernel` now always allocates (cheap, tiny) and conditionally
+writes five debug outputs, ALL no-ops by default (gated by a
+`debugProbeUniform` sentinel `0xffffffff` that no real wrapped probeIdx can
+ever equal):
+- `probeMapBuffer` (C): one `vec4` per probe (probePos.xyz + probeIdx),
+  written by EVERY probe's own texel-0 thread every dispatch (always on,
+  cheap) — the ground truth for "which probe does this GPU thread think it
+  is", independent of any shading question.
+- `debugDirHit`/`debugRadianceWeight`/`debugRunningSum` (A): per-ray
+  `{dir.xyz+dist, radiance.xyz+weight, runningSum.xyz+rayIndex}` for ONE
+  selected probe's texel 0 only, written INSIDE the real
+  `Loop(raysPerProbe,...)` as it executes — not a parallel/simplified
+  re-derivation.
+- `debugFinal`: the post-MC-normalization, PRE-hysteresis `newEstimate` for
+  that probe's texel 0.
+
+`tools/gi-parity.mjs` gained the CPU-side half
+(`cpuStepByStepTrace`/`compareStepByStepTrace`, both pure/node-tested) and
+wired GPU readback into `runSingleUpdateCheck(..., { debugProbeIndices })`:
+re-runs the (idempotent at alpha=0) single update once per requested probe
+with `debugProbeUniform` set, reads all five buffers back, and diffs
+ray-by-ray against the CPU trace, reporting the FIRST diverging ray and
+WHICH field (dir/dist/radiance/weight/runningSum) diverged — not just a
+final pass/fail. `runAll()` requests exactly the parent's named probes:
+scene(i) probe 4, scene(ii) probes 13 AND 14.
+
+**CPU-side reference values generated locally** (no GPU needed for this
+half) for the parent to diff their next GPU readback against — texel 0
+only, NOT the full-atlas sum reported in earlier passes:
+```
+scene(i) probe 4 (probePos [0,3,0], texelDir [-0.408,-0.408,-0.816]):
+  final estimate = [0.941, 1.176, 1.647]
+  ray0  dir=[0,1,0]        dist=24.00 radiance=[.4,.5,.7] w=0.000 runSum=[0,0,0]
+  ray2  dir=[.05,.83,-.56] dist=24.00 radiance=[.4,.5,.7] w=0.101 runSum=[.040,.051,.071]
+  ray4  dir=[-.75,.65,-.13] dist=5.50  radiance=[0,0,0]   w=0.146 runSum=[.040,.051,.071] (HIT, no light)
+  ray23 dir=[0,-1,0]       dist=24.00 radiance=[.4,.5,.7] w=0.408 runSum=[1.797,2.246,3.145]
+
+scene(ii) probe 13 (probePos [5,0.5,0], texelDir [-0.408,-0.408,-0.816]):
+  final estimate = [1.232, 1.539, 2.155]
+  ray31 dir=[0,-1,0] dist=30.00 radiance=[.4,.5,.7] w=0.408 runSum=[3.136,3.920,5.488]
+
+scene(ii) probe 14 (probePos [10,0.5,0], texelDir [-0.408,-0.408,-0.816]):
+  final estimate = [1.039, 1.264, 1.715]
+  ray4  dir=[-.66,.74,-.12] dist=2.00 radiance=[.33,.33,.33] w=0.062 runSum=[.031,.034,.039] (HIT the wall, lit)
+  ray31 dir=[0,-1,0]        dist=30.00 radiance=[.4,.5,.7]  w=0.408 runSum=[2.645,3.219,4.367]
+```
+(full per-ray tables reproducible via `cpuStepByStepTrace(probeIdx, cfg)`;
+probePos/texelDir/dist/radiance/weight/runningSum fields all match 1:1 with
+what the GPU debug buffers now record for the SAME probe.)
+
+**Still UNVERIFIED**: the actual GPU-side first-diverging-ray — this pass
+built the discriminator, did not run it. No further fix proposed until the
+live readback identifies exactly which field, on which ray, first departs
+from these numbers (per the parent's explicit "no more fixes without a
+live-readable discriminator").
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

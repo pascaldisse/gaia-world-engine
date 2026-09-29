@@ -19,7 +19,7 @@ test('CollapseType + defaults frozen and exact', () => {
 
 test('#30 removeByArea: threshold between joint areas -> ONLY sub-threshold joints break; missing area defaults to 1', () => {
   const fs = mk(4), js = [J(0, 1, 0.2), J(1, 2, 0.9), J(2, 3, 1.5), J(0, 3)]; // last has no area -> 1
-  assert.equal(removeByArea(js, fs, 1.0, {}), 3);
+  assert.equal(removeByArea(js, fs, 1.0, {}), 2);
   assert.deepEqual(js.map(j => j.broken), [true, true, false, false]);
   const js2 = [J(0, 1, 0.2), J(1, 2, 0.9), J(2, 3, 1.5), J(0, 3)];
   assert.equal(removeByArea(js2, fs, 0.5, {}), 1);

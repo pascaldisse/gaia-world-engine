@@ -45,6 +45,14 @@ export const DEFAULT_TOLERANCE = { absTol: 5e-3, relTol: 0.05 };
  * *3 + texel*3 + channel). Pure, GPU-free — exercised on synthetic arrays
  * by the node-side test (test/gi-parity.test.js).
  */
+// § WGSL storage vec3 is padded to 16 bytes → GPU readback = 4 floats/texel; CPU reference = 3 (live run 09-29: 576 vs 432).
+export function unpadVec3(a, expectedLength) {
+  if (a.length === expectedLength || a.length !== expectedLength / 3 * 4) return a;
+  const out = new Float32Array(expectedLength);
+  for (let i = 0, j = 0; j < expectedLength; i += 4, j += 3) { out[j] = a[i]; out[j + 1] = a[i + 1]; out[j + 2] = a[i + 2]; }
+  return out;
+}
+
 export function compareAtlas(actual, expected, tolerance = DEFAULT_TOLERANCE) {
   if (actual.length !== expected.length) {
     return { pass: false, maxAbsErr: Infinity, meanAbsErr: Infinity, count: 0, firstFailIndex: -1, reason: `length mismatch: ${actual.length} vs ${expected.length}` };
@@ -233,7 +241,10 @@ export async function runScene(name, sceneBuilder, { rendererFactory } = {}) {
   const cfg = extractCpuReferenceInputs(gi);
   const expected = computeCpuReferenceAtlas(cfg);
 
-  const cmp = compareAtlas(actual, expected);
+  const cmp = compareAtlas(unpadVec3(actual, expected.length), expected);
+  cmp.expectedMax = Math.max(...expected); cmp.actualMax = Math.max(...unpadVec3(actual, expected.length));
+  const per = arr => { const n = cfg.dims.x * cfg.dims.y * cfg.dims.z, k = arr.length / n; return Array.from({ length: n }, (_, p) => +arr.slice(p * k, (p + 1) * k).reduce((x, y) => x + y, 0).toFixed(3)); };
+  cmp.perProbeActual = per(unpadVec3(actual, expected.length)); cmp.perProbeExpected = per(expected); cmp.probePositions = cfg.probePositions ?? null;
   return { scene: name, updates: K, probes: cfg.dims.x * cfg.dims.y * cfg.dims.z, tolerance: DEFAULT_TOLERANCE, ...cmp };
 }
 

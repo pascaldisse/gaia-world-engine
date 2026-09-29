@@ -105,3 +105,11 @@ test('mutant: a purely-vertical sun ([0,-1,0]) on scene(ii) would give every ver
   const [dx, , dz] = verticalSun;
   assert.equal(Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01, false, 'confirms a vertical sun has zero horizontal component, exactly the bug this scene avoids');
 });
+
+test('unpadVec3: GPU vec3 storage readback (4 floats/texel) → packed 3 (live 09-29: 576 vs 432)', async () => {
+  const { unpadVec3, compareAtlas } = await import('../tools/gi-parity.mjs');
+  const gpu = new Float32Array([1, 2, 3, 99, 4, 5, 6, 99]), cpu = new Float32Array([1, 2, 3, 4, 5, 6]);
+  assert.deepEqual([...unpadVec3(gpu, 6)], [1, 2, 3, 4, 5, 6]);
+  assert.equal(compareAtlas(unpadVec3(gpu, 6), cpu).pass, true);
+  assert.equal(unpadVec3(cpu, 6), cpu, 'already packed untouched');
+});

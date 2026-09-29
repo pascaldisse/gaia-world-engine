@@ -195,3 +195,21 @@ test('#35-part end-to-end on real fracture: anchor ground band, supported >=1; c
   for (const f of frags) f.unyielding = false;
   assert.ok(computeSupport(frags, js, {}).every(v => v === false));
 });
+
+test('#23b markUnyielding discriminator: centroid INSIDE but AABB extends outside -> marked; AABB overlaps but centroid OUTSIDE -> not', () => {
+  const box = { center: V(0, 0, 0), size: V(2, 2, 2) };
+  const bigInside = { volume: 1, centroid: V(0, 0, 0), aabb: { min: V(-9, -9, -9), max: V(9, 9, 9) } };
+  const overlapOutside = { volume: 1, centroid: V(5, 0, 0), aabb: { min: V(0.5, -1, -1), max: V(9.5, 1, 1) } };
+  const fs = [bigInside, overlapOutside];
+  assert.equal(markUnyielding(fs, box), 1);
+  assert.equal(fs[0].unyielding, true);
+  assert.equal(fs[1].unyielding, undefined);
+});
+
+test('#24b buildAdjacency: separation on y alone or z alone (x overlapping) is NOT adjacency; overlap on all three axes is', () => {
+  assert.deepEqual(buildAdjacency([frag(0, 0, 0), frag(0, 5, 0)], {}), [], 'y gap');
+  assert.deepEqual(buildAdjacency([frag(0, 5, 0), frag(0, 0, 0)], {}), [], 'y gap, reversed order');
+  assert.deepEqual(buildAdjacency([frag(0, 0, 0), frag(0, 0, 5)], {}), [], 'z gap');
+  assert.deepEqual(buildAdjacency([frag(0, 0, 0), frag(0.2, 0.2, 0.2)], {}), [[0, 1]]);
+  assert.deepEqual(buildAdjacency([frag(0, 0, 0), frag(0, 0, 5), frag(0, 5, 0), frag(5, 0, 0)], {}), []);
+});

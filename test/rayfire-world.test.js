@@ -98,7 +98,8 @@ test('#19 applyImpulse: default mass-dependent (10 on mass 10 -> dv 1), velocity
   w.applyImpulse(k, v(5, 5, 5), 'velocityChange');
   assert.deepEqual(w.getBody(k).velocity, v(0, 0, 0));
   const s = new RFWorld(); const sid = s.addBody({ position: v(0, 1, 0), shape: sph(1) });
-  while (s.getBody(sid).awake) s.step(1 / 60);
+  let settle = 0; while (s.getBody(sid).awake && settle < 2000) { s.step(1 / 60); settle++; }
+  assert.equal(s.getBody(sid).awake, false, 'body must fall asleep within a bounded number of steps');
   s.applyImpulse(sid, v(0, 3, 0), 'velocityChange');
   assert.equal(s.getBody(sid).awake, true); assert.equal(s.getBody(sid).sleepCounter, 0);
   assert.doesNotThrow(() => s.applyImpulse(9999, v(1, 1, 1)));

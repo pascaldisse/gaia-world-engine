@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { capPolygons, chainLoops, closeBoundaries } from '../client/extensions/rayfire/closure.js';
 import { hullFaces, HULL_WELD_LADDER, _boxFacesForTest } from '../client/extensions/rayfire/hull.js';
-import { fractureCells } from '../client/extensions/rayfire/fracture.js';
+import { fractureCells, _internals } from '../client/extensions/rayfire/fracture.js';
 import { facesVolume, isWatertight, toTriangles } from '../client/extensions/rayfire/geometry.js';
 import { boxTriangles, V } from './helpers/rayfire-fixtures.js';
 
@@ -107,4 +107,50 @@ test('non-manifold source (two boxes sharing an edge): every returned cell STILL
   assert.ok(cells.length > 0);
   for (const c of cells) { assert.equal(isWatertight(c.faces), true); assert.ok(facesVolume(c.faces) > 0); assert.equal(typeof c.hullFallback, 'boolean'); }
   assert.ok(toTriangles(cells[0].faces).length > 0);
+});
+
+const faceT = t => ({ verts: t, interior: false, materialId: 0 });
+const OPTS = { interiorMaterial: 1, exteriorMaterial: 0 };
+
+test('#10b finishCell ladder: a cell no capping can repair (repeated directed edge) falls back to the convex hull -> watertight, positive, hullFallback=true', () => {
+  const box = boxTriangles(V(0, 0, 0), V(2, 2, 2)).map(faceT);
+  const broken = { faces: [...box, box[3]], uncapped: false }; // duplicated face: repeated directed edges
+  assert.equal(isWatertight(broken.faces), false);
+  const fin = _internals.finishCell(broken, OPTS, 1e-9);
+  assert.ok(fin, 'must not be dropped');
+  assert.equal(fin.hullFallback, true);
+  assert.equal(isWatertight(fin.faces), true);
+  assert.ok(Math.abs(facesVolume(fin.faces) - 8) < 1e-9);
+});
+
+test('#10b finishCell: open cell is post-closed by capping (no hull needed); flat unrepairable cell is dropped, not boxed', () => {
+  const box = boxTriangles(V(0, 0, 0), V(2, 2, 2)).map(faceT);
+  const open = _internals.finishCell({ faces: box.slice(2), uncapped: false }, OPTS, 1e-9);
+  assert.equal(open.hullFallback, false);
+  assert.equal(isWatertight(open.faces), true);
+  const flat = [faceT([V(0, 0, 0), V(1, 0, 0), V(0, 1, 0)]), faceT([V(0, 0, 0), V(1, 0, 0), V(0, 1, 0)])];
+  assert.equal(_internals.finishCell({ faces: flat, uncapped: false }, OPTS, 1e-9), null);
+});
+
+test('#11 finishCell drops watertight zero-volume sheets and float-noise volumes; keeps real ones', () => {
+  const s = 5, q = [V(0, 0, 0), V(s, 0, 0), V(s, s, 0), V(0, s, 0)];
+  const front = faceT(q), back = faceT(q.slice().reverse());
+  assert.equal(isWatertight([front, back]), true);
+  assert.equal(facesVolume([front, back]), 0);
+  assert.equal(_internals.finishCell({ faces: [front, back], uncapped: false }, OPTS, 1e-9), null, 'zero-volume sliver must be dropped');
+  const box = boxTriangles(V(0, 0, 0), V(1, 1, 1)).map(faceT);
+  assert.equal(_internals.finishCell({ faces: box, uncapped: false }, OPTS, 2), null, 'volume 1 <= eps 2 dropped');
+  assert.ok(_internals.finishCell({ faces: box, uncapped: false }, OPTS, 0.5));
+  const inv = box.map(f => ({ ...f, verts: f.verts.slice().reverse() }));
+  const fixed = _internals.finishCell({ faces: inv, uncapped: false }, OPTS, 1e-9);
+  assert.ok(facesVolume(fixed.faces) > 0, 'inside-out cell is re-wound positive');
+});
+
+test('#8 amount=1 core: buildCell with a single seed performs zero clips (equivalence argument) and never adds a cell', () => {
+  const src = boxTriangles(V(0, 0, 0), V(2, 2, 2));
+  const cells = fractureCells(src, { amount: 1, seed: 9 });
+  assert.equal(cells.length, 1);
+  assert.equal(cells[0].faces.length, 12);
+  assert.ok(cells[0].faces.every(f => f.interior === false));
+  for (const seed of [1, 2, 3, 4, 5]) assert.equal(fractureCells(src, { amount: 1, seed }).length, 1, 'requested 1 seed -> never more than 1 cell');
 });

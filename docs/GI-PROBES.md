@@ -631,6 +631,59 @@ the instrumentation's own self-inflicted breakage; the parent's next live
 run is the first one where the pass-#7 discriminator will actually produce
 data.
 
+## Live-GPU root-cause pass #9 (09-29, parent rerun after pass #8 fixed the instrumentation itself) — ACTUAL ROOT CAUSE FOUND + FIXED
+With the storage-buffer overflow fixed (pass #8), the instrumented kernel
+finally ran and produced real data: 0 GPU errors, probeIdx+position match
+exactly. **First divergence, found directly from the raw readback**: march
+`dist` is CONSTANT per probe across EVERY ray, established by ray 0 and
+never changing regardless of `dir` (scene(i) probe4: dist=4.5 for all 24
+rays vs CPU's varying 24/5.5/7.5/6/5/4.5/...; scene(ii) probe13: dist=4 for
+all 32 vs CPU mostly-30/miss; probe14: dist=2 for all 32). `dir` and
+`weight` matched exactly -- only the march RESULT was wrong, and wrong the
+SAME way for every ray after the first.
+
+**Root cause**: `marchOccupancyTSL`/`traceAndShadeRayTSL` are PLAIN JS
+functions (never wrapped in TSL's own `Fn()`), called once per ray from
+WITHIN the update kernels' outer `Loop(raysPerProbe,...)`. Their
+`.toVar()` locals (`t`,`hitT` in marchOccupancyTSL; `shadowTOut`,`direct`
+in traceAndShadeRayTSL) do not reliably get their DECLARATION-TIME initial
+value re-applied each time the outer loop reaches that code across a
+plain-function-call boundary -- so once ray 0 sets `hitT>=0`, the guard
+`stillSearching = t<maxDist AND hitT<0` is false from t=0 for every later
+ray too, and the loop body (including the occupancy read) never executes
+again: every subsequent ray silently returns whatever `hitT` ray 0 left
+behind. This is DIFFERENT from (and the real cause underlying) the pass-#6
+Break()-scoping hypothesis -- Break() removal changed nothing live because
+the loop body was already being skipped via the `stillSearching` guard
+being permanently false, not because of a Break() mis-targeting an outer
+loop. The ray-debug kernel (createRayDebugKernel) never showed any of this
+because it has NO outer loop at all -- one ray per GPU thread, so "once
+per shader invocation" initialization was already correct there purely by
+construction, which is exactly why per-ray debug parity was proven correct
+in earlier passes while the real update kernel stayed broken.
+
+**Fixed**: explicit `.assign()` resets immediately after every affected
+`.toVar()` declaration, BEFORE any conditional logic that reads or mutates
+that variable -- `t.assign(0); hitT.assign(-1);` in marchOccupancyTSL,
+`shadowTOut.assign(-2);` and `direct.assign(vec3(0,0,0));` in
+traceAndShadeRayTSL. `.assign()` produces a MUTATION node, not a
+declaration -- it gets placed at the actual control-flow point it's
+written, regardless of where the underlying variable's own declaration
+ended up, forcing a genuine per-ray reset. Confirmed NOT to touch the
+variables that are SUPPOSED to accumulate across the ray loop
+(`sampleEstimate` in createGIUpdateKernel; `wSum`/`dSum`/`d2Sum` in
+createGIDepthUpdateKernel are declared OUTSIDE the loop and correctly left
+alone -- resetting THOSE would be the opposite bug).
+
+`test/gi-loop-carried-state-mirror.test.js` pins the fix structurally
+(reset calls exist, in the right order, right before any conditional use)
+since this specific hoisting/scoping behavior cannot be executed or
+observed without a real WebGPU device+builder (established in earlier
+passes: TSL Fn bodies don't expand into a walkable/runnable graph without
+one) -- includes a mutant reproducing the exact pre-fix source pattern and
+a mutant demonstrating what an unreset `direct` accumulator would do
+(ever-growing wrong sum across rays, not just a stuck value).
+
 ## UNVERIFIED (need a real GPU frame)
 - Actual fps cost of `raysPerProbe × activeProbes` compute dispatch — no WebGPU device in node tests, only node-graph *construction* is verified here.
 - Whether the kernel/query TSL graphs, once actually built+run on a real

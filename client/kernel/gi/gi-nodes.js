@@ -216,6 +216,28 @@ function marchOccupancyTSL(occ, rayOrigin, rayDir, maxDist) {
   const step = float(cellSize * 0.5);
   const t = float(0).toVar();
   const hitT = float(-1).toVar();
+  // BUGFIX (parent live-GPU report 09-29, 9th pass -- THE actual root
+  // cause of the atlas-vs-ray-debug divergence, found via the instrumented
+  // kernel's own raw readback: march `dist` was CONSTANT across every ray
+  // of a probe, established by ray 0 and never changing). This function is
+  // a PLAIN JS function (not TSL's own `Fn()`), called once per ray from
+  // WITHIN the update kernels' outer `Loop(raysPerProbe,...)` (via
+  // `traceAndShadeRayTSL`) -- crossing that plain-function-call boundary,
+  // `.toVar()`'s declaration+initial-value apparently does NOT get scoped
+  // to "inside the ray loop" the way a directly-inlined `var` would; it
+  // gets hoisted to a one-time declaration+init, so after the FIRST ray
+  // sets `hitT>=0`, `stillSearching` is false forever and every later ray
+  // silently returns the SAME already-set `hitT`/`t`. The ray-debug kernel
+  // (createRayDebugKernel) never showed this because it has no outer loop
+  // at all -- one ray per GPU thread, so "once-per-shader-invocation"
+  // initialization was already correct there by construction. Explicit
+  // `.assign()` calls right after `.toVar()` are MUTATION nodes (not
+  // declarations) and get placed at the exact control-flow point they're
+  // written, regardless of where the underlying variable's declaration
+  // itself ended up -- forcing a real reset every time this function's
+  // code is reached, which is exactly once per ray.
+  t.assign(0);
+  hitT.assign(-1);
   Loop(MAX_MARCH_STEPS, () => {
     const stillSearching = t.lessThan(maxDist).and(hitT.lessThan(0));
     If(stillSearching, () => {
@@ -275,8 +297,15 @@ function traceAndShadeRayTSL({ occ, rayOrigin, rayDir, maxDist, sun, lights, alb
   // Exposed via createRayDebugKernel's per-ray trace (parent review 09-29,
   // 4th pass: "extend rayDebug with per-ray radiance + shadowT + normal").
   const shadowTOut = float(-2).toVar();
+  // BUGFIX (parent live-GPU report 09-29, 9th pass) -- same class of bug
+  // as marchOccupancyTSL's t/hitT above: this whole function is a plain JS
+  // function called once per ray from inside the update kernels' outer
+  // ray Loop, so `.toVar()`'s own initial value alone is not reliably
+  // re-applied per ray. Explicit resets force it.
+  shadowTOut.assign(-2);
 
   const direct = vec3(0, 0, 0).toVar();
+  direct.assign(vec3(0, 0, 0));
   if (sun) {
     const L = normalize(sun.direction.negate());
     const ndotl = max(0, dot(N, L));

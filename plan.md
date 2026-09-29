@@ -520,6 +520,54 @@ blinding once the daylight env crossfades in.
       off; wire also skybox off. Each toggle then flippable individually;
       leaving create mode restores lit + all on + running.
 
+## M21 — FX extensions: gore + rayfire (clean-room; branch only, NOT main)
+
+Forced by: EE infantry gore + building destruction; Boomtown candidates.
+AGENTS.md → "FX extensions: gore + rayfire" = how-to/laws. Specs:
+`docs/cleanroom/{gore-spec,destruction-spec,destruction-api}.md`.
+
+Where it lives:
+- `lampas/engine-ee-clean` (merge d0740df) = gore 4c7b03c..bdad054 (from
+  `lampas/cleanroom-spec-gore`) + rayfire 71b5436..9a1255a (from
+  `lampas/cleanroom-spec-rayfire`).
+- NOT on `main`. NOT in Boomtown engine WT `astra-gameplay-tree` (no
+  `client/extensions/`). Consumer today = EE only (`client/gore-fx.js`,
+  `client/destruction-rayfire.js`, `client/building-lifecycle.js`).
+
+Done:
+- [x] gore: seeded PRNG, blood particles (cap 2048), pools/decal ring (cap 48,
+      FIFO), plane+part cut w/ red caps, piece physics, release + lifetime
+      expiry, createGore/register, lifecycle, ≤6 vertex-buffer audit, WGSL
+      identifier safety net (`goreX`). 62/62 node tests.
+- [x] rayfire: closure + Voronoi fracture + hull fallback, render glue,
+      RFWorld, demolition depth-fade, structure/support/erosion, staged
+      collapse, activation, fade, explode/shoot, register() + api list,
+      `rfX` naming table. 125 pass / 1 skip (census needs EE_ASSETS);
+      mutant runner, survivors killed (9a1255a).
+
+Open:
+- [ ] Merge `lampas/engine-ee-clean` → `main` (review first; branch also
+      carries GI root-cause passes).
+- [ ] Land in Boomtown engine WT (`astra-gameplay-tree`) or re-point its
+      engine pin — prerequisite for any Boomtown wiring.
+- [ ] Boomtown gore wiring (BT03 candidate): register/createGore, hit →
+      splash/pool, kill → cut; screenshot + play-test.
+- [ ] Boomtown destruction wiring (BT08 candidate): blocked on
+      `compile-destruction.mjs` missing FBX refs (Boomtown
+      `docs/GANG-SOURCE-GAP-MATRIX.md`:322); then fracture cache + RFWorld
+      groundY from world + fade.
+- [ ] gore ground = hard-coded `GROUND_Y=0` (particles/decals/pieces) →
+      parameter w/ default (world ground / surfaceAt).
+- [ ] gore `setRecipes(recipes)` only resets; recipe override table unbuilt
+      (spec §6 unspecified).
+- [ ] gore arm/leg part bands = placeholder single-plane tunables; skinned
+      cut best-effort only.
+- [ ] rayfire: no body-vs-body contact in RFWorld (spec §6.1); concave caps
+      approximate (§3.8); census test needs EE_ASSETS in CI.
+- [ ] Neither verified by screenshot/play-test via the engine loader
+      (`register(ctx)` in a GAIA world scene); no proof shots on this
+      branch → UNVERIFIED in-engine.
+
 - Sandboxed `script` component (QuickJS/worker, error containment, self-healing)
 - Full TSL `shader.source` authoring
 - Multiplayer presence/avatars, op attribution UI

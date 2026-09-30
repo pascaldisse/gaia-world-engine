@@ -22,6 +22,9 @@ export class Palette {
     this.ghostValid = false;
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
+    // Interior worlds can be authored from meshes/colliders without a terrain
+    // component. Their palette still has a grounded editor plane at y=0.
+    this.floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
     renderer.domElement.addEventListener('pointermove', (e) => this.moveGhost(e));
     renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -119,15 +122,14 @@ export class Palette {
   moveGhost(event) {
     if (!this.armed || !this.ghost) return;
     const terrain = this.terrainGroup();
-    if (!terrain) return;
     this.raycaster.setFromCamera(pointerNDC(event, this.pointer), this.camera);
-    const hits = this.raycaster.intersectObject(terrain, true);
-    if (!hits.length) {
+    const hits = terrain ? this.raycaster.intersectObject(terrain, true) : [];
+    const p = hits[0]?.point ?? this.raycaster.ray.intersectPlane(this.floorPlane, new THREE.Vector3());
+    if (!p) {
       this.ghost.visible = false;
       this.ghostValid = false;
       return;
     }
-    const p = hits[0].point;
     const offset = this.armed.components.ground?.offset ?? 0;
     this.ghost.position.set(p.x, p.y + offset, p.z);
     this.ghost.visible = true;

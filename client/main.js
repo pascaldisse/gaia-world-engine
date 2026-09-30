@@ -21,6 +21,8 @@ import { ViewFx } from './kernel/viewfx.js';
 import { CharacterCreator } from './plugins/character-creator.js';
 import { VrmEditor } from './plugins/vrm-editor.js';
 import { loadExtensions, gateModule } from './kernel/extensions.js';
+import * as THREE from 'three/webgpu';
+import * as TSL from 'three/tsl';
 import { updateVrms } from './kernel/vrm.js';
 import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
@@ -49,7 +51,9 @@ view.player = player;
 // engine's own historical wiring, so nothing here changes unless a host page
 // passes `window.__GAIA_EXTENSIONS__` — which is how the Paleblood Atlas boots
 // its OWN copies from paloptic instead of these.
-const extensions = await loadExtensions({ store, view, camera, player, dom: renderer.domElement, renderer, scene, audio, effects, environment });
+// three/tsl = the SAME module instances the renderer uses (one three, no bare-import resolution from outside the engine root).
+// Additive: extensions that ignore them are unaffected.
+const extensions = await loadExtensions({ store, view, camera, player, dom: renderer.domElement, renderer, scene, audio, effects, environment, three: THREE, tsl: TSL });
 // a scene's `camera` component drives the rig: side mode fixes the frame,
 // shows the body, and retires the crosshair (E picks by the body instead)
 const scenes = new Scenes({

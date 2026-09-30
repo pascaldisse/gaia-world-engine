@@ -32,6 +32,10 @@
 // sync/update are called by the engine's own loops. Returning nothing is legal:
 // an extension may be pure side effect.
 //
+// ctx also carries `three` (three/webgpu namespace) and `tsl` (three/tsl) — the engine's own
+// instances — so an extension served from outside the engine root can build custom GPU
+// materials/geometry without a second copy of three (bare imports don't resolve there).
+//
 // A failing extension must NOT take the engine down: the studio still opens when
 // a production is broken or absent. Failures are warned and skipped.
 

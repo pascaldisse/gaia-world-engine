@@ -10,11 +10,11 @@ export const DEFAULTS = {
   support: 1.0, supportK: 60, supportD: 14, footHalfLength: 0.08, // [H]
   // balance / stepping
   fallTilt: 0.6, fallHeightFrac: 0.65, leanGain: 1.2, armsOutGain: 0.6,
-  stepThreshold: 0.02, stepWidth: 0.09, stepGain: 1.15, maxStep: 0.5, stepMs: 260, stepHeight: 0.1, stepCooldownMs: 90, stanceHold: 1.0, swingStiffness: 1.5, shuffleMs: 400, standKnee: 0.05, fallConfirmMs: 100, // lengths [H]
+  stepThreshold: 0.02, stepWidth: 0.09, stepGain: 1.15, maxStep: 0.5, stepMs: 260, stepHeight: 0.1, stepCooldownMs: 90, stanceHold: 1.0, swingStiffness: 1.5, retargetFrac: 0.3, shuffleMs: 400, standKnee: 0.05, fallConfirmMs: 100, fallCpOut: 0.3, // lengths [H]
   // fall reactions
   reactionDelayMs: 80, reactionJitterMs: 40, armBlendMs: 140,
-  catchReach: 0.75, catchElbow: 0.25, catchStrength: 0.8,
-  protectSpeed: 3.2, protectElbow: 2.3, protectStrength: 0.9, protectNeck: 0.5, protectSpine: 0.35,
+  catchReach: 0.75, catchElbow: 0.25, catchStrength: 1.0, reflexStiffness: 3,
+  protectSpeed: 3.2, protectElbow: 2.3, protectStrength: 1.0, protectNeck: 0.5, protectSpine: 0.35,
   fallLegStrength: 0.35, fallKnee: 0.5, fallHip: 0.35, headUp: 0.6,
   downHeightFrac: 0.4, settleSpeed: 0.4, settleMs: 350, downStrength: 0.1, downDecayMs: 900,
   // death / bodyWrithe
@@ -50,6 +50,7 @@ export function think(h, s, dt) {
   const behaviour = h.behaviour;
 
   // ---------- phase transitions ----------
+  if (h.phase === 'stand' && (h.cpOut || 0) > p.fallCpOut * h.height) h.enter('fall'); // capture point beyond any step → falling now
   if (h.phase === 'stand' && (s.tilt > p.fallTilt || s.comHeight < p.fallHeightFrac * h.standComHeight)) { h.falling += dt; if (h.falling * 1000 >= p.fallConfirmMs) h.enter('fall'); } else h.falling = 0;
   if ((h.phase === 'fall') && s.comHeight < p.downHeightFrac * h.standComHeight && s.comSpeed < p.settleSpeed) {
     h.settle += dt; if (h.settle * 1000 > p.settleMs) h.enter('down');
@@ -59,10 +60,11 @@ export function think(h, s, dt) {
 
   const pt = h.pt; // time in phase
   switch (h.phase) {
-    case 'limp': case 'dead': h.strength = 0; return;
+    case 'limp': case 'dead': case 'rest': return;
     case 'stand': return stand(h, s, dt, p, Hs);
     case 'fall': return fall(h, s, dt, p, 1);
     case 'down': {
+      if (pt * 1000 > p.downDecayMs + p.settleMs) { h.enter('rest'); return; }
       const a = smooth01(pt * 1000 / p.downDecayMs);
       h.strength = h.downFrom + (p.downStrength - h.downFrom) * a;
       fall(h, s, dt, p, 1 - a);
@@ -104,7 +106,8 @@ function stand(h, s, dt, p, Hs) {
     h.lastStepEnd = h.t + p.stepMs / 1000; h.steps++; h.lastSwing = pick;
   }
   // swing target re-aimed every substep at the live capture point (+ overshoot), half hip-width lateral offset
-  if (h.step) {
+  // (retarget only early in the swing: the swinging leg's own momentum drags the capture point forward → runaway)
+  if (h.step && (h.t - h.step.t0) * 1000 <= p.retargetFrac * p.stepMs) {
     const sd = h.step.i ? v3.scale(h.leftW, -1) : h.leftW;
     let to = v3.add(v3.add(s.cp, v3.scale(v3.sub(s.cp, s.comGround), p.stepGain - 1)), v3.scale(sd, p.stepWidth * Hs));
     const d = v3.sub(to, h.step.from); const L = v3.len(d), mx = p.maxStep * h.height;
@@ -155,14 +158,14 @@ function armReaction(h, s, p, w, dt) {
   if (mode === 'catch') {
     const f = s.fallDir;
     const dir = v3.norm(v3.sub(v3.scale(f, Math.cos(p.catchReach)), v3.scale(h.up, Math.sin(p.catchReach))));
-    P.arm('L', dir, p.catchElbow, ramp * p.catchStrength / 0.8, 0);
-    P.arm('R', dir, p.catchElbow, ramp * p.catchStrength / 0.8, 0);
+    P.arm('L', dir, p.catchElbow, ramp * p.catchStrength, 0, p.reflexStiffness);
+    P.arm('R', dir, p.catchElbow, ramp * p.catchStrength, 0, p.reflexStiffness);
     P.orient('head', h.up, p.headUp * ramp);
   } else {
     const qc = s.q[h.idx.chest];
     for (const [side, sg] of [['L', 1], ['R', -1]]) {
       const dir = v3.norm(qt.rot(qc, [sg * 0.35, 0.75, 0.55]));
-      P.arm(side, dir, p.protectElbow, ramp * p.protectStrength / 0.8, 0);
+      P.arm(side, dir, p.protectElbow, ramp * p.protectStrength, 0, p.reflexStiffness);
     }
     P.flexNeck(p.protectNeck * ramp);
     P.flexSpine(p.protectSpine * ramp);

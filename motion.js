@@ -162,13 +162,13 @@ export function createMotion(opts = {}) {
         const cur = qt.rot(S.q[bi], [0, 1, 0]);
         blend(ji, jAngles(ji, qt.mul(qt.fromTo(cur, upDes), S.q[bi]), S), w);
       },
-      arm(side, dirW, elbow, w, abduct) {
+      arm(side, dirW, elbow, w, abduct, k) {
         const u = idx['upperArm' + side]; if (u == null) return;
         const ju = jointOf[u];
-        if (dirW) aimBody(u, dirW, w);
+        if (dirW) { aimBody(u, dirW, w); if (k != null && ju >= 0) ks[ju] += (k - ks[ju]) * Math.min(1, w); }
         else if (abduct) blend(ju, [0, 0, (side === 'L' ? 1 : -1) * abduct], w);
         const f = idx['foreArm' + side];
-        if (f != null && elbow) { const jf = jointOf[f]; if (jf >= 0) blend(jf, [J[jf].flex * elbow, 0, 0], w); }
+        if (f != null && elbow) { const jf = jointOf[f]; if (jf >= 0) blend(jf, [J[jf].flex * elbow, 0, 0], w, k); }
       },
       leg(side, footW, w, stance) { // 2-link IK in bind-relative terms: knee angle solves |A + R(θ)·Bv| = d, then aim leg line
         const t = idx['thigh' + side]; if (t == null) return;
@@ -355,8 +355,9 @@ export function createMotion(opts = {}) {
 
   function control(h, dt) {
     if (h.disposed) return;
-    if (h.passive || h.phase === 'limp' || h.phase === 'dead') {
-      if (!h.motorsStatic) { h.strength = 0; h._ks.fill(0); drive(h); h.motorsStatic = true; }
+    if (h.passive || h.phase === 'limp' || h.phase === 'dead' || h.phase === 'rest') {
+      // static motors (set once) → Rapier may sleep the bodies. rest = lying with low tone (downStrength)
+      if (!h.motorsStatic) { const rest = h.phase === 'rest' && !h.passive; h.strength = rest ? h.params.downStrength : 0; h._tx.fill(0); h._ks.fill(rest ? 1 : 0); drive(h); h.motorsStatic = true; }
       h.asleep = h.B.every((b) => b.rb.isSleeping());
       h.t += dt; h.bt += dt; h.pt += dt;
       return;
@@ -371,7 +372,7 @@ export function createMotion(opts = {}) {
   function lod() {
     const act = [];
     for (const h of handles) {
-      const alive = !(h.phase === 'limp' || h.phase === 'dead');
+      const alive = !(h.phase === 'limp' || h.phase === 'dead' || h.phase === 'rest');
       let far = false;
       if (viewer && cfg.lodRadius < Infinity) { const t = h.B[h.idx.pelvis].rb.translation(); far = Math.hypot(t.x - viewer[0], t.y - viewer[1], t.z - viewer[2]) > cfg.lodRadius; }
       if (far) { if (!h.passive) { h.passive = true; h.motorsStatic = false; } continue; }
@@ -407,7 +408,7 @@ export function createMotion(opts = {}) {
     setViewer(p) { viewer = p; },
     diagnostics() {
       let active = 0, passive = 0, asleep = 0, bodies = 0;
-      for (const h of handles) { bodies += h.B.length; if (h.asleep) asleep++; else if (h.passive || h.phase === 'dead' || h.phase === 'limp') passive++; else active++; }
+      for (const h of handles) { bodies += h.B.length; if (h.asleep) asleep++; else if (h.passive || h.phase === 'dead' || h.phase === 'limp' || h.phase === 'rest') passive++; else active++; }
       return { handles: handles.size, active, passive, asleep, bodies, dt: cfg.dt, substeps: cfg.substeps, steps: stats.steps, lastStepMs: stats.lastMs, avgStepMs: stats.n ? stats.sumMs / stats.n : 0, maxStepMs: stats.maxMs };
     },
     handles() { return [...handles].map((h) => h.api); },

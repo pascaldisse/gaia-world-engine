@@ -5,7 +5,7 @@
   "type": "module",
   "main": "index.js",
   "license": "Apache-2.0",
-  "scripts": { "test": "node --test test/" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
   "peerDependencies": { "@dimforge/rapier3d-compat": "0.21.0" },
   "devDependencies": { "@dimforge/rapier3d-compat": "0.21.0" }
 }

@@ -1,0 +1,11 @@
+{
+  "name": "gaia-motion-web",
+  "version": "2.0.0",
+  "description": "GAIA Motion v2 — real-time procedural active ragdoll (Euphoria-style controllers) on Rapier. Engine-agnostic plugin.",
+  "type": "module",
+  "main": "index.js",
+  "license": "Apache-2.0",
+  "scripts": { "test": "node --test test/" },
+  "peerDependencies": { "@dimforge/rapier3d-compat": "0.21.0" },
+  "devDependencies": { "@dimforge/rapier3d-compat": "0.21.0" }
+}

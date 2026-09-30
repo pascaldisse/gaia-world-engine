@@ -1,5 +1,4 @@
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { GAIA_PORT } from './port.js';
 
 export function disposeGltf(root) {
   const geometries = new Set(), materials = new Set(), textures = new Set();
@@ -16,6 +15,8 @@ export function disposeGltf(root) {
 }
 
 export async function mountGltf(group, spec, token, onReady = () => {}, { loader = new GLTFLoader() } = {}) {
+  // port.js reads location at module load → imported lazily so headless imports of view.js (bun/node tests) stay DOM-free
+  const { GAIA_PORT } = await import('./port.js');
   const url = new URL(spec.src, `http://${location.hostname}:${GAIA_PORT}/`).href;
   group.userData.gltfStatus = 'loading';
   try {

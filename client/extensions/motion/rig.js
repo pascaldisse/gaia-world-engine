@@ -1,4 +1,4 @@
-// gaia-motion/web · rig template + role resolution. No game logic.
+// GAIA-World-Engine motion extension · rig template + role resolution. No game logic.
 import { v3, qt, clamp } from './math.js';
 
 // canonical rig frame C: local X = left (up × forward), Y = up, Z = forward

@@ -2,8 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadavg } from 'node:os';
-import R, { ground } from './_rapier.mjs';
-import { createMotion, humanoidRig, BEHAVIOURS } from '../index.js';
+import R, { ground } from './helpers/motion-rapier.js';
+import { createMotion, humanoidRig, BEHAVIOURS } from '../client/extensions/motion/index.js';
 
 const DT = 1 / 60;
 function scene(opts = {}) { const m = createMotion({ rapier: R, ...opts }); ground(m.world, R, 100); return m; }

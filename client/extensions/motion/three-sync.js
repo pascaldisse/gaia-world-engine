@@ -1,4 +1,4 @@
-// gaia-motion/web · OPTIONAL three.js helper (no import of three; duck-typed Object3D).
+// GAIA-World-Engine motion extension · OPTIONAL three.js helper (no import of three; duck-typed Object3D).
 // syncThree(handle, map: {bodyName → Object3D}) — copies world transforms (object must be a scene-root child or have identity parents).
 export function syncThree(handle, map, cache) {
   const tr = handle.transforms(cache);

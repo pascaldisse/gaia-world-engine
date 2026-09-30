@@ -1,4 +1,4 @@
-// gaia-motion/web · tiny vec3/quat helpers on plain arrays. quat = [x,y,z,w].
+// GAIA-World-Engine motion extension · tiny vec3/quat helpers on plain arrays. quat = [x,y,z,w].
 export const v3 = {
   add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
   sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],

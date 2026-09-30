@@ -1,7 +1,7 @@
-# gaia-motion/web — GAIA Motion v2 runtime
-Real-time active ragdoll (Euphoria-style controllers) on Rapier. Plain ESM, no deps; peer `@dimforge/rapier3d-compat` 0.21.0. Engine-agnostic → EE now, Boomtown later.
+# motion — GAIA-World-Engine real-time active-ragdoll extension
+Real-time active ragdoll (Euphoria-style controllers) on Rapier. Plain ESM, no deps; Rapier `@dimforge/rapier3d-compat` 0.21.0 INJECTED by the game (`createMotion({rapier})`). Games import `/extensions/motion/index.js` (like rayfire/gore). NOT gaia-motion (= separate offline Houdini/Endorphin-style tool); history imported from its mis-homed `runtime-web-1` `web/`.
 
-## Contract (frozen — EE consumes a vendored copy)
+## Contract (frozen — EE consumes it)
 - `createMotion({rapier, world?, gravity?, dt?=1/60, maxActive?=16, …cfg})` → `motion`
 - `humanoidRig({bounds, up, forward, scale})` → `{bodies[], joints[]}` (11 bodies; any rig w/ `{name,parent,center,halfExtents,mass}` + joints works, roles by name heuristic / `rig.roles`)
 - `motion.spawn(rig, {position, quaternion, velocity?, behaviour, impulse?:{body|'all', dir, magnitude N·s}, seed, params?})` → `h`
@@ -51,5 +51,5 @@ LOD: over `maxActive` → oldest go passive limp. Asleep → bodies frozen (`sle
 1. stagger band non-monotone (25, 60 N·s fall; seeds don't change outcome) — stepping controller
 2. kneeless rigs (EE) corpse can rest propped: torso .45–.51 m, seed 3 not asleep by 6 s
 
-## Vendor
-`node tools/vendor.mjs <destDir> [--allow-dirty]` → runtime *.js + `VERSION` (commit sha). Refuses dirty tree.
+## Tests
+`GAIA_RAPIER_FROM=<game dir w/ node_modules/@dimforge/rapier3d-compat> node --test test/motion.test.js` — missing Rapier = throw, never skip.

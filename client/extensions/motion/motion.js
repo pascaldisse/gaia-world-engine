@@ -1,4 +1,4 @@
-// gaia-motion/web · createMotion: Rapier active-ragdoll runtime. Engine-agnostic, no game logic.
+// GAIA-World-Engine motion extension · createMotion: Rapier active-ragdoll runtime. Engine-agnostic, no game logic.
 import { v3, qt, clamp, rng } from './math.js';
 import { rigFrame, resolveRoles } from './rig.js';
 import { DEFAULTS, BEHAVIOURS, think, startPhase } from './behaviours.js';
@@ -18,7 +18,7 @@ function normLimits(type, lim) {
 const roleOfJoint = (n) => { const m = String(n).toLowerCase().match(/spine|neck|shoulder|elbow|hip|knee|ankle/); return m ? m[0] : 'other'; };
 
 export function createMotion(opts = {}) {
-  const R = opts.rapier; if (!R) throw new Error('gaia-motion: createMotion needs { rapier }');
+  const R = opts.rapier; if (!R) throw new Error('motion: createMotion needs { rapier }');
   const ownsWorld = !opts.world;
   const g = opts.gravity || (opts.world ? [opts.world.gravity.x, opts.world.gravity.y, opts.world.gravity.z] : [0, -9.81, 0]);
   const world = opts.world || new R.World({ x: g[0], y: g[1], z: g[2] });
@@ -64,7 +64,7 @@ export function createMotion(opts = {}) {
     const own = new Set(B.map((b) => b.col.handle));
     const J = rig.joints.map((jd) => {
       const a = byName.get(jd.a), b = byName.get(jd.b);
-      if (a == null || b == null) throw new Error(`gaia-motion: joint ${jd.name} refs unknown body`);
+      if (a == null || b == null) throw new Error(`motion: joint ${jd.name} refs unknown body`);
       const type = jd.type === 'revolute' ? 'revolute' : 'spherical';
       const la = qt.rot(Ci, v3.sub(jd.anchor, B[a].center)), lb = qt.rot(Ci, v3.sub(jd.anchor, B[b].center));
       const axisL = v3.norm(qt.rot(Ci, jd.axis || rigFrame(rig).left));
@@ -258,7 +258,7 @@ export function createMotion(opts = {}) {
   }
 
   function setBehaviour(h, name, prm) {
-    if (!BEHAVIOURS[name]) throw new Error(`gaia-motion: unknown behaviour ${name}`);
+    if (!BEHAVIOURS[name]) throw new Error(`motion: unknown behaviour ${name}`);
     Object.assign(h.params, prm || {});
     const ph = startPhase(name);
     // a standing behaviour requested while already down/falling keeps the physical phase

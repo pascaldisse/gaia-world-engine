@@ -1,4 +1,4 @@
-// gaia-motion/web · behaviour controllers (Euphoria-style: procedural, every physics substep, NOT ML).
+// GAIA-World-Engine motion extension · behaviour controllers (Euphoria-style: procedural, every physics substep, NOT ML).
 // Every gain/rate/time = param with default. Lengths marked [H] scale with rig height/1.75.
 import { v3, qt, clamp, smooth01 } from './math.js';
 

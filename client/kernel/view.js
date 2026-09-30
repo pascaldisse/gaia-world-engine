@@ -28,6 +28,9 @@ const _cullAt = new THREE.Vector3();
 // Worlds keep within it by FAKING small sources (emissive glow cards +
 // flicker), Cyberpunk-style: real lights are for the player and heroes.
 const LIGHT_POOL_SIZE = 16;
+// player.js steps onto any mesh surface <= feet + 0.65 (walk); blockers honour the same reach
+export const STEP_REACH = 0.65;
+const STEP_TOP_TOLERANCE = 0.1;
 const _lightPos = new THREE.Vector3();
 const _lightDir = new THREE.Vector3();
 const _probeGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);
@@ -798,6 +801,7 @@ export class View {
         const px = sx / 2 + r - Math.abs(lx - bx);
         const pz = sz / 2 + r - Math.abs(lz - bz);
         if (px <= 0 || pz <= 0) continue;
+        if (this.blockerIsStep(group, box, lx, lz, top, feet, cos, sin)) continue;
         let ox = 0;
         let oz = 0;
         if (px < pz) ox = lx > bx ? px : -px;
@@ -806,6 +810,23 @@ export class View {
         position.z += -ox * sin + oz * cos;
       }
     }
+  }
+
+  // a blocker whose top the body can step onto is a step, not a wall: player.js
+  // climbs any mesh surface <= feet + STEP_REACH, so a blocker only skipped at
+  // feet >= top - 0.05 made invisible walls at low lips. Skip it iff its top is
+  // within step reach AND a solid surface actually lies on that top (probed at
+  // the box point nearest the body) — rails over drops have no floor on top.
+  blockerIsStep(group, box, lx, lz, top, feet, cos, sin) {
+    if (top - feet > STEP_REACH) return false;
+    const [bx, , bz] = box.position ?? [0, 0, 0];
+    const [sx, , sz] = box.size ?? [1, 1, 1];
+    const cx = Math.min(Math.max(lx, bx - sx / 2), bx + sx / 2);
+    const cz = Math.min(Math.max(lz, bz - sz / 2), bz + sz / 2);
+    const x = group.position.x + cx * cos + cz * sin;
+    const z = group.position.z - cx * sin + cz * cos;
+    const surface = this.surfaceAt?.(x, z, top + STEP_TOP_TOLERANCE);
+    return surface !== null && surface !== undefined && Math.abs(surface - top) <= STEP_TOP_TOLERANCE;
   }
 
   // ambient sounds belong to their scene's mood: fade them with the player's

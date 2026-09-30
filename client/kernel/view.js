@@ -6,6 +6,7 @@ import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
+import { loadModel } from './model.js';
 
 // nebula-cull scratch (see cullFadedClouds)
 const _cullPos = new THREE.Vector3();
@@ -526,7 +527,33 @@ export class View {
           this.buildVersion++;
         })
         .catch((err) => console.warn('[gaia] vrm load failed', spec.src, err));
-      if (!recipe.parts) return; // pure-VRM recipe: no primitive parts to build
+      if (!recipe.parts && !recipe.model) return; // pure-VRM recipe: no primitive parts to build
+    }
+    // Static prop/architecture model source: `mesh.model = { src, materialPart?,
+    // position?, rotation?, scale? }` -- one real (e.g. FLVER->OBJ converted)
+    // mesh mounted as one mesh-part child, same async/token-guard shape as VRM.
+    if (recipe.model?.src) {
+      const spec = recipe.model;
+      group.userData.modelToken = (group.userData.modelToken ?? 0) + 1;
+      const token = group.userData.modelToken;
+      loadModel(spec.src, spec.materialPart)
+        .then((obj) => {
+          if (group.userData.modelToken !== token) {
+            disposeObject(obj);
+            return;
+          }
+          obj.position.set(...(spec.position ?? [0, 0, 0]));
+          obj.rotation.set(...(spec.rotation ?? [0, 0, 0]));
+          if (spec.scale) {
+            if (Array.isArray(spec.scale)) obj.scale.set(...spec.scale);
+            else obj.scale.setScalar(spec.scale);
+          }
+          obj.userData.kind = 'mesh-part';
+          group.add(obj);
+          this.buildVersion++;
+        })
+        .catch((err) => console.warn('[gaia] model load failed', spec.src, err));
+      if (!recipe.parts) return; // pure-model recipe: no primitive parts to build
     }
     for (const part of partsOf(recipe)) {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));

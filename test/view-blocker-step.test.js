@@ -10,7 +10,6 @@ function fake(surfaceTop) {
     store: { get: () => ({ collider: { boxes: [box] } }) },
     groups: new Map([['b', { position: { x: 0, y: 0, z: 0 }, rotation: { y: 0 } }]]),
     surfaceAt: () => surfaceTop,
-    blockerIsStep: View.prototype.blockerIsStep,
   };
 }
 const run = (ctx, feet) => { const p = { x: -0.5, y: feet + 1.6, z: 0 }; View.prototype.resolveBlockers.call(ctx, p, 1.6); return p.x; };
@@ -25,4 +24,10 @@ test('no floor on top (rail over a drop): still a wall', () => {
 });
 test('rise beyond step reach: still a wall even with a floor on top', () => {
   expect(run(fake(1.0), 0.3)).toBeLessThan(-0.5);
+});
+test('plain fixture `this` (only colliderIds/store/groups, no surfaceAt) keeps the old contract: blocker = wall', () => {
+  // bloodborne chalice tests call View.prototype.resolveBlockers with such a fixture; 115440d threw
+  // 'this.blockerIsStep is not a function' there.
+  const ctx = fake(1.0); delete ctx.surfaceAt;
+  expect(run(ctx, 0.9)).toBeLessThan(-0.5);
 });

@@ -63,7 +63,12 @@ export function extensionList() {
   if (w === false) return []; // same explicit opt-out convention as __GAIA_GATE__
   const host = Array.isArray(w) && w.length ? w : null;
   const query = fromQuery('ext');
-  const list = host ? [...host, ...(query ?? [])] : (query ?? DEFAULT_EXTENSIONS);
+  // Vite injects the world launcher's optional, comma-separated extension
+  // URLs. Host-page and explicit query choices retain precedence.
+  const configured = typeof __GAIA_EXTENSIONS__ === 'string' && __GAIA_EXTENSIONS__
+    ? __GAIA_EXTENSIONS__.split(',').map((s) => s.trim()).filter(Boolean)
+    : null;
+  const list = host ? [...host, ...(query ?? [])] : (query ?? configured ?? DEFAULT_EXTENSIONS);
   // only strings are URLs to resolve; modules and functions pass through as-is
   // Host entries retain precedence; the URL query appends only new entries.
   const seen = new Set();

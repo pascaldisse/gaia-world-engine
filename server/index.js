@@ -543,9 +543,10 @@ const server = http.createServer(async (req, res) => {
         return undefined;
       }
       const mime =
-        { '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4' }[path.extname(file)] ??
+        { '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.js': 'text/javascript; charset=utf-8' }[path.extname(file)] ??
         'application/octet-stream';
-      res.writeHead(200, { 'content-type': mime });
+      // World-owned UI extensions load as ES modules from this asset origin.
+      res.writeHead(200, { 'content-type': mime, 'access-control-allow-origin': '*' });
       fs.createReadStream(file).pipe(res);
       return undefined;
     }

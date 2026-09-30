@@ -61,6 +61,16 @@ export const SCHEMA = {
       sky: { doc: 'water preset: fresnel reflection color' },
       tip: { doc: 'flame preset: tip color' },
       lines: { doc: 'hologram scanline count', range: [2, 120] },
+      gltf: {
+        doc: 'glTF/GLB mesh → world asset URL; static scene',
+        fields: {
+          src: { doc: 'relative world asset URL or absolute URL' },
+          scale: { doc: 'uniform model scale', range: [0.01, 100] },
+          rotation: { doc: 'model-local XYZ Euler radians' },
+          position: { doc: 'model-local XYZ offset' },
+          solid: { doc: 'collision participation; default false' },
+        },
+      },
       vrm: {
         doc: 'VRM avatar source: the entity IS a humanoid avatar (VRoid-compatible, VRM 0.x). May coexist with parts. All edits are pure data — every client re-derives the same look. See docs/CHARACTER-EDITOR-README.md',
         fields: {

@@ -273,6 +273,103 @@ Screenshot discipline:
   removes the component (one op, undoable). Programmatic removal stays
   `{op:'set', id, component, value: null}`.
 
+## FX extensions: gore + rayfire (clean-room, branch `lampas/engine-ee-clean`)
+
+Both live in `client/extensions/<name>/` and ride the extension contract
+(`client/kernel/extensions.js`: `register(ctx)` → `{name, api, update?}`,
+published as `window.gaia.<name>`). NOT on `main`, NOT in the Boomtown
+engine worktree (`astra-gameplay-tree` has no `client/extensions/`). Status +
+open work: `plan.md` → M21.
+
+Clean-room law (both): implementer inputs = `docs/cleanroom/*` spec + own game
+call sites + public refs ONLY. Never read/copy the older non-clean branches
+(`lampas/engine-gore`, `lampas/engine-rayfire`, `lampas/engine-ee-fx` →
+`client/extensions/gore|rayfire/**`, `tools/gore/**`) or any third-party
+source/assets. Every source file carries the "original implementation"
+header; `rayfire-index.test.js` checks it.
+
+### gore — blood, pools, dismemberment
+- Spec: `docs/cleanroom/gore-spec.md` (§1 API, §4 hard limits, §5 tests).
+- Entry: `createGore({three, tsl, scene}, opts)` — drop-in factory a game
+  calls itself (EE `client/gore-fx.js` imports `/extensions/gore/index.js`);
+  or `register(ctx)` — engine loader, reads `ctx.three/tsl/scene` + optional
+  `ctx.goreOpts`; missing three/tsl/scene → `{}` no-op, never throws.
+- API: `blood.splash(pos,normal,strength)→count` · `blood.pool(pos,normal,
+  size)→handle|null` · `cut(mesh,{part}|{plane})→{stump,piece}|null` ·
+  `release(obj)→bool` (idempotent) · `update(dt)` · `setRecipes()` (= reset
+  to empty; recipe table itself NOT implemented) · `stats()` · `dispose()`.
+- `opts`: `blood.seed`, `blood.capacity.{particles=2048,decal=48}` (pools
+  share the decal ring, FIFO eviction), `cut.seed`, `cut.lifetime` (s; auto-
+  release stump+piece — set it in long matches or call `release` yourself).
+- cut: non-skinned = required path; skinned = best-effort current-pose bake
+  else null. Parts `head|leftArm|rightArm|leftLeg|rightLeg` = bbox-band
+  PLACEHOLDER planes (one plane → one half-space piece). Materials cloned,
+  red cap group. `piece.userData.gore.velocity` = mutable [3], integrated by
+  `update`.
+- PERF/GPU LAW: ≤6 vertex buffers per mesh incl. `instanceMatrix`/
+  `instanceColor` (device max 8; live black screen came from 9) — audit with
+  `vertex-budget.js` `auditVertexBudget`. Pack per-instance data into vec4s.
+- WGSL LAW: a geometry/TSL attribute name becomes a WGSL identifier verbatim;
+  a keyword/reserved word (live bug: `meta`) = shader compile fail = black
+  screen. All gore attrs prefixed `goreX…`, checked against
+  `wgsl-keywords.js` (W3C table). Any new attr: prefix + add to the test.
+- Seeded own PRNG, no `Math.random`, no per-frame allocation in `update`,
+  one InstancedMesh each for particles and decals.
+- GOTCHA: ground is hard-coded `GROUND_Y = 0` (particles, decal contact, cut
+  pieces) — worlds with terrain/floors ≠ 0 see blood/pieces sink or float.
+- GOTCHA (4c7b03c): piece ground-rest must use ABSOLUTE world Y, not local
+  offset. (ccd0637): leg planes need x-dominant normals or left/right legs
+  produce identical pieces.
+
+### rayfire — Voronoi fracture, demolition, structural collapse
+- Spec: `docs/cleanroom/destruction-spec.md` (behaviour, §16 numbered
+  acceptance) + `docs/cleanroom/destruction-api.md` (exact export list —
+  machine-checked by `rayfire-index.test.js`; add a name ⇒ update both).
+- Entry: `register(ctx?)` → `{name:'rayfire', api}`; ctx ignored, no module
+  state, call any number of times. Games: `(await import('/extensions/
+  rayfire/index.js')).register().api` (EE `client/destruction-rayfire.js`).
+  Every api name is also a named ESM export. No `update` — the consumer
+  drives `RFWorld.step(dt)`, fade and collapse ticks itself.
+- Layers: fracture core (pure, no THREE: closure → Voronoi cells, convex hull
+  fallback) · render glue (`facesToBufferGeometry`, `fracture(obj)`,
+  `demolish(obj,{point,impulse})`) · `RFWorld` (own rigid sim) · structure
+  (anchors/adjacency/joints/support/erosion) · collapse · activation · fade ·
+  impulses (`explode`, `shoot`).
+- HARD GUARANTEE: every fragment watertight + volume > 0, 0 throws, on the
+  full census (407 EE buildings, 7430 fragments, seed 7 amount 20). Open-shell
+  assets are the NORM — closure caps them first.
+- Perf: census p95 ≈62 ms/model fracture, single thread. >2× p95 regression =
+  fail. Output pure+deterministic per (soup, seed) ⇒ cache/pre-warm
+  consumer-side; fragment caps are consumer-side too.
+- `RFWorld`: semi-implicit Euler, ONE ground plane (`groundY`, default 0),
+  sphere/OBB bounds, sleep, bounding-sphere raycast. NO body-vs-body contact.
+  Swappable backend interface (step/addBody/removeBody/getBody/raycast/
+  applyImpulse/applyAngularVelocity). Set `groundY` from the world — 0 is a
+  default, not a floor.
+- Look: flat normals, stock materials, groups 0=exterior 1=interior (cut).
+  `fracture()` freezes fragment matrices to the source `matrixWorld`
+  (`matrixAutoUpdate=false`) — move them via the body, not the source.
+- Naming law: any attr/uniform/varying = `rfX…`, ∉ WGSL reserved; single
+  table `names.js` `RFX_NAMES` (today only `rfXExterior`).
+- Fade: `SCALE_DOWN` default (life 7±3 s, fade 5 s); `body.awake===false` =
+  asleep = consumer's fade trigger; sleep must be reachable at dt=0.05.
+- GOTCHAS: (f47b68d) `step(0)` still lifts a just-activated body out of the
+  ground — consumers' first tick is dt=0. (dc76801) watertight oracle is
+  exact-first; repeated-edge tris dropped; flat-sheet components; ear-clip
+  diagonal conflict guard. Concave sources → approximate caps (§3.8).
+  Unyielding (anchored) joints are never removed by collapse.
+
+### Verification (both)
+```sh
+node --test test/gore-*.test.js      # 62 pass (incl. real three/webgpu+tsl construct)
+node --test test/rayfire-*.test.js   # 125 pass, 1 skip = census
+EE_ASSETS=<dir with bld_*.gltf> node --test test/rayfire-census.test.js
+```
+Unit green ≠ renders. Blood/pool/cut caps/debris = pixels → screenshot per
+§ Confirm rendering, in a game that wires the extension, via its real
+trigger (shot/kill/explosion), then PLAY IT (below). Black screen after
+wiring = check vertex-buffer count + WGSL identifier names first.
+
 ## ⚠ PLAY IT BEFORE YOU CLAIM IT (Pascal, 2026-07-12 — non-negotiable)
 
 Never tell Pascal a feature works because logs, unit checks, or injected

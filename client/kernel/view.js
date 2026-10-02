@@ -8,6 +8,7 @@ import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { loadModel } from './model.js';
 import { mountGltf } from './gltf.js';
+import { mountHumanoid, releaseHumanoid } from './humanoid.js';
 
 // nebula-cull scratch (see cullFadedClouds)
 const _cullPos = new THREE.Vector3();
@@ -503,6 +504,7 @@ export class View {
 
   applyMesh(group, recipe) {
     group.userData.gltfToken = (group.userData.gltfToken ?? 0) + 1;
+    group.userData.humanoidToken = (group.userData.humanoidToken ?? 0) + 1;
     if (this.nebulaQuads?.length) this.nebulaQuads = this.nebulaQuads.filter((q) => q.mesh.parent && q.mesh.parent !== group);
     for (const child of [...group.children]) {
       if (child.userData.kind === 'mesh-part') {
@@ -515,10 +517,18 @@ export class View {
       liveVrms.delete(group.userData.vrm);
       delete group.userData.vrm;
     }
+    delete group.userData.humanoid;
     if (!recipe) return;
     if (recipe.gltf?.src) {
       mountGltf(group, recipe.gltf, group.userData.gltfToken, () => this.buildVersion++);
       if (!recipe.parts) return;
+    }
+    // Humanoid kit: `mesh.humanoid = { preset, base, params, costume, colors, seed }` — one base GLB +
+    // costume pieces rebound by bone name + param bone scales + shared tinted materials
+    // (docs/HUMANOID-KIT-SPEC.md). Same async/token-guarded mesh-part shape as gltf/vrm.
+    if (recipe.humanoid) {
+      mountHumanoid(group, recipe.humanoid, group.userData.humanoidToken, () => this.buildVersion++);
+      if (!recipe.parts && !recipe.model) return;
     }
     // VRM avatar source: `mesh.vrm = { src, edits }` — the whole avatar mounts
     // as one mesh-part child so the primitive dispose/rebuild path owns it.
@@ -918,5 +928,8 @@ export class View {
 }
 
 function disposeObject(object) {
-  object.traverse((node) => disposeOwn(node));
+  object.traverse((node) => {
+    releaseHumanoid(node); // material refcounts + skeleton textures; idempotent
+    disposeOwn(node);
+  });
 }

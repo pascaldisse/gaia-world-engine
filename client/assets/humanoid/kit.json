@@ -1,0 +1,71 @@
+{
+  "name": "placeholder-mannequin",
+  "doc": "procedural stand-in kit (tools/humanoid-placeholder.mjs). Rig = Mixamo names; hair = VRoid names, cape = VRM names.",
+  "bases": {
+    "mannequin": "/assets/humanoid/base.glb"
+  },
+  "slots": {
+    "hair": {
+      "pieces": {
+        "short": "/assets/humanoid/costume/hair/short.glb",
+        "long": "/assets/humanoid/costume/hair/long.glb"
+      }
+    },
+    "head": {
+      "pieces": {
+        "helmet": "/assets/humanoid/costume/head/helmet.glb",
+        "cap": "/assets/humanoid/costume/head/cap.glb"
+      }
+    },
+    "torso": {
+      "pieces": {
+        "tunic": "/assets/humanoid/costume/torso/tunic.glb",
+        "armor": "/assets/humanoid/costume/torso/armor.glb",
+        "robe": "/assets/humanoid/costume/torso/robe.glb"
+      }
+    },
+    "legs": {
+      "pieces": {
+        "trousers": "/assets/humanoid/costume/legs/trousers.glb",
+        "shorts": "/assets/humanoid/costume/legs/shorts.glb"
+      }
+    },
+    "feet": {
+      "pieces": {
+        "boots": "/assets/humanoid/costume/feet/boots.glb"
+      }
+    },
+    "back": {
+      "pieces": {
+        "cape": "/assets/humanoid/costume/back/cape.glb"
+      }
+    },
+    "weaponR": {
+      "pieces": {
+        "sword": "/assets/humanoid/costume/weapon/sword.glb"
+      }
+    },
+    "weaponL": {
+      "pieces": {
+        "shield": "/assets/humanoid/costume/weapon/shield.glb"
+      }
+    }
+  },
+  "colorSlots": [
+    "skin",
+    "hair",
+    "eyes",
+    "primary",
+    "secondary",
+    "accent",
+    "trim",
+    "metal",
+    "team"
+  ],
+  "presets": {
+    "mannequin": "/assets/humanoid/presets/mannequin.json",
+    "soldier": "/assets/humanoid/presets/soldier.json",
+    "peasant": "/assets/humanoid/presets/peasant.json",
+    "mage": "/assets/humanoid/presets/mage.json"
+  }
+}

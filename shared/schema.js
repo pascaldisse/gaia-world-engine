@@ -83,6 +83,22 @@ export const SCHEMA = {
           animation: { doc: 'clip playback: { clip: "/assets/vrma/*.vrma", loop, speed, fade } — humanoid-retargeted (VRMC_vrm_animation); clips: Relax/Jump/Goodbye/Thinking/LookAround/Surprised. Skeleton priority: dance > clip > walk > idle; blink always runs' },
         },
       },
+      humanoid: {
+        doc: 'parametric humanoid kit: ONE base glTF humanoid + costume pieces + color slots + body params → N characters. preset JSON + overrides = a unit; same data = same unit on every client (seeded). Pieces rebind to the base skeleton BY BONE NAME (VRM/Mixamo/VRoid names). Geometry + (material,hex) shared across instances — RTS-safe. See docs/HUMANOID-KIT-SPEC.md; editor: H in creator mode',
+        fields: {
+          preset: { doc: 'URL of a preset JSON {base, params, costume, colors, vary, extends}; `/x` = engine asset, `x` = world asset, http(s) as-is. Unit fields override it' },
+          base: { doc: 'glTF humanoid (skinned, +Z forward, feet at y=0) — any rig whose bone names resolve (VRM/Mixamo/VRoid)' },
+          params: { doc: 'body params, 1 = neutral: height .5-1.8, build .6-1.6, torsoLength/armLength/legLength/shoulders .7-1.4, neckLength .6-1.6, headScale .7-1.5, handScale .6-1.6, footScale .7-1.4' },
+          bones: { doc: 'escape hatch: { canonicalBone: scale | [x,y,z] } multiplied on top of params (canonical = VRM humanoid names: hips, spine, leftUpperArm, …)' },
+          costume: { doc: '{ slot: pieceGlbUrl | null } — pieces are GLBs skinned to the base rest pose (rigid meshes under a bone attach to it); null clears a preset slot. slots are free strings (kit default: hair head torso legs feet back weaponR weaponL)' },
+          colors: { doc: '{ slot: "#hex" } — slot = material name (skin, hair, eyes, primary, secondary, accent, trim, metal, team, …) or glTF extras.slot; `team` is just a slot' },
+          seed: { doc: 'number|string: drives preset.vary (param jitter, palette/costume picks) for keys the unit does not set; deterministic' },
+          scale: { doc: 'uniform model scale', range: [0.01, 100] },
+          position: { doc: 'model-local XYZ offset' },
+          rotation: { doc: 'model-local XYZ Euler radians' },
+          solid: { doc: 'collision participation; default false' },
+        },
+      },
     },
   },
   characterCreator: {

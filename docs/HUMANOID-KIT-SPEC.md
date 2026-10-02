@@ -53,24 +53,25 @@ canonical = VRM humanoid names: `hips spine chest upperChest neck head leftEye r
   - VRM: `hips`, `leftUpperArm` … · Mixamo: `Hips Spine Spine1 Spine2 Neck Head LeftShoulder LeftArm LeftForeArm LeftHand LeftUpLeg LeftLeg LeftFoot LeftToeBase`, `LeftHandThumb1..3`, `LeftHandIndex1..3` … · VRoid: `J_Bip_C_Hips`, `J_Bip_L_UpperArm`, `J_Bip_L_Index1` …
   - Mixamo `Spine1`→`chest`, `Spine2`→`upperChest`.
 - unresolved names are legal (cape bones, props). they never take params; on rebind they fold to nearest mapped ancestor (§6).
-- **axes**: bone-local axes differ by rig (VRM-normalized world-aligned; Mixamo-FBX rotated). `lengthAxis(bone)` = argmax |component| of the first mapped child bone's local `position` (leaf bones: parent's axis). measured ONCE per base template. param rules in 'length'/'width' mode use it.
-- limitation: counter-scaling children is NOT done; bone scale propagates down the chain (same as vrm editor). rules (§5) are chosen so propagation is the desired look; extreme values distort feet/hands slightly → ranges are conservative.
+- **axes**: bone-local axes differ by rig (VRM-normalized world-aligned; Mixamo-FBX rotated). `lengthAxis(bone)` = dominant component, IN THE BONE'S LOCAL FRAME, of the rest-pose direction to its designated next bone (`NEXT_BONE`: hips→spine, spine→chest→upperChest→neck→head, shoulder→upperArm→lowerArm→hand, upperLeg→lowerLeg→foot→toes; first present wins). measured ONCE per base template from world matrices. `length`/`width` rules use it.
+- scale propagates down the hierarchy (same as vrm editor). ⇒ a LENGTH rule scales ONE bone (everything below stretches with it — no compounding) and `counter` bones get the inverse on the SAME axis so they stay undistorted (foot after legLength, head after neckLength). counters assume parent/child local frames share axes (VRM-normalized / identity-rotation rigs — true for the placeholder + VRM); `uniform`/`width` rules and everything else are rig-agnostic.
 
 ## 5 · Params (named, unitless, 1 = neutral)
-| param | range | rule (canonical bones · mode) |
+| param | range | rule bone · mode · counter (inverse on the rule axis) |
 |---|---|---|
 | `height` | .5–1.8 | instance root, uniform |
-| `build` | .6–1.6 | `hips` width (non-length axes) → propagates to torso/limbs/head |
-| `torsoLength` | .7–1.4 | `spine chest upperChest` length |
-| `shoulders` | .7–1.4 | `leftShoulder rightShoulder` length (clavicle → arm spacing) |
-| `neckLength` | .6–1.6 | `neck` length |
+| `build` | .6–1.6 | `hips` width (non-length axes) · counter `head` → body/limbs thicken, head doesn't |
+| `torsoLength` | .7–1.4 | `spine` length · counter `neck`, `*Shoulder` |
+| `shoulders` | .7–1.4 | `*Shoulder` length (clavicle → arm spacing) · counter `*UpperArm` |
+| `neckLength` | .6–1.6 | `neck` length · counter `head` |
 | `headScale` | .7–1.5 | `head` uniform |
-| `armLength` | .7–1.4 | `*UpperArm *LowerArm` length |
-| `legLength` | .7–1.4 | `*UpperLeg *LowerLeg` length |
+| `armLength` | .7–1.4 | `*UpperArm` length · counter `*Hand` |
+| `legLength` | .7–1.4 | `*UpperLeg` length · counter `*Foot` |
 | `handScale` | .6–1.6 | `*Hand` uniform |
 | `footScale` | .7–1.4 | `*Foot` uniform |
-- modes: `uniform`→[s,s,s]; `length`→s on the bone's length axis; `width`→s on the other two. several rules on one bone multiply; `bones` overrides multiply last. bones absent from the rig are skipped silently.
-- `solveBoneScales(concrete, {axes, has})` → `{root, bones:{canon→[x,y,z]}}` pure; THREE glue just writes `bone.scale`.
+- modes: `uniform`→[s,s,s]; `length`→s on the rule bone's length axis; `width`→s on the other two. several rules on one bone multiply; `bones` overrides multiply last. rule bone absent from the rig ⇒ rule (and its counters) skipped silently.
+- `solveBoneScales(concrete, {axes, has})` → `{root, bones:{canon→[x,y,z]}}` pure; THREE glue writes `bone.scale`.
+- **grounding**: leg/torso params move the feet relative to the hips ⇒ glue shifts `hips` so the lowest foot joint stays at its rest height (instance origin = ground). `height` scales the root about the origin (feet stay at y=0).
 - "build" via hips-only is deliberate: costume pieces skin to the SAME bones ⇒ they deform with the body automatically (armor on a heavy build just fits).
 
 ## 6 · Costume pieces

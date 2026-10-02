@@ -1,0 +1,61 @@
+{
+  "name": "peasant",
+  "extends": "/assets/humanoid/presets/mannequin.json",
+  "params": {
+    "build": 0.96,
+    "height": 0.96
+  },
+  "costume": {
+    "torso": "/assets/humanoid/costume/torso/tunic.glb",
+    "legs": "/assets/humanoid/costume/legs/shorts.glb",
+    "feet": "/assets/humanoid/costume/feet/boots.glb"
+  },
+  "colors": {
+    "primary": "#8c7a5b",
+    "accent": "#4b3322",
+    "trim": "#b79c5a"
+  },
+  "vary": {
+    "params": {
+      "height": 0.1,
+      "build": 0.18,
+      "headScale": 0.08
+    },
+    "palettes": {
+      "skin": [
+        "#f1c7a8",
+        "#d9a784",
+        "#b5835a",
+        "#8f5f4d"
+      ],
+      "primary": [
+        "#8c7a5b",
+        "#6f8a5b",
+        "#8a5b5b",
+        "#5b6f8a",
+        "#a59a7a"
+      ],
+      "hair": [
+        "#20130f",
+        "#5a3a1e",
+        "#b89a5a",
+        "#cfc7b5"
+      ],
+      "accent": [
+        "#4b3322",
+        "#2f3a2a"
+      ]
+    },
+    "costume": {
+      "hair": [
+        "/assets/humanoid/costume/hair/short.glb",
+        "/assets/humanoid/costume/hair/long.glb",
+        null
+      ],
+      "head": [
+        null,
+        "/assets/humanoid/costume/head/cap.glb"
+      ]
+    }
+  }
+}

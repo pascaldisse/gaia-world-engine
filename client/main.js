@@ -20,6 +20,7 @@ import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
 import { CharacterCreator } from './plugins/character-creator.js';
 import { VrmEditor } from './plugins/vrm-editor.js';
+import { HumanoidEditor } from './plugins/humanoid-editor.js';
 import { loadExtensions, gateModule } from './kernel/extensions.js';
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
@@ -835,6 +836,14 @@ const vrmEditor = new VrmEditor({
   editor,
   player,
 });
+const humanoidEditor = new HumanoidEditor({
+  store,
+  view,
+  send: net.sendDev,
+  history,
+  editor,
+  player,
+});
 
 function syncCrosshair() {
   crosshairEl.style.display = player.locked && !player.editorMode && !player.rig ? 'block' : 'none';
@@ -864,6 +873,7 @@ window.gaia = Object.assign(window.gaia ?? {}, {
   sim,
   characterCreator,
   vrmEditor,
+  humanoidEditor,
   ...extensions.published,          // e.g. atlasStrategy, when that extension is loaded
   setDrawMode,
   setStopped,

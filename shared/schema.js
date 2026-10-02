@@ -99,6 +99,8 @@ export const SCHEMA = {
           solid: { doc: 'collision participation; default false' },
           merge: { doc: 'default true: base + costume skinned parts sharing one material render as ONE SkinnedMesh per LOD level (≤2 draws/unit incl. shadow). false = one mesh per piece' },
           lod: { doc: 'true | { distances:[d1,d2], bases:[url,…]?, hysteresis } — lower-detail base glTFs switched by camera distance; without bases: <base>_lod1.gltf, <base>_lod2.gltf siblings' },
+          clip: { doc: 'clip playback: string | { name, speed=1, loop=true, t0=0 } — plays an animation (base glb animations or `clips`) on the one instance mixer; change it via set mesh ⇒ 0.15s crossfade, no remount; null stops; unknown name ⇒ warn + keep previous. JS: group.userData.humanoid.setClip(name, {speed,loop,t0,fade}). See HUMANOID-KIT-SPEC §16' },
+          clips: { doc: 'URL of a glb whose animations are retargeted onto the base rig by node name / canonical bone (shared, parsed once); same-named clips override the base glb\'s' },
         },
       },
     },

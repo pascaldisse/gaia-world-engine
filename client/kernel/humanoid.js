@@ -12,10 +12,11 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import {
   canonicalBone, loadPresetChain, resolveHumanoid, solveBoneScales, slotOfMaterial,
-  measureLengthAxis, NEXT_BONE, DEFAULT_COLOR_SLOTS, validateHumanoid, mergeSkinnedParts, deriveLodUrl, lodLevelFor,
+  measureLengthAxis, NEXT_BONE, DEFAULT_COLOR_SLOTS, validateHumanoid, mergeSkinnedParts, deriveLodUrl, lodLevelFor, normalizeClip,
 } from '../../shared/humanoid.js';
 
 import { loadTeamMasks, acquireTeamMaterial, releaseTeamMaterial } from './humanoid-team.js';
+import { prepareClips, retargetClips, createClipPlayer } from './humanoid-clip.js';
 const DEFAULT_LOADER = new GLTFLoader();
 const TEMPLATES = new WeakMap(); // loader -> Map(url -> Promise<template>)
 const PRESETS = new Map(); // url -> Promise<json>
@@ -108,7 +109,7 @@ async function prepareBase(scene, gltf) {
   });
   const feet = ['leftFoot', 'rightFoot'].map((n) => bones.get(n)).filter(Boolean);
   const footY = feet.length ? Math.min(...feet.map((f) => new THREE.Vector3().setFromMatrixPosition(f.matrixWorld).y)) : null;
-  return { kind: 'base', scene, axes: measureAxes(bones), inverses, footY, masks };
+  return { kind: 'base', scene, axes: measureAxes(bones), inverses, footY, masks, clips: prepareClips(gltf.animations) };
 }
 
 // ancestors-or-self that resolve to a canonical bone, nearest first, each with its bind inverse
@@ -145,10 +146,14 @@ async function preparePiece(scene, gltf) {
   return { kind: 'piece', scene, skinned, rigid, masks };
 }
 
+// clips-only glb (`clips: url`): scene ignored, animations parsed ONCE per URL
+async function prepareClipsOnly(scene, gltf) {
+  return { kind: 'clips', clips: prepareClips(gltf.animations) };
+}
 function template(loader, url, prepare) {
   let byUrl = TEMPLATES.get(loader);
   if (!byUrl) TEMPLATES.set(loader, (byUrl = new Map()));
-  const slot = `${prepare === prepareBase ? 'base' : 'piece'}|${url}`;
+  const slot = `${prepare === prepareBase ? 'base' : prepare === prepareClipsOnly ? 'clips' : 'piece'}|${url}`;
   let pending = byUrl.get(slot);
   if (!pending) {
     pending = loader.loadAsync(url).then((r) => prepare(r.scene, r));
@@ -301,6 +306,62 @@ export function tickHumanoidLod(camera) {
 }
 export const humanoidLodStats = () => { const per = {}; for (const l of LOD_LIVE) per[l.cur] = (per[l.cur] ?? 0) + 1; return { live: LOD_LIVE.size, perLevel: per }; };
 
+// ---- stage 6: clip playback ---------------------------------------------------------
+// Clip set per (base template, `clips` url): base glb animations + the optional clips glb retargeted by node name
+// (else canonical bone). Parsed/built ONCE, the same AnimationClip objects feed every instance's mixer (humanoid-clip.js).
+const CLIP_SETS = new WeakMap(); // base template -> Map(clipsUrl|'' -> Promise<{ set, error? }>)
+function clipSetFor(baseTpl, clipsUrl, deps) {
+  let byUrl = CLIP_SETS.get(baseTpl);
+  if (!byUrl) CLIP_SETS.set(baseTpl, (byUrl = new Map()));
+  const key = clipsUrl ?? '';
+  let p = byUrl.get(key);
+  if (!p) {
+    p = (async () => {
+      if (!clipsUrl) return { set: baseTpl.clips };
+      try {
+        const ct = await template(deps.loader, await deps.resolveUrl(clipsUrl), prepareClipsOnly);
+        baseTpl.canon ??= indexBones(baseTpl.scene);
+        const names = new Set();
+        baseTpl.scene.traverse((o) => { if (!o.isMesh) names.add(o.name); });
+        const rig = { has: (n) => names.has(n), nameOfCanon: (c) => baseTpl.canon.get(c)?.name ?? null };
+        return { set: new Map([...baseTpl.clips, ...retargetClips(ct.clips, rig)]) };
+      } catch (error) {
+        return { set: baseTpl.clips, error: String(error?.message ?? error) };
+      }
+    })();
+    byUrl.set(key, p);
+  }
+  return p;
+}
+async function attachClips(root, baseTpl, concrete, deps, report) {
+  const clipsUrl = concrete.render?.clips ?? null;
+  const { set, error } = await clipSetFor(baseTpl, clipsUrl, deps);
+  if (error) report.failed.push({ slot: 'clips', url: clipsUrl, error });
+  const player = createClipPlayer(root, set);
+  const want = concrete.render?.clip ?? null;
+  const clipInfo = { requested: want?.name ?? null, applied: null, available: [...set.keys()] }; // NOT in report (report shape is frozen by stage-3/5 tests)
+  if (want && player.setClip(want.name, want)) {
+    clipInfo.applied = player.current;
+    player.update(0); // first pose before the first frame
+  }
+  return { player, api: { clipInfo, setClip: player.setClip, clipState: player.state, clipNames: player.names, getClip: player.getClip } };
+}
+// stable signature of a recipe MINUS humanoid.clip → "only the clip changed" detection for view.applyMesh
+export function humanoidSig(recipe) {
+  const { humanoid, ...rest } = recipe ?? {};
+  const { clip: _clip, ...body } = humanoid ?? {};
+  return JSON.stringify([rest, body]);
+}
+// restyle that changes ONLY `humanoid.clip` ⇒ setClip on the live instance (crossfade), no remount. false ⇒ caller remounts
+export function patchHumanoidClip(group, recipe) {
+  const h = group.userData.humanoid;
+  if (!recipe?.humanoid || !h?.setClip || group.userData.humanoidStatus !== 'ready') return false;
+  if (recipe.humanoid.clip === undefined && recipe.humanoid.preset) return false; // preset may own the clip → full resolve
+  if (group.userData.humanoidSig !== humanoidSig(recipe)) return false;
+  const c = normalizeClip(recipe.humanoid.clip);
+  h.setClip(c?.name ?? null, c ?? {});
+  return true;
+}
 async function buildMergedInstance(concrete, deps) {
   const { loader, resolveUrl } = deps;
   const baseUrl = await resolveUrl(concrete.base);
@@ -435,6 +496,7 @@ async function buildMergedInstance(concrete, deps) {
     ? { root, groups: levelGroups, cur: 0, distances: lodSpec.distances.slice(0, levelGroups.length - 1), hysteresis: lodSpec.hysteresis }
     : null;
   if (lod) LOD_LIVE.add(lod);
+  const clipper = await attachClips(root, baseTpl, concrete, deps, report);
   let released = false;
   const release = () => {
     if (released) return;
@@ -443,10 +505,11 @@ async function buildMergedInstance(concrete, deps) {
     for (const k of keys) releaseMaterial(k);
     for (const k of teamKeys) releaseTeamMaterial(k);
     for (const s of skeletons) s.dispose();
+    clipper.player.dispose();
   };
   root.userData.kind = 'mesh-part';
   root.userData.humanoid = {
-    concrete, bones, pieces, report, axes: baseTpl.axes, rootScale: solved.root, release, lod,
+    concrete, bones, pieces, report, axes: baseTpl.axes, rootScale: solved.root, release, lod, ...clipper.api,
     merged: { levels: levelGroups.length, drawsPerLevel0: draws, groupsPerLevel: levelGroups.map((g) => g.children.length) },
   };
   return { root, solved };
@@ -587,15 +650,17 @@ async function buildInstance(concrete, deps) {
     }
   }
 
+  const clipper = await attachClips(root, baseTpl, concrete, deps, report);
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     for (const k of keys) releaseMaterial(k);
     for (const s of skeletons) s.dispose();
+    clipper.player.dispose();
   };
   root.userData.kind = 'mesh-part';
-  root.userData.humanoid = { concrete, bones, pieces, report, axes: baseTpl.axes, rootScale: solved.root, release };
+  root.userData.humanoid = { concrete, bones, pieces, report, axes: baseTpl.axes, rootScale: solved.root, release, ...clipper.api };
   return { root, solved };
 }
 

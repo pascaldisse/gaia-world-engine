@@ -8,7 +8,8 @@ import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { loadModel } from './model.js';
 import { mountGltf } from './gltf.js';
-import { mountHumanoid, releaseHumanoid, tickHumanoidLod } from './humanoid.js';
+import { mountHumanoid, releaseHumanoid, tickHumanoidLod, patchHumanoidClip, humanoidSig } from './humanoid.js';
+import { tickHumanoidClips } from './humanoid-clip.js';
 
 // nebula-cull scratch (see cullFadedClouds)
 const _cullPos = new THREE.Vector3();
@@ -158,9 +159,10 @@ export class View {
   // time-sliced streaming: a scene coming in never drops a frame — builds
   // run against a per-frame millisecond deadline, weighted by mesh-part
   // count (pipelines were all warmed at load; first-draw setup wasn't)
-  update() {
+  update(dt) {
     this.cullFadedClouds();
     tickHumanoidLod(this.camera); // humanoid-kit LOD level switch by camera distance
+    tickHumanoidClips(dt); // humanoid-kit clip mixers (dt omitted ⇒ own clock)
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
       this.hide(this.hideQueue.shift());
@@ -504,6 +506,7 @@ export class View {
   }
 
   applyMesh(group, recipe) {
+    if (recipe?.humanoid && patchHumanoidClip(group, recipe)) return; // only humanoid.clip changed ⇒ crossfade in place, no remount
     group.userData.gltfToken = (group.userData.gltfToken ?? 0) + 1;
     group.userData.humanoidToken = (group.userData.humanoidToken ?? 0) + 1;
     if (this.nebulaQuads?.length) this.nebulaQuads = this.nebulaQuads.filter((q) => q.mesh.parent && q.mesh.parent !== group);
@@ -519,6 +522,7 @@ export class View {
       delete group.userData.vrm;
     }
     delete group.userData.humanoid;
+    delete group.userData.humanoidSig;
     if (!recipe) return;
     if (recipe.gltf?.src) {
       mountGltf(group, recipe.gltf, group.userData.gltfToken, () => this.buildVersion++);
@@ -528,6 +532,7 @@ export class View {
     // costume pieces rebound by bone name + param bone scales + shared tinted materials
     // (docs/HUMANOID-KIT-SPEC.md). Same async/token-guarded mesh-part shape as gltf/vrm.
     if (recipe.humanoid) {
+      group.userData.humanoidSig = humanoidSig(recipe);
       mountHumanoid(group, recipe.humanoid, group.userData.humanoidToken, () => this.buildVersion++);
       if (!recipe.parts && !recipe.model) return;
     }

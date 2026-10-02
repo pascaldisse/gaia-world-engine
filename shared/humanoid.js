@@ -283,6 +283,8 @@ export function validateHumanoid(spec) {
   for (const [slot, v] of Object.entries(spec.colors ?? {})) {
     if (!normalizeHex(v)) issues.push(`colors.${slot} is not a hex color: ${JSON.stringify(v)}`);
   }
+  if (spec.clip !== undefined && spec.clip !== null && !normalizeClip(spec.clip)) issues.push('clip must be a name string or { name, speed?, loop?, t0? }');
+  if (spec.clips !== undefined && typeof spec.clips !== 'string') issues.push('clips must be a URL string');
   for (const [bone, v] of Object.entries(spec.bones ?? {})) {
     const arr = Array.isArray(v) ? v : [v];
     if (!(arr.length === 1 || arr.length === 3) || arr.some((n) => typeof n !== 'number' || !Number.isFinite(n))) issues.push(`bones.${bone} must be a number or [x,y,z]`);
@@ -350,7 +352,7 @@ export function resolveHumanoid(unit = {}, preset = null) {
       solid: !!merged.solid,
     },
     // render strategy (stage 5) — NOT part of the unit identity key
-    render: { merge: merged.merge !== false, lod: normalizeLod(merged.lod) },
+    render: { merge: merged.merge !== false, lod: normalizeLod(merged.lod), clip: normalizeClip(merged.clip), clips: typeof merged.clips === 'string' && merged.clips ? merged.clips : null },
   };
   const { place: _place, render: _render, ...identity } = concrete;
   concrete.key = hash32(stable(identity)).toString(16).padStart(8, '0');
@@ -440,4 +442,36 @@ export function lodLevelFor(d, distances, cur = 0, hysteresis = 0.08) {
     if (edge !== undefined && Math.abs(d - edge) < edge * hysteresis) return cur;
   }
   return lvl;
+}
+
+// ---- stage 6: clip playback (pure) ------------------------------------------
+export const CLIP_FADE = 0.15; // s — crossfade on clip change
+// string | { name, speed=1, loop=true, t0=0 } → concrete | null (no/invalid ⇒ no clip)
+export function normalizeClip(c) {
+  const o = typeof c === 'string' ? { name: c } : isObj(c) ? c : null;
+  if (!o || typeof o.name !== 'string' || !o.name) return null;
+  return {
+    name: o.name,
+    speed: Number.isFinite(o.speed) ? o.speed : 1,
+    loop: o.loop !== false,
+    t0: Number.isFinite(o.t0) && o.t0 > 0 ? o.t0 : 0,
+  };
+}
+// want → the clip name that exists: exact → `Armature|walk` tail → case-insensitive; else null
+export function resolveClipName(names, want) {
+  if (typeof want !== 'string' || !want) return null;
+  const list = [...names];
+  const tail = (n) => n.split('|').pop();
+  const lc = want.toLowerCase();
+  return list.find((n) => n === want) ?? list.find((n) => tail(n) === want) ?? list.find((n) => tail(n).toLowerCase() === lc) ?? null;
+}
+// retarget one track name `node.prop` onto the target rig by node name, else by canonical bone; null = drop
+export function retargetTrackName(track, { has, nameOfCanon }) {
+  const i = track.lastIndexOf('.');
+  if (i <= 0) return null;
+  const node = track.slice(0, i);
+  if (has(node)) return track;
+  const canon = canonicalBone(node);
+  const target = canon ? nameOfCanon(canon) : null;
+  return target ? `${target}${track.slice(i)}` : null;
 }

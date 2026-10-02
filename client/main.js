@@ -931,7 +931,7 @@ renderer.setAnimationLoop(() => {
   extensions.update(dt);
   scenes.update(player.position);
   player.voidY = scenes.currentVoidY;
-  view.update();
+  view.update(dt);
   shading.update();
   viewFx.update();
   if (!sim.stopped) {

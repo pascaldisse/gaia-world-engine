@@ -12,9 +12,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import {
   canonicalBone, loadPresetChain, resolveHumanoid, solveBoneScales, slotOfMaterial,
-  measureLengthAxis, NEXT_BONE, DEFAULT_COLOR_SLOTS, validateHumanoid,
+  measureLengthAxis, NEXT_BONE, DEFAULT_COLOR_SLOTS, validateHumanoid, mergeSkinnedParts, deriveLodUrl, lodLevelFor,
 } from '../../shared/humanoid.js';
 
+import { loadTeamMasks, acquireTeamMaterial, releaseTeamMaterial } from './humanoid-team.js';
 const DEFAULT_LOADER = new GLTFLoader();
 const TEMPLATES = new WeakMap(); // loader -> Map(url -> Promise<template>)
 const PRESETS = new Map(); // url -> Promise<json>
@@ -92,9 +93,10 @@ function markShared(scene) {
 }
 
 // ---- template preparation -------------------------------------------------------
-function prepareBase(scene) {
+async function prepareBase(scene, gltf) {
   scene.updateMatrixWorld(true);
   markShared(scene);
+  const masks = await loadTeamMasks(scene, gltf);
   const bones = indexBones(scene);
   const inverses = new Map(); // canonical → bind inverse (first skinned mesh that has it)
   scene.traverse((o) => {
@@ -106,7 +108,7 @@ function prepareBase(scene) {
   });
   const feet = ['leftFoot', 'rightFoot'].map((n) => bones.get(n)).filter(Boolean);
   const footY = feet.length ? Math.min(...feet.map((f) => new THREE.Vector3().setFromMatrixPosition(f.matrixWorld).y)) : null;
-  return { kind: 'base', scene, axes: measureAxes(bones), inverses, footY };
+  return { kind: 'base', scene, axes: measureAxes(bones), inverses, footY, masks };
 }
 
 // ancestors-or-self that resolve to a canonical bone, nearest first, each with its bind inverse
@@ -119,9 +121,10 @@ function chainOf(node, inverseOf) {
   return chain;
 }
 
-function preparePiece(scene) {
+async function preparePiece(scene, gltf) {
   scene.updateMatrixWorld(true);
   markShared(scene);
+  const masks = await loadTeamMasks(scene, gltf);
   const skinned = [];
   const rigid = [];
   scene.traverse((o) => {
@@ -139,7 +142,7 @@ function preparePiece(scene) {
       rigid.push({ mesh: o, anchor: chain[0]?.canon ?? null, rel });
     }
   });
-  return { kind: 'piece', scene, skinned, rigid };
+  return { kind: 'piece', scene, skinned, rigid, masks };
 }
 
 function template(loader, url, prepare) {
@@ -148,7 +151,7 @@ function template(loader, url, prepare) {
   const slot = `${prepare === prepareBase ? 'base' : 'piece'}|${url}`;
   let pending = byUrl.get(slot);
   if (!pending) {
-    pending = loader.loadAsync(url).then((r) => prepare(r.scene));
+    pending = loader.loadAsync(url).then((r) => prepare(r.scene, r));
     pending.catch(() => { if (byUrl.get(slot) === pending) byUrl.delete(slot); });
     byUrl.set(slot, pending);
   }
@@ -176,7 +179,281 @@ export function fetchAssetJson(url) {
 }
 
 // ---- instance -------------------------------------------------------------------
+// ---- stage 5: template-level piece merge + LOD ------------------------------------
+// All skinned parts that share ONE source material (base meshes + every costume piece, per LOD level) are
+// concatenated ONCE per (level base, costume set) into a single BufferGeometry whose skinIndex is remapped
+// onto a merged joint table. Per instance: ONE SkinnedMesh per merged group (≤1 draw/material/level),
+// colour variants via a per-object uniform (humanoid-team.js), never a material clone.
+const MERGED = new WeakMap(); // level base template -> Map(pieceKey -> merged template)
+const invKey = (m) => Array.from(m.elements, (v) => Math.round(v * 1e5)).join(',');
+
+function attrArray(attr, size) {
+  if (!attr) return null;
+  const out = new Float32Array(attr.count * size);
+  for (let i = 0; i < attr.count; i++) for (let k = 0; k < size; k++) out[i * size + k] = attr.getComponent(i, k);
+  return out;
+}
+
+// piece skeleton -> (template bones of the base it rebinds to, bind inverses): same rules as the per-piece path
+function mapPieceSkin(sk, bones, baseTpl, report, slot) {
+  const mapped = [];
+  const inverses = [];
+  sk.chains.forEach((chain, i) => {
+    const pick = chain.findIndex((c) => bones.has(c.canon));
+    if (pick === 0) {
+      mapped.push(bones.get(chain[0].canon));
+      inverses.push(sk.boneInverses[i]);
+    } else if (pick > 0) {
+      mapped.push(bones.get(chain[pick].canon));
+      inverses.push(chain[pick].inverse);
+    } else {
+      mapped.push(bones.get('hips') ?? [...bones.values()][0]);
+      inverses.push(baseTpl.inverses.get('hips') ?? sk.boneInverses[i]);
+      report.unmapped.push({ slot, bone: sk.mesh.skeleton.bones[i].name });
+    }
+  });
+  return { mapped, inverses };
+}
+
+export function mergedTemplate(levelTpl, loaded, baseTpl, report) {
+  let byKey = MERGED.get(levelTpl);
+  if (!byKey) MERGED.set(levelTpl, (byKey = new Map()));
+  const pieceKey = loaded.map((e) => `${e.slot}=${e.pieceUrl}`).sort().join('|');
+  const hit = byKey.get(pieceKey);
+  if (hit) { report.unmapped.push(...hit.unmapped); return hit; }
+  baseTpl.canon ??= indexBones(baseTpl.scene);
+  const unmapped = [];
+  const scratch = { unmapped };
+  const parts = [];
+  levelTpl.scene.traverse((o) => {
+    if (!o.isSkinnedMesh) return;
+    parts.push({ mesh: o, geometry: o.geometry, material: o.material, bindMatrix: o.bindMatrix, jointNames: o.skeleton.bones.map((b) => b.name), inverses: o.skeleton.boneInverses, masks: levelTpl.masks });
+  });
+  for (const { slot, tpl } of loaded) {
+    for (const sk of tpl.skinned) {
+      const { mapped, inverses } = mapPieceSkin(sk, baseTpl.canon, baseTpl, scratch, slot);
+      parts.push({ mesh: sk.mesh, geometry: sk.geometry, material: sk.material, bindMatrix: sk.bindMatrix, jointNames: mapped.map((b) => b.name), inverses, masks: tpl.masks });
+    }
+  }
+  const buckets = new Map();
+  for (const p of parts) {
+    const mergeable = !Array.isArray(p.material) && !p.geometry.groups?.length;
+    const key = mergeable ? `${p.material.uuid}|${invKey(p.bindMatrix)}` : `solo|${p.mesh.uuid}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(p);
+  }
+  const groups = [];
+  for (const list of buckets.values()) {
+    const joint = new Map(); // merged-joint key -> { name, inverse }
+    const data = list.map((p) => {
+      const keys = p.jointNames.map((n, i) => {
+        const k = `${n}|${invKey(p.inverses[i])}`;
+        if (!joint.has(k)) joint.set(k, { name: n, inverse: p.inverses[i] });
+        return k;
+      });
+      const g = p.geometry;
+      return {
+        position: attrArray(g.attributes.position, 3), normal: attrArray(g.attributes.normal, 3), uv: attrArray(g.attributes.uv, 2),
+        skinIndex: attrArray(g.attributes.skinIndex, 4), skinWeight: attrArray(g.attributes.skinWeight, 4),
+        index: g.index ? g.index.array : null, jointKeys: keys,
+      };
+    });
+    const m = mergeSkinnedParts(data);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
+    if (m.normal) geometry.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
+    if (m.uv) geometry.setAttribute('uv', new THREE.BufferAttribute(m.uv, 2));
+    geometry.setAttribute('skinIndex', new THREE.BufferAttribute(m.skinIndex, 4));
+    geometry.setAttribute('skinWeight', new THREE.BufferAttribute(m.skinWeight, 4));
+    geometry.setIndex(new THREE.BufferAttribute(m.index, 1));
+    geometry.userData.shared = true; // template-owned: shared by every instance, never disposed per instance
+    const infos = m.jointKeys.map((k) => joint.get(k));
+    const first = list[0];
+    const maskPart = list.find((p) => !Array.isArray(p.material) && p.masks?.get(p.material.uuid));
+    groups.push({
+      material: first.material, bindMatrix: first.bindMatrix, geometry, parts: list.length, vertexCount: m.vertexCount, indexCount: m.indexCount,
+      jointNames: infos.map((j) => j.name), inverses: infos.map((j) => j.inverse),
+      mask: maskPart ? maskPart.masks.get(maskPart.material.uuid) : null,
+    });
+  }
+  const out = { groups, unmapped, parts: parts.length };
+  byKey.set(pieceKey, out);
+  report.unmapped.push(...unmapped);
+  return out;
+}
+
+// ---- LOD: switch merged level groups by camera distance (view.update() drives the tick) ----
+const LOD_LIVE = new Set();
+const _lodCam = new THREE.Vector3();
+export function tickHumanoidLod(camera) {
+  if (!LOD_LIVE.size || !camera) return;
+  camera.getWorldPosition(_lodCam);
+  for (const l of LOD_LIVE) {
+    const e = l.root.matrixWorld.elements;
+    const d = Math.hypot(e[12] - _lodCam.x, e[13] - _lodCam.y, e[14] - _lodCam.z);
+    const lvl = lodLevelFor(d, l.distances, l.cur, l.hysteresis);
+    if (lvl !== l.cur) {
+      l.groups[l.cur].visible = false;
+      l.groups[lvl].visible = true;
+      l.cur = lvl;
+    }
+  }
+}
+export const humanoidLodStats = () => { const per = {}; for (const l of LOD_LIVE) per[l.cur] = (per[l.cur] ?? 0) + 1; return { live: LOD_LIVE.size, perLevel: per }; };
+
+async function buildMergedInstance(concrete, deps) {
+  const { loader, resolveUrl } = deps;
+  const baseUrl = await resolveUrl(concrete.base);
+  const baseTpl = await template(loader, baseUrl, prepareBase);
+  const slotNames = [...new Set([...DEFAULT_COLOR_SLOTS, ...Object.keys(concrete.colors)])];
+  const report = { drift: [], unmapped: [], failed: [] };
+  const wanted = Object.entries(concrete.costume).filter(([, url]) => url);
+  const loaded = (await Promise.all(wanted.map(async ([slot, url]) => {
+    try {
+      const pieceUrl = await resolveUrl(url);
+      return { slot, pieceUrl, tpl: await template(loader, pieceUrl, preparePiece) };
+    } catch (error) {
+      report.failed.push({ slot, url, error: String(error?.message ?? error) });
+      return null;
+    }
+  }))).filter(Boolean);
+  // LOD levels (level 0 = base); a level that fails to load is skipped, never fatal
+  const levels = [baseTpl];
+  const lodSpec = concrete.render?.lod;
+  if (lodSpec) {
+    const urls = lodSpec.bases ?? Array.from({ length: lodSpec.count }, (_, i) => deriveLodUrl(concrete.base, i + 1));
+    for (const u of urls) {
+      try { levels.push(await template(loader, await resolveUrl(u), prepareBase)); } catch (error) { (report.lod ??= []).push({ url: u, error: String(error?.message ?? error) }); }
+    }
+  }
+  const root = cloneSkinned(baseTpl.scene);
+  const bones = indexBones(root);
+  const byName = new Map();
+  root.traverse((o) => { if (!o.isMesh && !byName.has(o.name)) byName.set(o.name, o); });
+  const hipsFallback = bones.get('hips') ?? [...bones.values()][0];
+  const strip = [];
+  root.traverse((o) => { if (o.isSkinnedMesh) strip.push(o); });
+  strip.forEach((o) => o.removeFromParent()); // the merged meshes replace the cloned base meshes
+  const keys = [];
+  const teamKeys = [];
+  const skeletons = [];
+  const colorize = (mat) => {
+    const one = (m) => {
+      const hex = concrete.colors[slotOfMaterial(m.name, slotNames, m.userData?.slot ?? m.userData?.extras?.slot)];
+      if (!hex) return m;
+      const a = acquireMaterial(m, hex);
+      keys.push(a.key);
+      return a.material;
+    };
+    return Array.isArray(mat) ? mat.map(one) : one(mat);
+  };
+  const finishMesh = (m) => {
+    m.castShadow = true;
+    m.receiveShadow = true;
+    m.userData.solid = false;
+    if (m.isSkinnedMesh) m.frustumCulled = false;
+  };
+  root.traverse((o) => { if (o.isMesh) { o.material = colorize(o.material); finishMesh(o); } });
+  const teamHex = concrete.colors.team ?? null;
+  const levelGroups = [];
+  const pieces = {};
+  let draws = 0;
+  for (const [li, levelTpl] of levels.entries()) {
+    const merged = mergedTemplate(levelTpl, loaded, baseTpl, report);
+    const group = new THREE.Group();
+    group.name = `humanoid-lod${li}`;
+    for (const g of merged.groups) {
+      const jb = g.jointNames.map((n) => byName.get(n) ?? hipsFallback);
+      const skeleton = new THREE.Skeleton(jb, g.inverses);
+      let material = null;
+      if (teamHex && g.mask && !Array.isArray(g.material)) {
+        const a = await acquireTeamMaterial(g.material, g.mask);
+        if (a) { teamKeys.push(a.key); material = a.material; }
+      }
+      const mesh = new THREE.SkinnedMesh(g.geometry, material ?? colorize(g.material));
+      mesh.name = `humanoid-merged${li}`;
+      mesh.bind(skeleton, g.bindMatrix);
+      if (material && teamHex) mesh.userData.teamColor = teamHex;
+      finishMesh(mesh);
+      group.add(mesh);
+      skeletons.push(skeleton);
+      draws += li === 0 ? 1 : 0;
+    }
+    group.visible = li === 0;
+    root.add(group);
+    levelGroups.push(group);
+  }
+  for (const { slot, pieceUrl, tpl } of loaded) {
+    const made = (pieces[slot] = { url: pieceUrl, meshes: [], merged: true });
+    const driftKey = `${baseUrl}|${pieceUrl}`;
+    if (!DRIFT.has(driftKey)) {
+      const drift = [];
+      const seen = new Set();
+      for (const sk of tpl.skinned) for (const chain of sk.chains) {
+        const direct = chain[0];
+        if (!direct || seen.has(direct.canon)) continue;
+        seen.add(direct.canon);
+        const baseInv = baseTpl.inverses.get(direct.canon);
+        if (!baseInv) continue;
+        const d = matrixDrift(direct.inverse, baseInv);
+        if (d > DRIFT_EPS) drift.push({ bone: direct.canon, drift: +d.toFixed(4) });
+      }
+      DRIFT.set(driftKey, drift);
+      if (drift.length) console.warn(`[humanoid] rest-pose drift: ${pieceUrl} vs ${baseUrl}`, drift);
+    }
+    for (const d of DRIFT.get(driftKey)) report.drift.push({ slot, ...d });
+    for (const r of tpl.rigid) {
+      const anchor = bones.get(r.anchor) ?? bones.get('hips');
+      if (!anchor) continue;
+      if (!bones.get(r.anchor)) report.unmapped.push({ slot, bone: r.mesh.name });
+      const mesh = new THREE.Mesh(r.mesh.geometry, colorize(r.mesh.material));
+      mesh.name = r.mesh.name;
+      r.rel.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      finishMesh(mesh);
+      anchor.add(mesh);
+      made.meshes.push(mesh);
+      draws++;
+    }
+  }
+  // body params -> bone scales + grounding (same as the per-piece path)
+  const solved = solveBoneScales(concrete, { axes: baseTpl.axes, has: (b) => bones.has(b) });
+  for (const [bone, s] of Object.entries(solved.bones)) bones.get(bone).scale.multiply(new THREE.Vector3(...s));
+  const hips = bones.get('hips');
+  if (hips?.parent && baseTpl.footY !== null) {
+    root.updateMatrixWorld(true);
+    const feet = ['leftFoot', 'rightFoot'].map((n) => bones.get(n)).filter(Boolean);
+    const y = Math.min(...feet.map((f) => new THREE.Vector3().setFromMatrixPosition(f.matrixWorld).y));
+    const dy = baseTpl.footY - y;
+    if (Math.abs(dy) > 1e-6) {
+      const p = new THREE.Vector3().setFromMatrixPosition(hips.matrixWorld);
+      p.y += dy;
+      hips.position.copy(hips.parent.worldToLocal(p));
+      root.updateMatrixWorld(true);
+    }
+  }
+  const lod = levelGroups.length > 1
+    ? { root, groups: levelGroups, cur: 0, distances: lodSpec.distances.slice(0, levelGroups.length - 1), hysteresis: lodSpec.hysteresis }
+    : null;
+  if (lod) LOD_LIVE.add(lod);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    if (lod) LOD_LIVE.delete(lod);
+    for (const k of keys) releaseMaterial(k);
+    for (const k of teamKeys) releaseTeamMaterial(k);
+    for (const s of skeletons) s.dispose();
+  };
+  root.userData.kind = 'mesh-part';
+  root.userData.humanoid = {
+    concrete, bones, pieces, report, axes: baseTpl.axes, rootScale: solved.root, release, lod,
+    merged: { levels: levelGroups.length, drawsPerLevel0: draws, groupsPerLevel: levelGroups.map((g) => g.children.length) },
+  };
+  return { root, solved };
+}
+
 async function buildInstance(concrete, deps) {
+  if (concrete.render?.merge !== false) return buildMergedInstance(concrete, deps);
   const { loader, resolveUrl } = deps;
   const baseUrl = await resolveUrl(concrete.base);
   const baseTpl = await template(loader, baseUrl, prepareBase);

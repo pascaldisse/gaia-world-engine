@@ -83,7 +83,7 @@ test('generated GLBs: Mixamo base resolves to canonical rig; measured axes are r
 test('rebind BY NAME across 3 rig naming schemes: pieces ride the INSTANCE bones, rest-pose skinning is exact', async () => {
   const loader = makeLoader();
   const costume = { ...OUTFIT, hair: U('costume/hair/long.glb'), back: U('costume/back/cape.glb') }; // hair=VRoid names, cape=VRM names, rest=Mixamo
-  const { g, root, h } = await mount({ base: BASE, costume }, loader);
+  const { g, root, h } = await mount({ base: BASE, merge: false, costume }, loader); // per-piece path (merge:false) — merged path: humanoid-merge.test.js
   assert.deepEqual(h.report, { drift: [], unmapped: [], failed: [] });
   assert.deepEqual(Object.keys(h.pieces).sort(), Object.keys(costume).sort());
   const instanceNodes = new Set(); root.traverse((o) => instanceNodes.add(o));
@@ -247,7 +247,7 @@ test('unmapped / folded bones: missing base bone folds to nearest mapped ancesto
   const toecap = p.build();
   const extra = new Map([[U('nt-base.glb'), baseNoToes], [U('costume/feet/toecap.glb'), toecap]]);
   const loader = makeLoader(extra);
-  const a = await mount({ base: U('nt-base.glb'), costume: { feet: U('costume/feet/toecap.glb') } }, loader);
+  const a = await mount({ base: U('nt-base.glb'), merge: false, costume: { feet: U('costume/feet/toecap.glb') } }, loader);
   assert.ok(!a.h.bones.has('leftToes'));
   const m = a.h.pieces.feet.meshes[0];
   assert.ok(m.skeleton.bones.includes(a.h.bones.get('leftFoot')), 'toes folded onto foot');
@@ -259,7 +259,7 @@ test('unmapped / folded bones: missing base bone folds to nearest mapped ancesto
   // (b) piece with a totally foreign skeleton (no canonical names at all) → rides hips, reported
   const alien = patchGlb(files.get(U('costume/hair/short.glb')), (j) => j.nodes.forEach((n, i) => { n.name = `Wig_${i}`; }));
   const loader2 = makeLoader(new Map([[U('costume/hair/alien.glb'), alien]]));
-  const b = await mount({ base: BASE, costume: { hair: U('costume/hair/alien.glb') } }, loader2);
+  const b = await mount({ base: BASE, merge: false, costume: { hair: U('costume/hair/alien.glb') } }, loader2);
   assert.equal(b.h.report.unmapped.length, 6);
   assert.ok(restError(b.h.pieces.hair.meshes[0]) < 1e-5);
   assert.ok(b.h.pieces.hair.meshes[0].skeleton.bones.every((x) => x === b.h.bones.get('hips')));

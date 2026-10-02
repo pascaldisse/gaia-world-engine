@@ -8,7 +8,7 @@ import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { loadModel } from './model.js';
 import { mountGltf } from './gltf.js';
-import { mountHumanoid, releaseHumanoid } from './humanoid.js';
+import { mountHumanoid, releaseHumanoid, tickHumanoidLod } from './humanoid.js';
 
 // nebula-cull scratch (see cullFadedClouds)
 const _cullPos = new THREE.Vector3();
@@ -160,6 +160,7 @@ export class View {
   // count (pipelines were all warmed at load; first-draw setup wasn't)
   update() {
     this.cullFadedClouds();
+    tickHumanoidLod(this.camera); // humanoid-kit LOD level switch by camera distance
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
       this.hide(this.hideQueue.shift());

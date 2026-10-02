@@ -349,8 +349,10 @@ export function resolveHumanoid(unit = {}, preset = null) {
       rotation: Array.isArray(merged.rotation) ? merged.rotation : [0, 0, 0],
       solid: !!merged.solid,
     },
+    // render strategy (stage 5) — NOT part of the unit identity key
+    render: { merge: merged.merge !== false, lod: normalizeLod(merged.lod) },
   };
-  const { place: _place, ...identity } = concrete;
+  const { place: _place, render: _render, ...identity } = concrete;
   concrete.key = hash32(stable(identity)).toString(16).padStart(8, '0');
   return concrete;
 }
@@ -369,4 +371,73 @@ export function slotOfMaterial(name = '', slots = DEFAULT_COLOR_SLOTS, tag = nul
     }
   }
   return best;
+}
+
+// ---- stage 5: piece merge (pure) + LOD helpers --------------------------------
+// mergeSkinnedParts: concatenate skinned parts that share ONE material into ONE geometry's worth of
+// arrays. each part = { position, normal?, uv?, skinIndex, skinWeight, index?, jointKeys:[string] } where
+// skinIndex values index THAT part's jointKeys. result.jointKeys = unique keys in first-seen order,
+// every part's skinIndex rewritten through jointMaps[part] (vertex data copied, never aliased).
+export function mergeSkinnedParts(parts) {
+  const jointKeys = [];
+  const slot = new Map();
+  const jointMaps = parts.map((p) => Uint16Array.from(p.jointKeys, (k) => {
+    let i = slot.get(k);
+    if (i === undefined) { i = jointKeys.length; slot.set(k, i); jointKeys.push(k); }
+    return i;
+  }));
+  const vertexCount = parts.reduce((s, p) => s + p.position.length / 3, 0);
+  const indexCount = parts.reduce((s, p) => s + (p.index ? p.index.length : p.position.length / 3), 0);
+  const hasNormal = parts.some((p) => p.normal);
+  const hasUv = parts.some((p) => p.uv);
+  const position = new Float32Array(vertexCount * 3);
+  const normal = hasNormal ? new Float32Array(vertexCount * 3) : null;
+  const uv = hasUv ? new Float32Array(vertexCount * 2) : null;
+  const skinIndex = new Uint16Array(vertexCount * 4);
+  const skinWeight = new Float32Array(vertexCount * 4);
+  const index = new (vertexCount > 65535 ? Uint32Array : Uint16Array)(indexCount);
+  const ranges = [];
+  let v = 0;
+  let ii = 0;
+  parts.forEach((p, pi) => {
+    const n = p.position.length / 3;
+    position.set(p.position, v * 3);
+    if (p.normal) normal.set(p.normal, v * 3);
+    if (p.uv) uv.set(p.uv, v * 2);
+    const map = jointMaps[pi];
+    for (let k = 0; k < n * 4; k++) {
+      skinWeight[v * 4 + k] = p.skinWeight[k];
+      skinIndex[v * 4 + k] = p.skinWeight[k] > 0 ? map[p.skinIndex[k]] : 0; // zero-weight slots point anywhere valid
+    }
+    const cnt = p.index ? p.index.length : n;
+    for (let k = 0; k < cnt; k++) index[ii + k] = (p.index ? p.index[k] : k) + v;
+    ranges.push({ vertexStart: v, vertexCount: n, indexStart: ii, indexCount: cnt });
+    v += n;
+    ii += cnt;
+  });
+  return { position, normal, uv, skinIndex, skinWeight, index, jointKeys, jointMaps, ranges, vertexCount, indexCount };
+}
+export const DEFAULT_LOD_DISTANCES = [25, 60];
+// `lod`: true | { distances:[d1,d2,…], bases:[url,…]?, hysteresis? } → { distances, bases|null, count, hysteresis } | null
+export function normalizeLod(lod) {
+  if (!lod) return null;
+  const o = lod === true ? {} : isObj(lod) ? lod : null;
+  if (!o) return null;
+  const bases = Array.isArray(o.bases) ? o.bases.filter((b) => typeof b === 'string' && b) : null;
+  const distances = (Array.isArray(o.distances) ? o.distances : DEFAULT_LOD_DISTANCES).filter((d) => Number.isFinite(d) && d > 0).sort((a, b) => a - b);
+  const count = bases ? bases.length : distances.length;
+  if (!count) return null;
+  return { distances: distances.slice(0, count), bases: bases?.length ? bases : null, count, hysteresis: Number.isFinite(o.hysteresis) ? o.hysteresis : 0.08 };
+}
+// `x/clubman.gltf` → `x/clubman_lod1.gltf` (the EE unit-build convention)
+export const deriveLodUrl = (url, level) => url.replace(/(\.[a-z0-9]+)(\?.*)?$/i, `_lod${level}$1$2`);
+// level 0..distances.length for camera distance `d`; `cur` + hysteresis stop edge flicker
+export function lodLevelFor(d, distances, cur = 0, hysteresis = 0.08) {
+  let lvl = 0;
+  while (lvl < distances.length && d >= distances[lvl]) lvl++;
+  if (cur !== lvl) { // stay on the current level while within the hysteresis band of its boundary
+    const edge = lvl > cur ? distances[cur] : distances[cur - 1];
+    if (edge !== undefined && Math.abs(d - edge) < edge * hysteresis) return cur;
+  }
+  return lvl;
 }

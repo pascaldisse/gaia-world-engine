@@ -30,3 +30,6 @@ node_modules
 
 # gaia-daemon per-project room state (live runtime, never repo content)
 .gaia/
+# humanoid-kit live-verify temp world (symlinks EE assets from another repo — never commit)
+proof/humanoid-kit/world/
+proof/humanoid-kit/logs/

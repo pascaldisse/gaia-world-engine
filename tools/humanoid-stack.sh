@@ -20,10 +20,13 @@ case "${1:-status}" in
     for _ in $(seq 1 40); do curl -s -m 1 localhost:$GAIA_PORT/schema >/dev/null && break; sleep 0.5; done
     pkill -f "remote-debugging-port=$CDP" 2>/dev/null || true; sleep 0.5
     nohup "$BRAVE" --headless=new --user-data-dir="$PROFILE" --remote-debugging-port=$CDP --mute-audio \
-      --window-size=1600,900 --hide-scrollbars --enable-unsafe-webgpu --enable-features=Vulkan,Metal --use-angle=metal \
+      --window-size=${HK_SIZE:-1600,900} --hide-scrollbars --enable-unsafe-webgpu --enable-features=Vulkan,Metal --use-angle=metal \
       --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding \
       --disable-backgrounding-occluded-windows --disable-logging --log-level=3 "$URL" >"$LOGS/brave.log" 2>&1 &
-    sleep 4; curl -s localhost:$CDP/json/list | grep -c '"type": "page"' ;;
+    sleep 4
+    # headless=new opens the URL twice — keep ONE tab (every tab is a full player session)
+    for id in $(curl -s localhost:$CDP/json/list | python3 -c 'import json,sys; ids=[t["id"] for t in json.load(sys.stdin) if t["type"]=="page"]; print("\n".join(ids[1:]))'); do curl -s localhost:$CDP/json/close/$id >/dev/null; done
+    curl -s localhost:$CDP/json/list | grep -c '"type": "page"' ;;
   down)
     pkill -f "remote-debugging-port=$CDP" || true
     lsof -tiTCP:$GAIA_CLIENT_PORT -sTCP:LISTEN | xargs -r kill || true

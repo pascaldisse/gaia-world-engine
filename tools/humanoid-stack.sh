@@ -15,7 +15,7 @@ BRAVE="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
 URL="http://localhost:${GAIA_CLIENT_PORT}/?mute=1${2:-}"
 case "${1:-status}" in
   up)
-    pgrep -f "humanoid-kit.*server/index.js" >/dev/null || (nohup node server/index.js >"$LOGS/server.log" 2>&1 &)
+    lsof -iTCP:$GAIA_PORT -sTCP:LISTEN >/dev/null 2>&1 || (nohup node server/index.js >"$LOGS/server.log" 2>&1 &)
     lsof -iTCP:$GAIA_CLIENT_PORT -sTCP:LISTEN >/dev/null 2>&1 || (nohup node_modules/.bin/vite >"$LOGS/vite.log" 2>&1 &)
     for _ in $(seq 1 40); do curl -s -m 1 localhost:$GAIA_PORT/schema >/dev/null && break; sleep 0.5; done
     pkill -f "remote-debugging-port=$CDP" 2>/dev/null || true; sleep 0.5

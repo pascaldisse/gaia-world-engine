@@ -13,6 +13,7 @@ const BASE = baseArg ?? 'assets/ee/ee_clubman.gltf';
 const SLOT = slotArg ?? 'ee_clubman';
 const SERVER = `http://localhost:${process.env.HK_PORT ?? 18720}`;
 const HEX = ['#d04040', '#4060d0', '#40a050', '#e0c040']; // 4 color variants
+const EXTRA = JSON.parse(process.env.HK_SPEC ?? '{}'); // extra mesh.humanoid fields, e.g. {"merge":false} or {"lod":{"distances":[22,30]}}
 const PREFIX = `hkperf-${MODE}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const op = (ops) => fetch(`${SERVER}/op`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops }) }).then((r) => r.json());
@@ -58,7 +59,7 @@ for (let i = 0; i < N; i++) {
   const hex = HEX[i % HEX.length];
   const mesh = MODE === 'gltf'
     ? { gltf: { src: BASE } }
-    : { humanoid: { base: BASE, colors: { [SLOT]: hex } } };
+    : { humanoid: { base: BASE, colors: { [SLOT]: hex }, ...EXTRA } };
   ops.push({ op: 'spawn', id: `${PREFIX}-${i}`, components: { transform: { position: [x, 0, z] }, mesh } });
 }
 const t0 = Date.now();

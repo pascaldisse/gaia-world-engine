@@ -97,6 +97,8 @@ export const SCHEMA = {
           position: { doc: 'model-local XYZ offset' },
           rotation: { doc: 'model-local XYZ Euler radians' },
           solid: { doc: 'collision participation; default false' },
+          merge: { doc: 'default true: base + costume skinned parts sharing one material render as ONE SkinnedMesh per LOD level (≤2 draws/unit incl. shadow). false = one mesh per piece' },
+          lod: { doc: 'true | { distances:[d1,d2], bases:[url,…]?, hysteresis } — lower-detail base glTFs switched by camera distance; without bases: <base>_lod1.gltf, <base>_lod2.gltf siblings' },
         },
       },
     },

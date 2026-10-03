@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # humanoid-kit live verify stack — own ports, temp world OUTSIDE the hub (proof/humanoid-kit/world, gitignored).
-#   tools/humanoid-stack.sh up|down|status [url-suffix]
+#   tools/humanoid-stack.sh world|up|down|status [url-suffix]   (world: HK_UNITS=<dir> once, builds the temp world)
 # world server :18720 · vite :15473 · CDP :9733 (headless=new Brave, muted, no window)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,6 +14,18 @@ PROFILE=$ROOT/proof/humanoid-kit/logs/brave-profile
 BRAVE="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
 URL="http://localhost:${GAIA_CLIENT_PORT}/?mute=1${2:-}"
 case "${1:-status}" in
+world) # (re)build the temp world: flat ground + spawn; HK_UNITS=<dir of unit glTF folders> is SYMLINKED as assets/units (read-only, never copied)
+[ -d "${HK_UNITS:-}" ] || { echo "set HK_UNITS=<dir with unit glTF folders>" >&2; exit 1; }
+mkdir -p "$GAIA_WORLD/scenes" "$GAIA_WORLD/assets"
+echo '{ "voidY": -10, "scenes": { "main": { "always": true } } }' >"$GAIA_WORLD/world.json"
+cat >"$GAIA_WORLD/scenes/main.json" <<'JSON'
+{
+ "world_spawn": { "spawn": { "position": [0, 15, 20], "yaw": 0, "gameMode": true } },
+ "environment": { "environment": { "background": "#a5bfce", "ambient": { "color": "#ffffff", "intensity": 1.5 }, "sun": { "color": "#fff3cf", "intensity": 2.5 }, "fog": { "color": "#a5bfce", "density": 0.003 } } },
+ "land": { "transform": { "position": [0, -0.15, 0] }, "mesh": { "parts": [{ "shape": "box", "size": [60, 0.3, 60], "color": "#617746", "castShadow": false }] } }
+}
+JSON
+ln -sfn "$HK_UNITS" "$GAIA_WORLD/assets/units"; ls -la "$GAIA_WORLD/assets" ;;
   up)
     lsof -iTCP:$GAIA_PORT -sTCP:LISTEN >/dev/null 2>&1 || (nohup node server/index.js >"$LOGS/server.log" 2>&1 &)
     lsof -iTCP:$GAIA_CLIENT_PORT -sTCP:LISTEN >/dev/null 2>&1 || (nohup node_modules/.bin/vite >"$LOGS/vite.log" 2>&1 &)

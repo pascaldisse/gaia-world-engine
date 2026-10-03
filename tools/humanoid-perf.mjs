@@ -26,10 +26,11 @@ const ev = async (expression) => {
 
 const PROBE = (prefix) => `(async () => {
   const g = gaia, sc = g.view.scene;
-  const geos = new Set(), mats = new Set(), texs = new Set(); let skinned = 0, meshes = 0, ready = 0, total = 0, bones = 0;
+  const geos = new Set(), mats = new Set(), texs = new Set(); let skinned = 0, meshes = 0, ready = 0, total = 0, bones = 0; const lodLevels = {};
   for (const [id, grp] of g.view.groups) {
     if (!id.startsWith(${JSON.stringify(prefix)})) continue;
     total++;
+const lvl = grp.userData.humanoid?.lod?.cur; if (lvl !== undefined) lodLevels[lvl] = (lodLevels[lvl] ?? 0) + 1;
     if (grp.userData.humanoidStatus === 'ready' || (!grp.userData.humanoidStatus && grp.children.length)) ready++;
     grp.traverse((o) => {
       if (o.isBone) bones++;
@@ -39,7 +40,9 @@ const PROBE = (prefix) => `(async () => {
       for (const m of [].concat(o.material)) { mats.add(m); for (const v of Object.values(m)) if (v && v.isTexture) texs.add(v); }
     });
   }
-  return { total, ready, meshes, skinned, bones, uniqueGeometries: geos.size, uniqueMaterials: mats.size, uniqueTextures: texs.size };
+  let texBytes = 0; const sources = new Set(); const dims = {};
+for (const t of texs) { const im = t.image, w = im?.width ?? 0, h = im?.height ?? 0; sources.add(t.source); texBytes += w * h * 4 * (t.generateMipmaps ? 4 / 3 : 1); const k = w + 'x' + h; dims[k] = (dims[k] ?? 0) + 1; }
+return { total, ready, meshes, skinned, bones, uniqueGeometries: geos.size, uniqueMaterials: mats.size, lodLevels, uniqueTextures: texs.size, uniqueTextureSources: sources.size, textureDims: dims, textureMBEstimate: +(texBytes / 1048576).toFixed(1) };
 })()`;
 const FPS = `new Promise((res) => { const t0 = performance.now(); const dts = []; let last = t0; const tick = (t) => { dts.push(t - last); last = t; if (t - t0 < 5000) requestAnimationFrame(tick); else { const d = dts.slice(2); const mean = d.reduce((a, b) => a + b, 0) / d.length; d.sort((a, b) => a - b); res({ frames: d.length, fps: +(1000 / mean).toFixed(1), p50ms: +d[Math.floor(d.length / 2)].toFixed(1), p95ms: +d[Math.floor(d.length * 0.95)].toFixed(1) }); } }; requestAnimationFrame(tick); })`;
 const INFO = `JSON.stringify({ render: gaia.view.renderer.info.render, memory: gaia.view.renderer.info.memory })`;

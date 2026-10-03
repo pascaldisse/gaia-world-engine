@@ -17,6 +17,8 @@ import {
 
 import { loadTeamMasks, acquireTeamMaterial, releaseTeamMaterial } from './humanoid-team.js';
 import { prepareClips, retargetClips, createClipPlayer } from './humanoid-clip.js';
+import { internTextures, retainTextures, releaseTextures, humanoidTextureStats } from './humanoid-tex.js';
+export { humanoidTextureStats };
 const DEFAULT_LOADER = new GLTFLoader();
 const TEMPLATES = new WeakMap(); // loader -> Map(url -> Promise<template>)
 const PRESETS = new Map(); // url -> Promise<json>
@@ -109,7 +111,11 @@ async function prepareBase(scene, gltf) {
   });
   const feet = ['leftFoot', 'rightFoot'].map((n) => bones.get(n)).filter(Boolean);
   const footY = feet.length ? Math.min(...feet.map((f) => new THREE.Vector3().setFromMatrixPosition(f.matrixWorld).y)) : null;
-  return { kind: 'base', scene, axes: measureAxes(bones), inverses, footY, masks, clips: prepareClips(gltf.animations) };
+  const axes = measureAxes(bones);
+  const clips = prepareClips(gltf.animations);
+  // LAST (nothing below may throw): one canonical Texture per image across LOD levels / pieces / bases
+  const texKeys = await internTextures(scene, gltf, masks);
+  return { kind: 'base', scene, axes, inverses, footY, masks, clips, texKeys };
 }
 
 // ancestors-or-self that resolve to a canonical bone, nearest first, each with its bind inverse
@@ -143,7 +149,8 @@ async function preparePiece(scene, gltf) {
       rigid.push({ mesh: o, anchor: chain[0]?.canon ?? null, rel });
     }
   });
-  return { kind: 'piece', scene, skinned, rigid, masks };
+  const texKeys = await internTextures(scene, gltf, masks);
+  return { kind: 'piece', scene, skinned, rigid, masks, texKeys };
 }
 
 // clips-only glb (`clips: url`): scene ignored, animations parsed ONCE per URL
@@ -163,6 +170,24 @@ function template(loader, url, prepare) {
   return pending;
 }
 
+const textureKeysOf = (tpls) => [...new Set(tpls.flatMap((t) => t.texKeys ?? []))];
+// Drop cached templates (all of `loader`'s, or only those whose resolved url is in `urls`) and the ref each holds on its
+// shared textures. A texture is disposed (once) when the LAST holder — template or live instance — lets go. Returns #evicted.
+// NOT covered (pre-existing, templates are process-lifetime today): template geometry / materials are not disposed here.
+export async function evictHumanoidTemplates(loader = DEFAULT_LOADER, urls = null) {
+  const byUrl = TEMPLATES.get(loader);
+  if (!byUrl) return 0;
+  const want = urls === null ? null : new Set([].concat(urls));
+  let n = 0;
+  for (const [slot, pending] of [...byUrl]) {
+    if (want && !want.has(slot.slice(slot.indexOf('|') + 1))) continue;
+    byUrl.delete(slot);
+    const tpl = await pending.catch(() => null);
+    if (tpl?.texKeys && !tpl.texFreed) { tpl.texFreed = true; releaseTextures(tpl.texKeys); }
+    n++;
+  }
+  return n;
+}
 // ---- defaults (browser) ---------------------------------------------------------
 // `http(s)://` as-is · `/x` → client origin (engine-bundled /assets/…) · `x` → world asset on the world server
 export async function resolveAssetUrl(src) {
@@ -497,6 +522,8 @@ async function buildMergedInstance(concrete, deps) {
     : null;
   if (lod) LOD_LIVE.add(lod);
   const clipper = await attachClips(root, baseTpl, concrete, deps, report);
+  // instance ref: an evicted template cannot free what a live unit still samples
+  const texHeld = retainTextures(textureKeysOf([...levels, ...loaded.map((e) => e.tpl)]));
   let released = false;
   const release = () => {
     if (released) return;
@@ -506,6 +533,7 @@ async function buildMergedInstance(concrete, deps) {
     for (const k of teamKeys) releaseTeamMaterial(k);
     for (const s of skeletons) s.dispose();
     clipper.player.dispose();
+    releaseTextures(texHeld);
   };
   root.userData.kind = 'mesh-part';
   root.userData.humanoid = {
@@ -651,6 +679,7 @@ async function buildInstance(concrete, deps) {
   }
 
   const clipper = await attachClips(root, baseTpl, concrete, deps, report);
+  const texHeld = retainTextures(textureKeysOf([baseTpl, ...loaded.filter(Boolean).map((e) => e.tpl)]));
   let released = false;
   const release = () => {
     if (released) return;
@@ -658,6 +687,7 @@ async function buildInstance(concrete, deps) {
     for (const k of keys) releaseMaterial(k);
     for (const s of skeletons) s.dispose();
     clipper.player.dispose();
+    releaseTextures(texHeld);
   };
   root.userData.kind = 'mesh-part';
   root.userData.humanoid = { concrete, bones, pieces, report, axes: baseTpl.axes, rootScale: solved.root, release, ...clipper.api };
@@ -702,4 +732,7 @@ export function releaseHumanoid(node) {
   node.userData?.humanoid?.release?.();
 }
 
-export const _humanoidCache = { has: (loader, kind, url) => !!TEMPLATES.get(loader)?.has(`${kind}|${url}`) }; // tests only
+export const _humanoidCache = { // tests only
+  has: (loader, kind, url) => !!TEMPLATES.get(loader)?.has(`${kind}|${url}`),
+  get: (loader, kind, url) => TEMPLATES.get(loader)?.get(`${kind}|${url}`),
+};

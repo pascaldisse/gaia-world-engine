@@ -168,3 +168,15 @@ test('ownership: a resource the game freed, then re-acquired by a new mount, is 
   disposeGltf(a); disposeGltf(b);
   assert.equal(gd.n, 2, 'engine disposes at eviction because a new acquire reset the freed-flag');
 });
+
+// § real engine dispose path: view.js applyMesh/removeEntity → disposeObject (disposeOwn, NOT disposeGltf) must release the lease too, else nothing ever evicts in-game.
+test('view.applyMesh(group, null) (mesh-part teardown) releases the glTF lease → last teardown evicts + frees shared resources', async () => {
+  const { View } = await import('../client/kernel/view.js');
+  const loader = fakeLoader(), groups = [host(), host()];
+  const roots = await Promise.all(groups.map(g => mountGltf(g, { src: 'v.gltf' }, 1, () => {}, { loader })));
+  const gd = count(mesh(roots[0]).geometry), ctx = {};
+  View.prototype.applyMesh.call(ctx, groups[0], null);
+  assert.ok(_gltfTemplateCache.has(loader, U('v.gltf'))); assert.equal(gd.n, 0);
+  View.prototype.applyMesh.call(ctx, groups[1], null);
+  assert.equal(_gltfTemplateCache.size(loader), 0); assert.equal(gd.n, 1);
+});

@@ -7,7 +7,7 @@ import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
 import { loadModel } from './model.js';
-import { mountGltf } from './gltf.js';
+import { mountGltf, releaseGltf } from './gltf.js';
 import { mountHumanoid, releaseHumanoid, tickHumanoidLod, patchHumanoidClip, humanoidSig } from './humanoid.js';
 import { tickHumanoidClips } from './humanoid-clip.js';
 
@@ -934,6 +934,7 @@ export class View {
 }
 
 function disposeObject(object) {
+  releaseGltf(object); // glTF template refcount: last instance of a URL frees its shared geometry/textures (idempotent)
   object.traverse((node) => {
     releaseHumanoid(node); // material refcounts + skeleton textures; idempotent
     disposeOwn(node);

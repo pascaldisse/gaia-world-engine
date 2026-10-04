@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 globalThis.location = { hostname: 'localhost', search: '' };
 globalThis.__GAIA_PORT__ = '8420';
-const { mountGltf, disposeGltf, _gltfTemplateCache } = await import('../client/kernel/gltf.js');
+const { mountGltf, disposeGltf, releaseGltf, _gltfTemplateCache } = await import('../client/kernel/gltf.js');
 
 function fakeLoader({ fail = 0 } = {}) {
   const calls = [];
@@ -75,4 +75,95 @@ test('skinned template → each instance binds its OWN bones', async () => {
   const sa = mesh(a), sb = mesh(b);
   assert.notEqual(sa.skeleton.bones[0], sb.skeleton.bones[0]);
   let inA = false; a.traverse(o => { if (o === sa.skeleton.bones[0]) inA = true; }); assert.ok(inA);
+});
+
+// § refcount eviction (lampas/gltf-cache-evict): lease per instance (taken when mountGltf starts, so in-flight mounts pin the entry) → last release frees template + shared geometry/textures.
+const U = src => new URL(src, 'http://localhost:8420/').href;
+const count = (obj, ev = 'dispose') => { const c = { n: 0 }; obj.addEventListener(ev, () => c.n++); return c; };
+const sharedOf = r => { const m = mesh(r); return { geometry: m.geometry, texture: m.material.map }; };
+
+test('evict: last disposeGltf frees template + shared geometry/texture exactly once; cache empties', async () => {
+  const loader = fakeLoader(), roots = await Promise.all([host(), host(), host()].map(g => mountGltf(g, { src: 'e.gltf' }, 1, () => {}, { loader })));
+  const { geometry, texture } = sharedOf(roots[0]), gd = count(geometry), td = count(texture), url = U('e.gltf');
+  disposeGltf(roots[0]); disposeGltf(roots[1]);
+  assert.ok(_gltfTemplateCache.has(loader, url), 'two of three released → template still cached');
+  assert.deepEqual([gd.n, td.n], [0, 0], 'shared resources alive while an instance lives');
+  const late = await mountGltf(host(), { src: 'e.gltf' }, 1, () => {}, { loader });
+  assert.equal(mesh(late).geometry, geometry); assert.equal(loader.calls.length, 1, 'live template still shared by a late mount');
+  disposeGltf(roots[2]); assert.ok(_gltfTemplateCache.has(loader, url), 'late mount keeps it alive');
+  disposeGltf(late);
+  assert.equal(_gltfTemplateCache.has(loader, url), false, 'all instances disposed → entry evicted');
+  assert.equal(_gltfTemplateCache.size(loader), 0);
+  assert.deepEqual([gd.n, td.n], [1, 1], 'shared geometry + texture disposed exactly once');
+  const again = await mountGltf(host(), { src: 'e.gltf' }, 1, () => {}, { loader });
+  assert.equal(loader.calls.length, 2, 'after eviction a mount reloads'); assert.notEqual(mesh(again).geometry, geometry);
+  assert.equal(mesh(again).geometry.userData.shared, true); assert.equal(mesh(again).material.map.userData.shared, true);
+  assert.notEqual(mesh(again).material, mesh(late).material);
+});
+
+test('evict: disposeGltf/releaseGltf are idempotent per instance (double dispose never steals another instance\'s ref)', async () => {
+  const loader = fakeLoader(), [a, b] = await Promise.all([host(), host()].map(g => mountGltf(g, { src: 'i.gltf' }, 1, () => {}, { loader })));
+  const gd = count(mesh(a).geometry);
+  disposeGltf(a); disposeGltf(a); releaseGltf(a);
+  assert.ok(_gltfTemplateCache.has(loader, U('i.gltf'))); assert.equal(gd.n, 0);
+  releaseGltf(b); assert.equal(_gltfTemplateCache.has(loader, U('i.gltf')), false); assert.equal(gd.n, 1);
+});
+
+test('evict: in-flight dedup + in-flight pin — a stale mount releasing does not evict while another mount awaits the same load', async () => {
+  const loader = fakeLoader(), g1 = host(), g2 = host();
+  const p1 = mountGltf(g1, { src: 'p.gltf' }, 1, () => {}, { loader }), p2 = mountGltf(g2, { src: 'p.gltf' }, 1, () => {}, { loader });
+  g1.userData.gltfToken = 2;
+  assert.equal(await p1, null); const r2 = await p2;
+  assert.ok(r2); assert.equal(loader.calls.length, 1); assert.ok(_gltfTemplateCache.has(loader, U('p.gltf')));
+  const gd = count(mesh(r2).geometry); disposeGltf(r2);
+  assert.equal(gd.n, 1); assert.equal(_gltfTemplateCache.size(loader), 0);
+});
+
+test('evict: every mount stale before the load settles → template freed once the load lands (no orphan)', async () => {
+  const loader = fakeLoader(), g = host(), p = mountGltf(g, { src: 'o.gltf' }, 1, () => {}, { loader }); g.userData.gltfToken = 2;
+  assert.equal(await p, null);
+  assert.equal(_gltfTemplateCache.has(loader, U('o.gltf')), false); assert.equal(_gltfTemplateCache.size(loader), 0);
+});
+
+test('evict: failed load leaves no entry and no lease (retry works, later dispose is clean)', async () => {
+  const loader = fakeLoader({ fail: 1 }), err = console.error; console.error = () => {};
+  try {
+    assert.equal(await mountGltf(host(), { src: 'x.gltf' }, 1, () => {}, { loader }), null);
+    assert.equal(_gltfTemplateCache.size(loader), 0);
+    const r = await mountGltf(host(), { src: 'x.gltf' }, 1, () => {}, { loader }); assert.ok(r);
+    disposeGltf(r); assert.equal(_gltfTemplateCache.size(loader), 0);
+  } finally { console.error = err; }
+});
+
+test('evict: per-URL refcounts are independent', async () => {
+  const loader = fakeLoader(), a = await mountGltf(host(), { src: 'a.gltf' }, 1, () => {}, { loader }), b = await mountGltf(host(), { src: 'b.gltf' }, 1, () => {}, { loader });
+  disposeGltf(a);
+  assert.equal(_gltfTemplateCache.has(loader, U('a.gltf')), false); assert.ok(_gltfTemplateCache.has(loader, U('b.gltf')));
+  disposeGltf(b); assert.equal(_gltfTemplateCache.size(loader), 0);
+});
+
+// § OWNERSHIP with a game that frees shared resources itself (EE client/animation.js watchAlternateResources: listener-guarded `if (!disposed) resource.dispose()` by the LAST of ITS live alternates).
+//   Rule: engine frees a template's shared geometry/textures at lease-count 0 UNLESS they already fired 'dispose' since the last acquire (game freed them) → no second dispose event; and if the engine
+//   frees first, the game's own guard sees the event and skips. Neither side ever frees a resource a live lease holds (game excludes primary-borrowed resources; engine counts every instance).
+test('ownership: game early-free of shared resources → engine eviction does not dispose them again; engine-first eviction is seen by the game guard', async () => {
+  const loader = fakeLoader(), r = await mountGltf(host(), { src: 'g.gltf' }, 1, () => {}, { loader }), { geometry, texture } = sharedOf(r);
+  const gd = count(geometry), td = count(texture);
+  geometry.dispose(); texture.dispose();            // game: last alternate released → frees shared resources itself
+  assert.deepEqual([gd.n, td.n], [1, 1]);
+  disposeGltf(r);                                   // engine: last lease → evict
+  assert.deepEqual([gd.n, td.n], [1, 1], 'no double dispose of what the game already freed');
+  assert.equal(_gltfTemplateCache.size(loader), 0);
+  const r2 = await mountGltf(host(), { src: 'g2.gltf' }, 1, () => {}, { loader }), s2 = sharedOf(r2), g2 = count(s2.geometry);
+  let gameSaw = false; s2.geometry.addEventListener('dispose', () => { gameSaw = true; });
+  disposeGltf(r2);                                  // engine frees first
+  assert.equal(g2.n, 1); assert.ok(gameSaw, 'game listener-guard observes the engine free (it then skips its own dispose)');
+});
+
+test('ownership: a resource the game freed, then re-acquired by a new mount, is freed again at eviction (re-upload must not leak)', async () => {
+  const loader = fakeLoader(), a = await mountGltf(host(), { src: 'h.gltf' }, 1, () => {}, { loader }), { geometry } = sharedOf(a), gd = count(geometry);
+  geometry.dispose();                               // game early-free (n=1)
+  const b = await mountGltf(host(), { src: 'h.gltf' }, 1, () => {}, { loader });   // same live template, resource in use again
+  assert.equal(mesh(b).geometry, geometry);
+  disposeGltf(a); disposeGltf(b);
+  assert.equal(gd.n, 2, 'engine disposes at eviction because a new acquire reset the freed-flag');
 });

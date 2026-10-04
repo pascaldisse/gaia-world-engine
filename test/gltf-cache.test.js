@@ -33,7 +33,7 @@ test('N concurrent mounts of one src → ONE load; geometry+texture shared, mate
 });
 
 test('disposeGltf frees instance materials only; later mounts still share the live template', async () => {
-  const loader = fakeLoader(), g1 = host();
+  const loader = fakeLoader(), g1 = host(), keeper = await mountGltf(host(), { src: 'm.gltf' }, 1, () => {}, { loader }); // keeper = another live instance (sole-instance dispose now evicts — see evict tests)
   const r1 = await mountGltf(g1, { src: 'm.gltf' }, 1, () => {}, { loader }), m1 = mesh(r1);
   let geometryDisposed = 0, textureDisposed = 0, materialDisposed = 0;
   m1.geometry.addEventListener('dispose', () => geometryDisposed++);
@@ -45,11 +45,12 @@ test('disposeGltf frees instance materials only; later mounts still share the li
   assert.equal(mesh(r2).geometry, m1.geometry); assert.equal(loader.calls.length, 1);
 });
 
-test('stale token → instance dropped (null), template kept', async () => {
-  const loader = fakeLoader(), g = host();
+test('stale token → instance dropped (null), template kept while another instance lives (evicted with the last — see evict tests)', async () => {
+  const loader = fakeLoader(), g = host(), live = await mountGltf(host(), { src: 's.gltf' }, 1, () => {}, { loader });
   const pending = mountGltf(g, { src: 's.gltf' }, 1, () => {}, { loader }); g.userData.gltfToken = 2;
   assert.equal(await pending, null); assert.equal(g.children.length, 0);
   assert.ok(_gltfTemplateCache.has(loader, new URL('s.gltf', 'http://localhost:8420/').href));
+  disposeGltf(live);
 });
 
 test('failed load → error status, cache entry evicted, retry loads again', async () => {

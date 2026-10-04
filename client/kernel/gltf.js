@@ -61,7 +61,7 @@ function lease(loader, url) {
     if (released) return; released = true;
     if (--entry.refs > 0) return;
     if (byUrl.get(url) === entry) byUrl.delete(url);
-    if (entry.scene) freeTemplate(entry); else entry.pending.then(() => freeTemplate(entry), () => {}); // not landed yet → free when it does
+    freeTemplate(entry); // release happens only after the load landed (instance exists) or failed (scene null → no-op)
   } };
 }
 function instance(scene) {

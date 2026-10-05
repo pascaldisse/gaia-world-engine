@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
-import { buildChain, LightingPost, POST_DEFAULTS, TONEMAPS, resolvePost } from '../client/kernel/lighting/post.js';
+import { buildChain, LightingPost, POST_DEFAULTS, TONEMAPS, resolvePost, aoSkyMask } from '../client/kernel/lighting/post.js';
 import { LightingController } from '../client/kernel/lighting/index.js';
 
 const cam = () => new THREE.PerspectiveCamera(70, 1.6, 0.1, 4000);
@@ -154,4 +154,40 @@ test('controller: enabled+post installs the chain and exposure; disabled restore
   assert.equal(pp.outputNode, origOut);
   assert.equal(renderer.toneMapping, THREE.ACESFilmicToneMapping);
   assert.equal(lc.exposure, 1);
+});
+
+
+// lane ds-ao2 — no opaque geometry (depth buffer still CLEAR=1) ⇒ no occlusion.
+test('sky mask: CPU twin — 1 only where depth ≥ 1-eps (cleared / beyond far), 0 on real geometry', () => {
+  assert.equal(aoSkyMask(1, 1e-5), 1);
+  assert.equal(aoSkyMask(1 - 5e-6, 1e-5), 1);
+  assert.equal(aoSkyMask(1 - 2e-5, 1e-5), 0);
+  assert.equal(aoSkyMask(0.5, 1e-5), 0);
+  assert.equal(aoSkyMask(1 - 1e-9, 0), 0, 'eps 0 → strictly depth>=1 only counts as sky');
+});
+
+test('ao.skyDepthEps knob: default documented, merges, lands on a uniform; debug knob off by default', () => {
+  assert.equal(typeof POST_DEFAULTS.ao.skyDepthEps, 'number');
+  assert.ok(POST_DEFAULTS.ao.skyDepthEps > 0 && POST_DEFAULTS.ao.skyDepthEps < 1e-3);
+  assert.equal(POST_DEFAULTS.ao.debug, null);
+  const c = buildChain({ scene: new THREE.Scene(), camera: cam(), cfg: { ao: { skyDepthEps: 3e-4 } } });
+  assert.equal(c.nodes.aoSky.eps.value, 3e-4);
+  assert.equal(c.nodes.aoSky.mask.isNode, true);
+  assert.equal(c.debug, null);
+});
+
+test('sky mask samples the scenePass depth at screen uv (explicit sample node, not the default-uv texture node)', () => {
+  const c = buildChain({ scene: new THREE.Scene(), camera: cam(), cfg: {} });
+  const s = c.nodes.aoSky.depthSample;
+  assert.equal(s.isTextureNode, true);
+  assert.notEqual(s, c.nodes.scenePass.getTextureNode('depth'), 'a distinct .sample(uv) clone');
+  assert.ok(s.uvNode, 'explicit uvNode set');
+});
+
+test('ao.debug="mask" swaps the output for the mask-as-colour view and tags the chain', () => {
+  const base = buildChain({ scene: new THREE.Scene(), camera: cam(), cfg: {} });
+  const dbg = buildChain({ scene: new THREE.Scene(), camera: cam(), cfg: { ao: { debug: 'mask' } } });
+  assert.equal(dbg.debug, 'mask');
+  assert.notEqual(dbg.outputNode, base.outputNode);
+  assert.equal(dbg.nodes.bloomPass, null, 'debug view bypasses bloom/tonemap-able colour path');
 });

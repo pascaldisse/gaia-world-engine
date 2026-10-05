@@ -11,7 +11,7 @@ environment.apply({ lighting: {
   shadows: { cascades: 4, maxFar: 600, mapSize: 2048, bias: -0.0003, normalBias: 0.04, fade: true, lightMargin: 200 },
   sky: { turbidity: 6, rayleigh: 2, mieCoefficient: 0.005, mieDirectionalG: 0.8, groundAlbedo: 0.25, visible: true },
   sun: { peak: 3.0, moon: 0.12 }, hemi: { day: 0.9, night: 0.12 }, fog: { near: 80, far: 900, follow: true },
-  post: { tonemap: 'aces'|'agx'|'neutral'|'none', exposure: 1, ao: { enabled, intensity, radius, thickness, samples, resolutionScale, normals: 'mrt'|'depth' }, traa: { enabled: false } },
+  post: { tonemap: 'aces'|'agx'|'neutral'|'none', exposure: 1, ao: { enabled, intensity, radius, thickness, samples, resolutionScale, normals: 'mrt'|'depth', skyDepthEps: 1e-5, debug: null|'mask' }, traa: { enabled: false } },
 } });
 environment.lighting.setTimeOfDay(h);          // live clock; or time.speed = hours/real-sec
 environment.lighting.markShadows(root);        // cast+receive on meshes; userData.noShadow opts out
@@ -77,3 +77,8 @@ PORT = taken from source; ASSUMED = my value, tune live.
 
 ## Tests
 `test/lighting-shadows|sun-sky|post|environment-wiring.test.js` — pure fns (sun at known times, ramp monotone, skyRadiance invariants), node-graph construction, fallback ladder, swap/restore, component wiring + default-OFF equivalence. Mutant per key test run (see lane report).
+
+### AO sky mask `post.ao.skyDepthEps` (lane ds-ao2)
+No opaque geometry ⇒ no occlusion. `aoTerm = select(depth >= 1-skyDepthEps, 1, mix(1, gtao.r, intensity))`, depth = `scenePass.getTextureNode('depth').sample(screenUV)` (explicit per-pixel sample, full-res). Pixels whose depth is still CLEAR (sky, beyond far plane, far translucent layers w/ `depthWrite:false`, e.g. DS cloud-sea) never get AO.
+NDC depth ≈ 1−near/z → default 1e-5 ≈ nothing within ~10 km @ near 0.1. Raise to also mask distant terrain.
+`post.ao.debug:'mask'` = proof view: RED = masked (AO forced 1), grey = raw GTAO term; bypasses bloom.

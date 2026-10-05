@@ -7,7 +7,7 @@
 // depth-only (GTAO reconstructs normals from depth) → no AO. A render-time
 // throw on the lighting chain reverts to the original chain once.
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, velocity, float, mix } from 'three/tsl';
+import { pass, mrt, output, normalView, velocity, float, mix, uniform, screenUV, vec3, vec4, select } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
@@ -30,6 +30,12 @@ export const POST_DEFAULTS = {
     samples: 16,      // PORT: GTAONode default
     resolutionScale: 0.5, // PORT: GTAONode docs "0.5 sufficient for most scenes"
     normals: 'mrt',   // 'mrt' | 'depth' (skip the normal MRT target)
+    // lane ds-ao2: no opaque geometry => no occlusion. Where the full-res scenePass depth is >= 1-skyDepthEps (buffer still
+    // CLEAR: sky / beyond far plane / far translucent layers with depthWrite:false) aoTerm is forced to 1. NDC depth ~ 1-near/z,
+    // so 1e-5 ≈ nothing within ~10 km at near 0.1 (only true clear/sky). ASSUMED; raise to also mask distant terrain.
+    skyDepthEps: 1e-5,
+    // null | 'mask' — 'mask' outputs the mask as colour (RED = masked/no-AO, grey = raw GTAO term), bypassing bloom: PROOF view.
+    debug: null,
   },
   traa: { enabled: false },
   bloom: null,        // null = inherit post.setBloom values (Environment owns them)
@@ -42,6 +48,8 @@ export const resolvePost = (cfg = {}) => ({
   traa: merge(POST_DEFAULTS.traa, cfg.traa),
 });
 
+// CPU twin of the shader mask (tests + docs): 1 = no opaque geometry here (depth buffer cleared) ⇒ AO must not apply.
+export const aoSkyMask = (depth, eps) => (depth >= 1 - Math.max(0, eps) ? 1 : 0);
 // Pure graph builder (no GPU needed): returns {outputNode, mode, nodes}.
 // mode ∈ 'ao+mrt' | 'ao+depth' | 'bloom-only'; throws never — degrades.
 export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35, radius: 0.4, threshold: 0.85 } }) {
@@ -61,6 +69,8 @@ export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35,
       const depth = scenePass.getTextureNode('depth');
       let lit = color;
       let aoPass = null;
+      let aoSky = null;
+      let debug = null;
       if (rung !== 'none') {
         aoPass = ao(depth, rung === 'mrt' ? scenePass.getTextureNode('normal') : null, camera);
         aoPass.resolutionScale = C.ao.resolutionScale;
@@ -69,8 +79,18 @@ export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35,
         aoPass.samples.value = C.ao.samples;
         // ASSUMED approximation: GTAO has no direct/indirect split here, so it
         // attenuates the whole scene colour, softened by `intensity`.
-        const aoTerm = mix(float(1), aoPass.getTextureNode().r, float(C.ao.intensity));
+        const rawAo = aoPass.getTextureNode().r;
+        // Explicit .sample(screenUV): a distinct per-pixel sample of the FULL-RES scene depth (not the default-uv node GTAO holds).
+        const depthSample = depth.sample(screenUV);
+        const eps = uniform(C.ao.skyDepthEps);
+        const mask = depthSample.r.greaterThanEqual(float(1).sub(eps)).select(float(1), float(0));
+        aoSky = { eps, mask, depthSample };
+        const aoTerm = select(mask.greaterThan(0.5), float(1), mix(float(1), rawAo, float(C.ao.intensity)));
         lit = color.mul(aoTerm);
+        if (C.ao.debug === 'mask') {
+          debug = 'mask';
+          lit = vec4(mix(vec3(rawAo), vec3(1, 0, 0), mask), 1);
+        }
       }
       let resolved = lit;
       let traaPass = null;
@@ -78,11 +98,13 @@ export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35,
         traaPass = traa(lit, depth, scenePass.getTextureNode('velocity'), camera);
         resolved = traaPass;
       }
+      if (debug) return { outputNode: resolved, mode: rung === 'mrt' ? 'ao+mrt' : 'ao+depth', debug, nodes: { scenePass, aoPass, aoSky, traaPass, bloomPass: null }, error: lastErr };
       const bloomPass = bloom(resolved, bloomParams.strength, bloomParams.radius, bloomParams.threshold);
       return {
         outputNode: resolved.add(bloomPass),
         mode: rung === 'mrt' ? 'ao+mrt' : rung === 'depth' ? 'ao+depth' : 'bloom-only',
-        nodes: { scenePass, aoPass, traaPass, bloomPass },
+        debug,
+        nodes: { scenePass, aoPass, aoSky, traaPass, bloomPass },
         error: lastErr,
       };
     } catch (err) {
@@ -126,6 +148,7 @@ export class LightingPost {
     this.post.setBloom = (o = {}) => {
       origSetBloom?.(o);
       const b = chain.nodes.bloomPass;
+      if (!b) return; // debug mask view has no bloom
       if (o.strength !== undefined) b.strength.value = o.strength;
       if (o.radius !== undefined) b.radius.value = o.radius;
       if (o.threshold !== undefined) b.threshold.value = o.threshold;

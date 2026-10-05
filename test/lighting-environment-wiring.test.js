@@ -111,3 +111,15 @@ test('GI-facing interface: environment.lighting.skySummary + onSkyChange', () =>
   assert.equal(seen.length, 1);
   assert.deepEqual(Object.keys(env.lighting.skySummary).sort(), ['ground', 'horizon', 'zenith']);
 });
+
+test('applyFaded from a kernel mood INTO lighting: lighting values hold from the first frame (no crossfade fight)', () => {
+  const r = make();
+  const env = new Environment({ ...r, post: null, audio: null, camera: r.camera });
+  env.apply({});
+  const cfg = { lighting: { enabled: true, shadows: { enabled: false } } };
+  env.applyFaded(cfg, 2.5);
+  const lit = snap(r);
+  env.update(0.05);
+  assert.equal(snap(r), lit, 'first frame already the lit state, not a lerp from the old mood');
+  assert.equal(env.fadeState, null);
+});

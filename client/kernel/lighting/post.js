@@ -32,8 +32,8 @@ export const POST_DEFAULTS = {
     normals: 'mrt',   // 'mrt' | 'depth' (skip the normal MRT target)
     // lane ds-ao2: no opaque geometry => no occlusion. Where the full-res scenePass depth is >= 1-skyDepthEps (buffer still
     // CLEAR: sky / beyond far plane / far translucent layers with depthWrite:false) aoTerm is forced to 1. NDC depth ~ 1-near/z,
-    // so 1e-5 ≈ nothing within ~10 km at near 0.1 (only true clear/sky). ASSUMED; raise to also mask distant terrain.
-    skyDepthEps: 1e-5,
+    // so eps ≈ near/maxAoDist: 1e-3 ≈ 100 m @ near 0.1. LIVE FINDING (DS cliff): far sky/cloud meshes sit INSIDE the far plane (~1.2 km → 1-depth ≈ 8e-5), so depth is NOT exactly 1 there; eps 1e-5 masked nothing, 3e-4 most, 1e-3 all streaks. ASSUMED default.
+    skyDepthEps: 1e-3,
     // null | 'mask' — 'mask' outputs the mask as colour (RED = masked/no-AO, grey = raw GTAO term), bypassing bloom: PROOF view.
     debug: null,
   },

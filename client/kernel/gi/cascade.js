@@ -131,3 +131,13 @@ export function planCascadeUpdate(cascades, cursors) {
   }
   return { batches, cursors: next };
 }
+
+/** single-dispatch plan: per-cascade (start,count) over toroidal slot space (kernel wraps with %count). @returns {starts,counts,cursors} */
+export function planCascadeBatches(cascades, cursors) {
+  const starts = [], counts = [], next = cursors.slice();
+  for (const c of cascades) {
+    const n = Math.min(c.count, Math.max(1, Math.round(c.count * c.updateFraction)));
+    starts.push(cursors[c.index] ?? 0); counts.push(n); next[c.index] = ((cursors[c.index] ?? 0) + n) % c.count;
+  }
+  return { starts, counts, cursors: next };
+}

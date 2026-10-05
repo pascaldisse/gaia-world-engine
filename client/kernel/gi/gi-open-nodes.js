@@ -6,7 +6,7 @@
 //  - loop-index-derived `dir` is .toVar()-materialised; validCount guard wraps each kernel body
 //  - storage buffers: irradiance kernel = irradiance + depth + voxels (+touched) = 3..4; depth kernel = depth + voxels = 2 (≤ 8)
 import {
-  Fn, storage, uniform, vec2, vec3, float, int, uint, Loop, If, dot, max, min, normalize, mix, clamp, abs, select, floor, length, instanceIndex,
+  Fn, storage, uniform, vec2, vec3, vec4, float, int, uint, Loop, If, dot, max, min, normalize, mix, clamp, abs, select, floor, length, instanceIndex,
 } from 'three/tsl';
 import { StorageInstancedBufferAttribute } from 'three/webgpu';
 import { FIB_PHI, createProbeAtlases } from './gi-nodes.js';
@@ -227,12 +227,33 @@ export function createOpenQueryNode({ atlases, cascades, baseCellU, worldPositio
   return Fn(() => queryCascadesTSL({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }))();
 }
 
+// ------------------------------------------------------------------ per-cascade round-robin batch → global probe id (ONE dispatch for all cascades)
+// startU/cumU = uniform(vec4): per-cascade cursor start / cumulative batch sizes (float-held ints, ≤4 cascades)
+export function createBatchUniforms() { return { startU: uniform(vec4(0, 0, 0, 0)), cumU: uniform(vec4(0, 0, 0, 0)) }; }
+export function setBatch(b, starts, counts) {
+  let acc = 0; const cum = [0, 0, 0, 0]; const st = [0, 0, 0, 0];
+  counts.forEach((c, k) => { acc += c; cum[k] = acc; st[k] = starts[k]; });
+  for (let k = counts.length; k < 4; k++) cum[k] = acc;
+  b.startU.value.set(st[0], st[1], st[2], st[3]); b.cumU.value.set(cum[0], cum[1], cum[2], cum[3]);
+  return acc; // total probes this dispatch
+}
+function batchProbeIndex(cascades, b, ordinal) {
+  const st = [b.startU.x, b.startU.y, b.startU.z, b.startU.w]; const cum = [b.cumU.x, b.cumU.y, b.cumU.z, b.cumU.w];
+  let within = ordinal, start = int(st[0]), count = int(cascades[0].count), baseIndex = int(cascades[0].baseIndex);
+  for (let k = 1; k < cascades.length; k++) {
+    const is = ordinal.greaterThanEqual(int(cum[k - 1]));
+    within = select(is, ordinal.sub(int(cum[k - 1])), within); start = select(is, int(st[k]), start);
+    count = select(is, int(cascades[k].count), count); baseIndex = select(is, int(cascades[k].baseIndex), baseIndex);
+  }
+  return baseIndex.add(start.add(within).mod(count)); // toroidal round-robin: no wrap split
+}
+
 // ------------------------------------------------------------------ kernels
 export function createSkyUniforms(sky) { return { zenith: uniform(vec3(...sky.zenith)), horizon: uniform(vec3(...sky.horizon)), ground: uniform(vec3(...sky.ground)) }; }
 
-export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, sun, sky, raysPerProbe, maxDist, hysteresis, relocateMax, adaptive, blendCells, touched = null }) {
-  const { irradiance, irradianceRes } = atlases;
-  const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97); const probeBase = uniform(0, 'uint');
+export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, batch, sun, sky, raysPerProbe, maxDist, hysteresis, relocateMax, adaptive, blendCells, touched = null }) {
+  const { irradiance, depth, irradianceRes } = atlases;
+  const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97);
   const totalDefault = atlases.probeCount * irradianceRes * irradianceRes; const validCount = uniform(totalDefault, 'uint');
   const fastAlpha = float(adaptive.fast), thr = float(adaptive.threshold);
   const fn = Fn(() => {
@@ -240,7 +261,7 @@ export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, s
     If(uint(texelIndex).lessThan(validCount), () => {
       const tpp = int(irradianceRes * irradianceRes);
       const probeLocal = int(texelIndex).div(tpp); const localTexel = int(texelIndex).mod(tpp);
-      const probeIdx = int(probeBase.add(uint(probeLocal))).mod(int(atlases.probeCount)).toVar();
+      const probeIdx = batchProbeIndex(cascades, batch, probeLocal).toVar();
       const atlasIndex = probeIdx.mul(tpp).add(localTexel);
       const octu = float(localTexel.mod(int(irradianceRes))).add(0.5).div(irradianceRes).mul(2).sub(1);
       const octv = float(localTexel.div(int(irradianceRes))).add(0.5).div(irradianceRes).mul(2).sub(1);
@@ -268,24 +289,25 @@ export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, s
       const newEstimate = sampleEstimate.mul(float((4 * Math.PI) / raysPerProbe));
       const old = irradiance.element(atlasIndex);
       const rel = abs(luma(newEstimate).sub(luma(old))).div(max(luma(newEstimate), luma(old)).add(1e-3));
-      const aEff = mix(alpha, fastAlpha, clamp(rel.div(thr), 0, 1)); // adaptive hysteresis (adaptiveAlpha mirror)
+      const freshProbe = depth.element(probeIdx.mul(int(atlases.depthRes * atlases.depthRes))).x.lessThan(0); // depth sentinel (-1): probe just entered the window / was disabled → no blend with stale data
+      const aEff = select(freshProbe, float(0), mix(alpha, fastAlpha, clamp(rel.div(thr), 0, 1))); // adaptive hysteresis (adaptiveAlpha mirror)
       irradiance.element(atlasIndex).assign(select(disabled, vec3(0, 0, 0), mix(newEstimate, old, aEff)));
       if (touched) touched.element(probeIdx).assign(uint(1));
     });
   });
-  return { kernel: fn().compute(totalDefault, [64]), alpha, probeBase, validCount, totalTexels: totalDefault };
+  return { kernel: fn().compute(totalDefault, [64]), alpha, validCount, totalTexels: totalDefault };
 }
 
-export function createOpenDepthKernel({ atlases, vs, cascades, baseCellU, raysPerProbe, maxDist, hysteresis, relocateMax }) {
+export function createOpenDepthKernel({ atlases, vs, cascades, baseCellU, batch, raysPerProbe, maxDist, hysteresis, relocateMax }) {
   const { depth, depthRes } = atlases;
-  const alpha = uniform(hysteresis?.depthAlpha ?? 0.9); const probeBase = uniform(0, 'uint');
+  const alpha = uniform(hysteresis?.depthAlpha ?? 0.9);
   const totalDefault = atlases.probeCount * depthRes * depthRes; const validCount = uniform(totalDefault, 'uint');
   const fn = Fn(() => {
     const texelIndex = instanceIndex;
     If(uint(texelIndex).lessThan(validCount), () => {
       const tpp = int(depthRes * depthRes);
       const probeLocal = int(texelIndex).div(tpp); const localTexel = int(texelIndex).mod(tpp);
-      const probeIdx = int(probeBase.add(uint(probeLocal))).mod(int(atlases.probeCount)).toVar();
+      const probeIdx = batchProbeIndex(cascades, batch, probeLocal).toVar();
       const atlasIndex = probeIdx.mul(tpp).add(localTexel);
       const octu = float(localTexel.mod(int(depthRes))).add(0.5).div(depthRes).mul(2).sub(1);
       const octv = float(localTexel.div(int(depthRes))).add(0.5).div(depthRes).mul(2).sub(1);
@@ -307,5 +329,5 @@ export function createOpenDepthKernel({ atlases, vs, cascades, baseCellU, raysPe
       depth.element(atlasIndex).assign(select(disabled, vec2(-1, -1), blended));
     });
   });
-  return { kernel: fn().compute(totalDefault, [64]), alpha, probeBase, validCount, totalTexels: totalDefault };
+  return { kernel: fn().compute(totalDefault, [64]), alpha, validCount, totalTexels: totalDefault };
 }

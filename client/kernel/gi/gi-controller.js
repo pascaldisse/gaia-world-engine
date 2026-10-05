@@ -14,9 +14,11 @@ import {
   createGIUpdateKernel, createGIDepthUpdateKernel, createGIQueryNode, createTouchedBuffer, createSkyHitsBuffer,
 } from './gi-nodes.js';
 import { GISceneAttachment } from './gi-attach.js';
+import { GIOpen, OPEN_PARAM_DEFAULTS } from './gi-open-controller.js';
 import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
 
 export const GI_DEFAULTS = {
+  mode: 'rts', // 'rts' (default, unchanged) | 'open' (v2 open-world, docs/GI-PROBES.md §v2)
   enabled: false,
   spacing: 8,
   halfExtentXZ: 40,
@@ -49,6 +51,7 @@ export class GIController {
     this._originArr = [0, 0, 0];
     this._voxelConfig = null; // {dims, voxelOriginArr, cellSize} — plain JS, CPU-side
     this._attachment = null; // GISceneAttachment, alive across an enabled span so disable can restore it
+    this._open = null; // GIOpen when mode:'open'
   }
 
   // -------------------------------------------------------------- config
@@ -56,6 +59,7 @@ export class GIController {
   configure(params = {}) {
     const p = { ...GI_DEFAULTS, ...params };
     this.params = p;
+    if (this._open) { this._open.dispose(); this._open = null; }
     if (!p.enabled) {
       // LAW: default/disabled path allocates zero storage buffers, zero
       // compute kernels, zero probe grid — not "disabled but built". Restore
@@ -67,6 +71,7 @@ export class GIController {
       return false;
     }
     this.enabled = true;
+    if (p.mode === 'open') return this._configureOpen(p);
 
     const grid = buildProbeGrid(p);
     const atlases = createProbeAtlases({
@@ -118,7 +123,21 @@ export class GIController {
     return true;
   }
 
-  _makeVoxelConfig(p) {
+  /** v2 open-world: cascades + brick voxels (docs/GI-PROBES.md §v2). RTS path above is untouched. */
+_configureOpen(p) {
+this._attachment?.detachAll();
+this._attachment = new GISceneAttachment();
+this._open = new GIOpen({ renderer: this.renderer, scene: this.scene, params: { ...OPEN_PARAM_DEFAULTS, ...p }, attachment: this._attachment });
+this.resources = { open: this._open, atlases: this._open.atlases, queryNode: this._open.queryNode, params: p };
+return true;
+}
+/** open mode: register world geometry ({triangles,color?,textureMean?,albedo?}) — no-op (false) in rts mode */
+addMesh(id, mesh) { if (!this._open) return false; this._open.addMesh(id, mesh); return true; }
+removeMesh(id) { return this._open ? this._open.removeMesh(id) : false; }
+addThreeMesh(id, mesh) { if (!this._open) return false; this._open.addThreeMesh(id, mesh); return true; }
+/** open mode: environment.lighting.skySummary {zenith,horizon,ground} */
+setSkySummary(s) { this._open?.setSkySummary(s); }
+_makeVoxelConfig(p) {
     const cell = p.voxelCellSize;
     const dims = {
       x: Math.max(1, Math.round((2 * p.halfExtentXZ) / cell)),
@@ -165,6 +184,7 @@ export class GIController {
    */
   update(dt, cameraPos = [0, 0, 0]) {
     if (!this.enabled || !this.resources) return { dispatched: false };
+    if (this._open) return this._open.update(dt, cameraPos);
     const { grid, probeGrid, irr, dep, queryNode, params: p } = this.resources;
 
     const rec = recenterGrid(this._originArr, [cameraPos[0], 0, cameraPos[2]], p.spacing, p.halfExtentXZ, this._originArr[1]);
@@ -213,6 +233,8 @@ export class GIController {
   }
 
   dispose() {
+
+  this._open?.dispose(); this._open = null;
     this._attachment?.detachAll();
     this._attachment = null;
     this.enabled = false;

@@ -11,7 +11,7 @@ environment.apply({ lighting: {
   shadows: { cascades: 4, maxFar: 600, mapSize: 2048, bias: -0.0003, normalBias: 0.04, fade: true, lightMargin: 200 },
   sky: { turbidity: 6, rayleigh: 2, mieCoefficient: 0.005, mieDirectionalG: 0.8, groundAlbedo: 0.25, visible: true },
   sun: { peak: 3.0, moon: 0.12 }, hemi: { day: 0.9, night: 0.12 }, fog: { near: 80, far: 900, follow: true },
-  post: { tonemap: 'aces'|'agx'|'neutral'|'none', exposure: 1, ao: { enabled, intensity, radius, thickness, samples, resolutionScale, normals: 'mrt'|'depth', skyDepthEps: 1e-3, debug: null|'mask' }, traa: { enabled: false } },
+  post: { tonemap: 'aces'|'agx'|'neutral'|'none', exposure: 1, ao: { enabled, intensity, radius, thickness, samples, resolutionScale, normals: 'mrt'|'depth', fadeStart: 80, fadeEnd: 150, debug: null|'mask' }, traa: { enabled: false } },
 } });
 environment.lighting.setTimeOfDay(h);          // live clock; or time.speed = hours/real-sec
 environment.lighting.markShadows(root);        // cast+receive on meshes; userData.noShadow opts out
@@ -78,7 +78,8 @@ PORT = taken from source; ASSUMED = my value, tune live.
 ## Tests
 `test/lighting-shadows|sun-sky|post|environment-wiring.test.js` — pure fns (sun at known times, ramp monotone, skyRadiance invariants), node-graph construction, fallback ladder, swap/restore, component wiring + default-OFF equivalence. Mutant per key test run (see lane report).
 
-### AO sky mask `post.ao.skyDepthEps` (lane ds-ao2)
-No opaque geometry ⇒ no occlusion. `aoTerm = select(depth >= 1-skyDepthEps, 1, mix(1, gtao.r, intensity))`, depth = `scenePass.getTextureNode('depth').sample(screenUV)` (explicit per-pixel sample, full-res). Pixels whose depth is still CLEAR (sky, beyond far plane, far translucent layers w/ `depthWrite:false`, e.g. DS cloud-sea) never get AO.
-NDC depth ≈ 1−near/z → default 1e-3 ≈ AO off beyond ~100 m @ near 0.1 (eps ≈ near/maxAoDist). Live DS proof: far sky/cloud meshes lie INSIDE the far plane (1−depth ≈ 8e-5 @1.2 km), so depth is not exactly 1 — eps 1e-5 masked nothing (mask view all grey), 3e-4 most, 1e-3 all streaks.
-`post.ao.debug:'mask'` = proof view: RED = masked (AO forced 1), grey = raw GTAO term; bypasses bloom.
+### AO distance fade `post.ao.fadeStart/fadeEnd` (lane ds-ao3; replaces ds-ao2 `skyDepthEps`)
+No AO far away. `dist = -perspectiveDepthToViewZ(depth.sample(screenUV).r, near, far)` (metres, full-res scenePass depth, explicit per-pixel sample); `weight = 1 - smoothstep(fadeStart, fadeEnd, dist)`; `aoTerm = mix(1, mix(1, gtao.r, intensity), weight)`. Cleared depth (sky) ⇒ dist = far ⇒ weight 0. Defaults 80/150 m — ASSUMED: AO radius 1.2 m ≈ 14 px @80 m, 7 px @150 m (1080p, fov 60); depth step z²·2⁻²⁴/near = 3.8 mm @80 m but 0.86 m @1.2 km (near 0.1) ≥ GTAO thickness ⇒ terraced streaks over far translucent layers (DS cloud-sea, depthWrite:false).
+Metres ⇒ independent of near/far (old NDC eps cut at ~near/eps: 100 m @0.1, 1000 m @1; hard edge). `fadeStart/fadeEnd` = live uniforms; near/far = `reference('near'|'far', camera)` on the SCENE camera (as GTAONode) — NOT global `cameraNear/cameraFar`, which follow the current render's camera = the post quad camera (likely why ds-ao 1481f44 failed live).
+Depth mode: standard perspective depth — `new THREE.WebGPURenderer({ antialias: true })` (client/kernel/renderer.js:59), no `logarithmicDepthBuffer`, three 0.180 has no reversed-depth option ⇒ `perspectiveDepthToViewZ` is exact. A game enabling logarithmic depth must swap in `logarithmicDepthToViewZ` (GTAONode does at line 288).
+`post.ao.debug:'mask'` = proof view: RED = (1-weight) i.e. faded out, grey = raw GTAO term; bypasses bloom.

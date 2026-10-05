@@ -7,7 +7,7 @@
 // depth-only (GTAO reconstructs normals from depth) → no AO. A render-time
 // throw on the lighting chain reverts to the original chain once.
 import * as THREE from 'three/webgpu';
-import { pass, mrt, output, normalView, velocity, float, mix, uniform, screenUV, vec3, vec4, select } from 'three/tsl';
+import { pass, mrt, output, normalView, velocity, float, mix, uniform, screenUV, vec3, vec4, smoothstep, reference, perspectiveDepthToViewZ } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
@@ -30,11 +30,14 @@ export const POST_DEFAULTS = {
     samples: 16,      // PORT: GTAONode default
     resolutionScale: 0.5, // PORT: GTAONode docs "0.5 sufficient for most scenes"
     normals: 'mrt',   // 'mrt' | 'depth' (skip the normal MRT target)
-    // lane ds-ao2: no opaque geometry => no occlusion. Where the full-res scenePass depth is >= 1-skyDepthEps (buffer still
-    // CLEAR: sky / beyond far plane / far translucent layers with depthWrite:false) aoTerm is forced to 1. NDC depth ~ 1-near/z,
-    // so eps ≈ near/maxAoDist: 1e-3 ≈ 100 m @ near 0.1. LIVE FINDING (DS cliff): far sky/cloud meshes sit INSIDE the far plane (~1.2 km → 1-depth ≈ 8e-5), so depth is NOT exactly 1 there; eps 1e-5 masked nothing, 3e-4 most, 1e-3 all streaks. ASSUMED default.
-    skyDepthEps: 1e-3,
-    // null | 'mask' — 'mask' outputs the mask as colour (RED = masked/no-AO, grey = raw GTAO term), bypassing bloom: PROOF view.
+    // lane ds-ao3: AO distance fade in METRES (replaces ds-ao2 NDC-depth skyDepthEps; near/far-independent). dist = -viewZ from the
+    // full-res scene depth sampled at screenUV. weight = 1 - smoothstep(fadeStart, fadeEnd, dist); aoTerm = mix(1, aoTerm, weight).
+    // WHY: far translucent layers (DS cloud-sea, depthWrite:false) sit inside the far plane; one depth step at range z is z^2*2^-24/near
+    // (0.86 m @1.2 km, near 0.1) >= GTAO thickness -> terraced occlusion = vertical streaks. ASSUMED defaults: AO radius 1.2 m spans
+    // ~14 px @80 m, ~7 px @150 m (1080p, fov 60) -> beyond that it is sub-detail anyway; depth step @80 m = 3.8 mm (near AO untouched).
+    fadeStart: 80,   // m, weight 1 at/below
+    fadeEnd: 150,    // m, weight 0 at/above (sky/cleared depth => dist=far => 0)
+    // null | 'mask' — 'mask' outputs (1-weight) as colour (RED = faded out/no-AO, grey = raw GTAO term), bypassing bloom: PROOF view.
     debug: null,
   },
   traa: { enabled: false },
@@ -48,8 +51,13 @@ export const resolvePost = (cfg = {}) => ({
   traa: merge(POST_DEFAULTS.traa, cfg.traa),
 });
 
-// CPU twin of the shader mask (tests + docs): 1 = no opaque geometry here (depth buffer cleared) ⇒ AO must not apply.
-export const aoSkyMask = (depth, eps) => (depth >= 1 - Math.max(0, eps) ? 1 : 0);
+// CPU twins of the shader (tests + docs). Standard perspective NDC depth (renderer is NOT log/reversed: client/kernel/renderer.js
+// `new THREE.WebGPURenderer({ antialias: true })`; three 0.180 has no reversed-depth option) -> view distance in metres.
+export const ndcDepthToDist = (depth, near, far) => (near * far) / (far - (far - near) * depth);
+export function aoDistanceWeight(dist, start, end) {
+  const t = Math.min(1, Math.max(0, (dist - start) / Math.max(1e-6, end - start)));
+  return 1 - t * t * (3 - 2 * t);
+}
 // Pure graph builder (no GPU needed): returns {outputNode, mode, nodes}.
 // mode ∈ 'ao+mrt' | 'ao+depth' | 'bloom-only'; throws never — degrades.
 export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35, radius: 0.4, threshold: 0.85 } }) {
@@ -69,7 +77,7 @@ export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35,
       const depth = scenePass.getTextureNode('depth');
       let lit = color;
       let aoPass = null;
-      let aoSky = null;
+      let aoFade = null;
       let debug = null;
       if (rung !== 'none') {
         aoPass = ao(depth, rung === 'mrt' ? scenePass.getTextureNode('normal') : null, camera);
@@ -82,14 +90,20 @@ export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35,
         const rawAo = aoPass.getTextureNode().r;
         // Explicit .sample(screenUV): a distinct per-pixel sample of the FULL-RES scene depth (not the default-uv node GTAO holds).
         const depthSample = depth.sample(screenUV);
-        const eps = uniform(C.ao.skyDepthEps);
-        const mask = depthSample.r.greaterThanEqual(float(1).sub(eps)).select(float(1), float(0));
-        aoSky = { eps, mask, depthSample };
-        const aoTerm = select(mask.greaterThan(0.5), float(1), mix(float(1), rawAo, float(C.ao.intensity)));
-        lit = color.mul(aoTerm);
+        const fadeStart = uniform(C.ao.fadeStart);
+const fadeEnd = uniform(C.ao.fadeEnd);
+// near/far bound to the SCENE camera (as GTAONode does): the global cameraNear/cameraFar nodes follow the camera of the CURRENT render,
+// which inside the post quad pass is the quad camera, not the scene camera (cause of ds-ao 1481f44 failing live).
+const near = reference('near', 'float', camera);
+const far = reference('far', 'float', camera);
+const dist = perspectiveDepthToViewZ(depthSample.r, near, far).negate();
+const weight = float(1).sub(smoothstep(fadeStart, fadeEnd, dist));
+aoFade = { fadeStart, fadeEnd, near, far, dist, weight, depthSample };
+const aoTerm = mix(float(1), mix(float(1), rawAo, float(C.ao.intensity)), weight);
+lit = color.mul(aoTerm);
         if (C.ao.debug === 'mask') {
           debug = 'mask';
-          lit = vec4(mix(vec3(rawAo), vec3(1, 0, 0), mask), 1);
+          lit = vec4(mix(vec3(rawAo), vec3(1, 0, 0), float(1).sub(weight)), 1);
         }
       }
       let resolved = lit;
@@ -98,13 +112,13 @@ export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35,
         traaPass = traa(lit, depth, scenePass.getTextureNode('velocity'), camera);
         resolved = traaPass;
       }
-      if (debug) return { outputNode: resolved, mode: rung === 'mrt' ? 'ao+mrt' : 'ao+depth', debug, nodes: { scenePass, aoPass, aoSky, traaPass, bloomPass: null }, error: lastErr };
+      if (debug) return { outputNode: resolved, mode: rung === 'mrt' ? 'ao+mrt' : 'ao+depth', debug, nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass: null }, error: lastErr };
       const bloomPass = bloom(resolved, bloomParams.strength, bloomParams.radius, bloomParams.threshold);
       return {
         outputNode: resolved.add(bloomPass),
         mode: rung === 'mrt' ? 'ao+mrt' : rung === 'depth' ? 'ao+depth' : 'bloom-only',
         debug,
-        nodes: { scenePass, aoPass, aoSky, traaPass, bloomPass },
+        nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass },
         error: lastErr,
       };
     } catch (err) {

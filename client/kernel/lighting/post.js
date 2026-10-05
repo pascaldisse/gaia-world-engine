@@ -11,6 +11,8 @@ import { pass, mrt, output, normalView, velocity, float, mix, uniform, screenUV,
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { AE_DEFAULTS, resolveAE, AutoExposureRig } from './autoexposure.js';
+export { AE_DEFAULTS };
 
 export const TONEMAPS = {
   aces: THREE.ACESFilmicToneMapping,
@@ -41,6 +43,8 @@ export const POST_DEFAULTS = {
     debug: null,
   },
   traa: { enabled: false },
+  // opt-in eye adaptation (autoexposure.js, docs/AUTO-EXPOSURE.md); multiplies INTO the chain before bloom/tonemap, on top of static `exposure` + env dips
+  autoExposure: { ...AE_DEFAULTS },
   bloom: null,        // null = inherit post.setBloom values (Environment owns them)
 };
 
@@ -49,6 +53,7 @@ export const resolvePost = (cfg = {}) => ({
   ...POST_DEFAULTS, ...cfg,
   ao: merge(POST_DEFAULTS.ao, cfg.ao),
   traa: merge(POST_DEFAULTS.traa, cfg.traa),
+  autoExposure: resolveAE(cfg.autoExposure),
 });
 
 // CPU twins of the shader (tests + docs). Standard perspective NDC depth (renderer is NOT log/reversed: client/kernel/renderer.js
@@ -60,7 +65,7 @@ export function aoDistanceWeight(dist, start, end) {
 }
 // Pure graph builder (no GPU needed): returns {outputNode, mode, nodes}.
 // mode ∈ 'ao+mrt' | 'ao+depth' | 'bloom-only'; throws never — degrades.
-export function buildChain({ scene, camera, cfg, bloomParams = { strength: 0.35, radius: 0.4, threshold: 0.85 } }) {
+export function buildChain({ scene, camera, cfg, renderer = null, bloomParams = { strength: 0.35, radius: 0.4, threshold: 0.85 } }) {
   const C = resolvePost(cfg);
   const wantAO = C.ao.enabled;
   const wantTRAA = C.traa.enabled;
@@ -112,13 +117,21 @@ lit = color.mul(aoTerm);
         traaPass = traa(lit, depth, scenePass.getTextureNode('velocity'), camera);
         resolved = traaPass;
       }
-      if (debug) return { outputNode: resolved, mode: rung === 'mrt' ? 'ao+mrt' : 'ao+depth', debug, nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass: null }, error: lastErr };
+      // AUTO-EXPOSURE: meter = HDR scene colour (pre-AO/bloom/tonemap); the exposure uniform multiplies BEFORE bloom so bloom threshold sees exposed light
+      let autoExposure = null;
+      if (C.autoExposure.enabled && !debug) {
+        try {
+          autoExposure = new AutoExposureRig({ renderer, colorTex: scenePass.getTexture('output'), cfg: C.autoExposure });
+          resolved = vec4(resolved.rgb.mul(autoExposure.expMul), resolved.a);
+        } catch (aeErr) { console.warn('[gaia] auto-exposure unavailable:', aeErr); autoExposure = null; }
+      }
+      if (debug) return { outputNode: resolved, mode: rung === 'mrt' ? 'ao+mrt' : 'ao+depth', debug, nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass: null, autoExposure: null }, error: lastErr };
       const bloomPass = bloom(resolved, bloomParams.strength, bloomParams.radius, bloomParams.threshold);
       return {
         outputNode: resolved.add(bloomPass),
         mode: rung === 'mrt' ? 'ao+mrt' : rung === 'depth' ? 'ao+depth' : 'bloom-only',
         debug,
-        nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass },
+        nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass, autoExposure },
         error: lastErr,
       };
     } catch (err) {
@@ -142,6 +155,7 @@ export class LightingPost {
   }
   get supported() { return !!this.post?.postProcessing; }
   get mode() { return this.chain?.mode ?? 'off'; }
+  get autoExposure() { return this.chain?.nodes?.autoExposure ?? null; }
 
   install(cfg = {}, bloomParams) {
     const C = resolvePost(cfg);
@@ -149,7 +163,7 @@ export class LightingPost {
     if (!this.supported || this.failed) return false;
     if (this.active) this._restore(false);
     let chain;
-    try { chain = buildChain({ scene: this.scene, camera: this.camera, cfg: C, bloomParams }); } catch (err) {
+    try { chain = buildChain({ scene: this.scene, camera: this.camera, cfg: C, renderer: this.renderer, bloomParams }); } catch (err) {
       console.warn('[gaia] lighting post chain unavailable, keeping kernel chain:', err);
       this.failed = true;
       return false;
@@ -169,7 +183,7 @@ export class LightingPost {
     };
     const origRender = this._orig.render;
     this.post.render = () => {
-      try { origRender(); } catch (err) {
+      try { origRender(); chain.nodes.autoExposure?.afterRender(); } catch (err) {
         console.warn('[gaia] lighting post chain threw at render, reverting to kernel chain:', err);
         this.failed = true;
         this._restore(true);

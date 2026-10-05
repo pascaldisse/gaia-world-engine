@@ -2,9 +2,10 @@
 // nothing and touches no scene object. docs/LIGHTING-OPENWORLD.md
 import { SunShadows, SHADOW_DEFAULTS, markShadows } from './shadows.js';
 import { sunPosition, sunFromDirection, sunLight, daylight, SUN_DEFAULTS } from './sun.js';
+import { LightingPost, POST_DEFAULTS, resolvePost, TONEMAPS } from './post.js';
 import { SKY_DEFAULTS, skyRadiance, skyRadianceTSL, skySummary, createSkyMesh, applySkyParams } from './sky.js';
 
-export { markShadows, SHADOW_DEFAULTS, SKY_DEFAULTS, SUN_DEFAULTS, skyRadiance, skyRadianceTSL, skySummary, sunPosition, sunLight };
+export { LightingPost, POST_DEFAULTS, TONEMAPS, markShadows, SHADOW_DEFAULTS, SKY_DEFAULTS, SUN_DEFAULTS, skyRadiance, skyRadianceTSL, skySummary, sunPosition, sunLight };
 
 export const LIGHTING_DEFAULTS = {
   enabled: false,
@@ -16,6 +17,7 @@ export const LIGHTING_DEFAULTS = {
   sun: { ...SUN_DEFAULTS },
   hemi: { day: 0.9, night: 0.12 }, // hemisphere light peak / floor — ASSUMED
   fog: { near: 80, far: 900, follow: true }, // fog colour tracks sky horizon — near/far ASSUMED
+  post: { ...POST_DEFAULTS },                // GTAO / TRAA / tonemap / exposure (post.js)
 };
 
 const merge = (d, c) => ({ ...d, ...(c ?? {}) });
@@ -40,6 +42,9 @@ export class LightingController {
     this._lastSunDir = null;
     this._paramsKey = '';
     this._saved = null;
+    this.lightingPost = post ? new LightingPost({ post, scene, camera, renderer }) : null;
+    this.exposure = 1;            // Environment reads this while enabled
+    this.bloomParams = undefined; // Environment hands its bloom params here before configure()
   }
 
   _resolve(cfg) {
@@ -52,6 +57,7 @@ export class LightingController {
       sun: merge(LIGHTING_DEFAULTS.sun, cfg.sun),
       hemi: merge(LIGHTING_DEFAULTS.hemi, cfg.hemi),
       fog: merge(LIGHTING_DEFAULTS.fog, cfg.fog),
+      post: resolvePost(cfg.post ?? {}),
     };
   }
 
@@ -79,6 +85,7 @@ export class LightingController {
     if (c.shadows && c.shadows.enabled !== false && this.sunShadows) this.sunShadows.enable(c.shadows);
     else this.sunShadows?.disable();
     this._applySkyVisibility();
+    this._applyPost();
     this._paramsKey = ''; // force a recompute
     this._lastSunDir = null;
     this.update(0);
@@ -89,11 +96,24 @@ export class LightingController {
     this.enabled = true;
     // remember what we override so disable restores it
     this._saved = {
+      toneMapping: this.renderer?.toneMapping,
       sunColor: this.sun?.color.clone(), sunIntensity: this.sun?.intensity,
       sunPos: this.sun?.position.clone(),
       hemiColor: this.hemi?.color.clone(), hemiGround: this.hemi?.groundColor.clone(),
       hemiIntensity: this.hemi?.intensity,
     };
+  }
+
+  _applyPost() {
+    const c = this.config.post;
+    this.exposure = c.exposure;
+    if (!this.lightingPost) {
+      if (this.renderer) this.renderer.toneMapping = TONEMAPS[c.tonemap] ?? TONEMAPS.aces;
+      return;
+    }
+    this.lightingPost.camera = this.camera ?? this.lightingPost.camera;
+    const b = this.bloomParams; // Environment sets this from its bloom params
+    this.lightingPost.install(c, b);
   }
 
   _applySkyVisibility() {
@@ -115,6 +135,9 @@ export class LightingController {
       this.sun.color.copy(s.sunColor); this.sun.intensity = s.sunIntensity; this.sun.position.copy(s.sunPos);
       this.hemi.color.copy(s.hemiColor); this.hemi.groundColor.copy(s.hemiGround); this.hemi.intensity = s.hemiIntensity;
     }
+    this.lightingPost?.uninstall();
+    if (s && this.renderer && s.toneMapping !== undefined) this.renderer.toneMapping = s.toneMapping;
+    this.exposure = 1;
     this._saved = null;
     this.skySummary = null;
     this.sunState = null;

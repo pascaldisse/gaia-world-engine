@@ -63,13 +63,14 @@ export async function runOpenParity({ rendererFactory } = {}) {
     o.setBounceScale(1); o.irr.alpha.value = 0.9;
     for (let i = 0; i < 60; i++) gi.update(0.016, cam);
     const irr2 = new Float32Array(await renderer.getArrayBufferAsync(o.atlases.irradiance.value));
-    const up = (pos) => { // nearest finest probe, +Y irradiance
-      const c = o.cascades[0]; const cell = pos.map((v) => Math.round(v / c.spacing)); const slot = ((cell[0] % 8 + 8) % 8) + 8 * (((cell[1] % 4 + 4) % 4) + 4 * ((cell[2] % 8 + 8) % 8));
-      return rd3(irr2, (c.baseIndex + slot) * IRR * IRR + texel([0, 1, 0])); };
-    const tunnel = lum(up([16, 5, 32])), open = lum(up([48, 5, 32]));
+    // nearest RESIDENT probe (toroidal window: slot = cell mod dims ALIASES positions outside the window -> resolve via cellOfSlot/baseCells, never cell%dims)
+    const nearest = (pos) => { let best = null; for (const c of o.cascades) for (let slot = 0; slot < c.count; slot++) { const w = cellToWorld(cellOfSlot(c, slot, o.baseCells[c.index]), c.spacing); const d = Math.hypot(w[0] - pos[0], w[1] - pos[1], w[2] - pos[2]); if (!best || d < best.d - 1e-6) best = { d, c, slot, w }; } return best; };
+    const at = (pos, dir) => { const n = nearest(pos); return { v: rd3(irr2, (n.c.baseIndex + n.slot) * IRR * IRR + texel(dir)), cascade: n.c.index, slot: n.slot, w: n.w, d: n.d }; };
+    const up = (pos) => at(pos, [0, 1, 0]).v;
+    out.notes.push({ tunnelProbe: at([26, 5, 32], [0, 1, 0]), openProbe: at([36, 5, 32], [0, 1, 0]) });
+    const tunnel = lum(up([26, 5, 32])), open = lum(up([36, 5, 32]));
     out.checks.tunnelDarker = { tunnel, open, pass: tunnel < open * 0.6 };
-    const c0 = o.cascades[0]; const cellW = [38, 5, 32].map((v) => Math.round(v / 2)); const slotW = ((cellW[0] % 8 + 8) % 8) + 8 * (((cellW[1] % 4 + 4) % 4) + 4 * ((cellW[2] % 8 + 8) % 8));
-    const e = rd3(irr2, (c0.baseIndex + slotW) * IRR * IRR + texel([1, 0, 0]));
+    const e = at([38, 5, 32], [1, 0, 0]).v;
     out.checks.redBleed = { e, pass: e[0] > 1.5 * e[1] && e[0] > 0.01 };
     // (4) incremental upload
     gi.update(0.016, cam); const before = o.stats.bricksUploaded; gi.addMesh('car', { triangles: layers('y', 3, 4, 20, 22, 20, 22), color: [1, 1, 1] }); gi.update(0.016, cam);

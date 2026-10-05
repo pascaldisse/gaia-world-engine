@@ -47,8 +47,6 @@ export class LightingController {
     this._saved = null;
     this.lightingPost = post ? new LightingPost({ post, scene, camera, renderer }) : null;
     this.exposure = 1;            // Environment reads this while enabled
-// debug: {ev,target,lum,meter,mul,reads,lag,...} or null when post.autoExposure is off
-// (getter defined below)
     this.bloomParams = undefined; // Environment hands its bloom params here before configure()
   }
 
@@ -67,8 +65,9 @@ export class LightingController {
   };
   }
 
+  // debug: {ev,target,lum,meter,mul,reads,lag,...} or null when post.autoExposure is off
   get autoExposureState() { return this.lightingPost?.autoExposure?.state ?? null; }
-setCamera(camera) {
+  setCamera(camera) {
     this.camera = camera;
     this.sunShadows?.syncCamera(camera);
   }
@@ -179,6 +178,7 @@ setCamera(camera) {
     }
     this.sunShadows?.syncCamera(camera ?? this.camera);
     this.sunShadows?.tick();
+    this.lightingPost?.autoExposure?.update(dt); // eye adaptation step (CPU, framerate-independent) -> exposure uniform
   }
 
   _recompute(pos, L) {

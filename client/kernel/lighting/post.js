@@ -122,7 +122,7 @@ lit = color.mul(aoTerm);
       if (C.autoExposure.enabled && !debug) {
         try {
           autoExposure = new AutoExposureRig({ renderer, colorTex: scenePass.getTexture('output'), cfg: C.autoExposure });
-          resolved = vec4(resolved.rgb.mul(autoExposure.expMul), resolved.a);
+          resolved = vec4(resolved.rgb.mul(autoExposure.expMul).add(autoExposure.meter.keepAlive), resolved.a);
         } catch (aeErr) { console.warn('[gaia] auto-exposure unavailable:', aeErr); autoExposure = null; }
       }
       if (debug) return { outputNode: resolved, mode: rung === 'mrt' ? 'ao+mrt' : 'ao+depth', debug, nodes: { scenePass, aoPass, aoFade, traaPass, bloomPass: null, autoExposure: null }, error: lastErr };

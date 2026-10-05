@@ -109,34 +109,33 @@ export function buildMeter(colorTex, cfg) {
   const W = [];
   const logL = (rgb) => log2(max(dot(rgb, vec3(0.2126, 0.7152, 0.0722)), LOG_FLOOR)).min(LOG_MAX);
   // stage 1: 4×4 bilinear taps over the cell footprint -> mean log2 lum (taps at ±1.5/±0.5 quarter-cells)
-  const reduce = (src, outN, isHdr) => {
+  // mean log2 luma over a 4x4 tap footprint of one output cell (must be called INSIDE an Fn)
+  const meanTaps = (src, outN, isHdr) => {
     const step = 1 / outN;
-    return Fn(() => {
-      const acc = float(0).toVar();
-      for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) {
-        const o = vec2((a - 1.5) * 0.25 * step, (b - 1.5) * 0.25 * step);
-        const s = src.sample(uv().add(o));
-        acc.addAssign(isHdr ? logL(s.rgb) : s.r);
-      }
-      return vec4(acc.div(16), 0, 0, 1);
-    })();
+    const acc = float(0).toVar();
+    for (let a = 0; a < 4; a++) for (let b = 0; b < 4; b++) {
+      const o = vec2((a - 1.5) * 0.25 * step, (b - 1.5) * 0.25 * step);
+      const s = src.sample(uv().add(o));
+      acc.addAssign(isHdr ? logL(s.rgb) : s.r);
+    }
+    return acc.div(16);
   };
   let prev = colorNode;
   const stages = [];
   STAGES.forEach((n, k) => {
-    const node = k === STAGES.length - 1
+    const last = k === STAGES.length - 1, src = prev;
+    const node = Fn(() => {
+      const m = meanTaps(src, n, k === 0);
+      if (!last) return vec4(m, 0, 0, 1);
       // last reduce additionally stores the cell weight in G (one fetch per cell in the final pass)
-      ? Fn(() => {
-          const base = reduce(prev, n, false);
-          const d = uv().mul(2).sub(1);
-          const f = exp(dot(d, d).mul(-4));
-          const w = float(1).add(f.sub(1).mul(cw));
-          return vec4(base.r, w, 0, 1);
-        })()
-      : reduce(prev, n, k === 0);
+      const d = uv().mul(2).sub(1);
+      const f = exp(dot(d, d).mul(-4));
+      return vec4(m, float(1).add(f.sub(1).mul(cw)), 0, 1);
+    })();
     const r = rtt(node, n, n, { type: THREE.HalfFloatType });
     r.renderTarget.texture.minFilter = r.renderTarget.texture.magFilter = k === STAGES.length - 1 ? THREE.NearestFilter : THREE.LinearFilter;
     r.renderTarget.texture.generateMipmaps = false;
+    r.autoUpdate = false; // run by hand (run()); the node still has to sit in the output graph so RTTNode.setup() wires its quad (keepAlive)
     stages.push(r);
     prev = r;
   });
@@ -164,12 +163,15 @@ export function buildMeter(colorTex, cfg) {
   const final = rtt(fin, 1, 1, { type: THREE.FloatType });
   final.renderTarget.texture.minFilter = final.renderTarget.texture.magFilter = THREE.NearestFilter;
   final.renderTarget.texture.generateMipmaps = false;
+  final.autoUpdate = false;
   const all = [...stages, final];
   const out = {
     stages, final, uniforms: { centerWeight: cw, lowPct: lowP, highPct: highP },
     setCfg(c) { const r = resolveAE(c); cw.value = r.centerWeight; lowP.value = r.lowPct; highP.value = r.highPct; },
     // run the reduce chain (call AFTER the scene pass rendered this frame)
-    run(renderer) { for (const n of all) n.updateBefore({ renderer }); },
+    run(renderer) { for (const n of all) { n.textureNeedsUpdate = true; n.updateBefore({ renderer }); } },
+    // zero-valued node that references every RTT so the output graph builds them (RTTNode._rttNode is only set in setup()); adds ~0 cost
+    keepAlive: all.reduce((a, n) => a.add(n.r.mul(0)), float(0)),
     dispose() { for (const n of all) { n.renderTarget?.dispose?.(); n.dispose?.(); } },
   };
   return out;

@@ -20,6 +20,18 @@ environment.lighting.skySummary                // {zenith,horizon,ground} each [
 environment.lighting.onSkyChange((summary, sunState) => …)   // fires on sun/sky change
 import { skyRadiance, skyRadianceTSL } from 'client/kernel/lighting/index.js'
 ```
+### Per-concern ownership `lighting.owns` (lane ds-sky)
+```js
+lighting: { enabled: true, owns: { fog: true, background: true, hemi: true, sky: true } }   // each default true = historic behaviour, bit-identical (test: lighting-owns)
+```
+`false` = the game keeps that concern; sun, CSM shadows, AO, tonemap/exposure and the GI feed still run.
+| key | false means |
+|---|---|
+| `fog` | `scene.fog` colour AND near/far untouched (the game's own fog) |
+| `background` | `scene.background` untouched (not painted with the horizon colour) |
+| `hemi` | hemisphere light colour/ground/intensity untouched |
+| `sky` | no analytic Preetham dome is created (the game's authored sky meshes stay); `skySummary` becomes the external one below |
+**External sky summary** (for `owns.sky:false`): `environment.lighting.setSkySummary({zenith,horizon,ground})` (each `[r,g,b]`) replaces the Preetham summary → hemi tint (if owned), fog-follow (if owned), and every `onSkyChange` listener (the GI feed: `onSkyChange(s => environment.gi.setSkySummary(s))`; `gi.setSkySummary` is the same call GI already had). `setSkySummary(null)` clears → Preetham again. Ignored while `owns.sky !== false`. A game with no external summary gets the Preetham one (fallback). Note: Environment crossfades are still suppressed while lighting is enabled (an un-owned concern is simply left as `apply()` wrote it).
 While enabled: lighting owns sun colour/intensity/position, hemi, fog colour(+near/far), `scene.background` (kept a Color = horizon), exposure, tonemap. `Environment.update()` skips crossfade, uses `lighting.exposure`, never overwrites lights per frame; recompute only when sun/sky changes. `apply()` without lighting → disables, params win (no stale restore).
 Camera: `Environment` ctor takes `camera` (main.js passes it). Other games: pass it or call `setCamera`.
 

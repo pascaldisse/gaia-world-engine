@@ -89,7 +89,7 @@ export class LightingController {
     }
     if (!this.enabled) this._enable();
     this.timeOfDay = c.time.timeOfDay;
-    if (c.shadows && c.shadows.enabled !== false && this.sunShadows) this.sunShadows.enable(c.shadows);
+    if (c.shadows && c.shadows.enabled !== false && this.sunShadows) this.sunShadows.enable(c.shadows, this.renderer);
     else this.sunShadows?.disable();
     this._applySkyVisibility();
     this._applyPost();

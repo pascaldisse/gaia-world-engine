@@ -65,9 +65,8 @@ export function fibonacciSphereDirs(count, rotation = null) {
     const y = 1 - (i / Math.max(1, count - 1)) * 2;
     const radius = Math.sqrt(Math.max(0, 1 - y * y));
     const theta = phi * i;
-    let x = Math.cos(theta) * radius;
-    let z = Math.sin(theta) * radius;
-    if (rotation) [x, y, z] = applyRotation([x, y, z], rotation); // eslint-disable-line no-unused-vars
+    const x = Math.cos(theta) * radius;
+    const z = Math.sin(theta) * radius;
     dirs.push(rotation ? applyRotation([x, y, z], rotation) : [x, y, z]);
   }
   return dirs;

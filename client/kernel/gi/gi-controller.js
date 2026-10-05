@@ -137,6 +137,10 @@ removeMesh(id) { return this._open ? this._open.removeMesh(id) : false; }
 addThreeMesh(id, mesh) { if (!this._open) return false; this._open.addThreeMesh(id, mesh); return true; }
 /** open mode: environment.lighting.skySummary {zenith,horizon,ground} */
 setSkySummary(s) { this._open?.setSkySummary(s); }
+  /** open mode: live skyScale (probe-side sky radiance multiplier) */
+  setSkyScale(v) { this._open?.setSkyScale(v); }
+  /** open mode + ambient:'replace': set the hemi ambient by hand {sky, ground, intensity} (otherwise auto-synced from the scene's HemisphereLight each update) */
+  setAmbient(a) { this._open?.setAmbient(a); }
 _makeVoxelConfig(p) {
     const cell = p.voxelCellSize;
     const dims = {

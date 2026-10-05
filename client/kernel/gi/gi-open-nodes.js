@@ -11,6 +11,7 @@ import {
 import { StorageInstancedBufferAttribute } from 'three/webgpu';
 import { FIB_PHI, createProbeAtlases } from './gi-nodes.js';
 import { CELL_BIAS, SOLID_BIT } from './voxel-window.js';
+import { COVERAGE_WEIGHT_EPS, COVERAGE_WEIGHT_FADE } from './gi-reference.js';
 
 export { createProbeAtlases };
 export const OPEN_MARCH_STEPS = 96; // PLACEHOLDER: 96 half-cell steps = 48 m at 1 m cells
@@ -209,22 +210,40 @@ function containsAndBorder(cascade, baseCell, p) {
   }
   return { inside, border: max(float(0), m) };
 }
-/** finest-containing cascade + border blend + fall-through, mirrors referenceQueryCascades. @returns vec3 irradiance E */
-export function queryCascadesTSL({ atlases, cascades, baseCellU, worldPos, normal, blendCells = 1.5, tag = 'm' }) {
-  const n = cascades.length;
-  const q = cascades.map((c, k) => queryCascadeTSL({ atlases, cascade: c, baseCell: baseCellU[k], worldPos, normal, tag: `${tag}${k}` }));
-  const cb = cascades.map((c, k) => containsAndBorder(c, baseCellU[k], worldPos));
-  const usable = (k) => cb[k].inside.and(q[k].weight.greaterThan(1e-6));
-  let result = select(usable(n - 1), q[n - 1].value, vec3(0, 0, 0));
-  for (let k = n - 2; k >= 0; k--) {
-    const wFine = select(usable(k + 1), smooth01(cb[k].border.div(blendCells)), float(1));
-    result = select(usable(k), mix(result, q[k].value, wFine), result);
-  }
-  return result;
+/** coverage gates: usable if weightSum > EPS; ramps in smoothly over [EPS .. FADE] (constants live in gi-reference.js = CPU mirror) */
+export { COVERAGE_WEIGHT_EPS, COVERAGE_WEIGHT_FADE };
+/** finest-containing cascade + border blend + fall-through, mirrors referenceQueryCascades.
+* @returns {{value: vec3 irradiance E, coverage: float c in [0,1]}} coverage = 1 inside the coarsest cascade, smooth fade to 0 over its outer `blendCells`, 0 outside / no usable probe weight */
+export function queryCascadesCoverageTSL({ atlases, cascades, baseCellU, worldPos, normal, blendCells = 1.5, tag = 'm' }) {
+const n = cascades.length;
+const q = cascades.map((c, k) => queryCascadeTSL({ atlases, cascade: c, baseCell: baseCellU[k], worldPos, normal, tag: `${tag}${k}` }));
+const cb = cascades.map((c, k) => containsAndBorder(c, baseCellU[k], worldPos));
+const usable = (k) => cb[k].inside.and(q[k].weight.greaterThan(COVERAGE_WEIGHT_EPS));
+let result = select(usable(n - 1), q[n - 1].value, vec3(0, 0, 0));
+for (let k = n - 2; k >= 0; k--) {
+const wFine = select(usable(k + 1), smooth01(cb[k].border.div(blendCells)), float(1));
+result = select(usable(k), mix(result, q[k].value, wFine), result);
 }
-/** material-side query node (probe GI → three IrradianceNode), same shape as gi-nodes createGIQueryNode's consumer */
-export function createOpenQueryNode({ atlases, cascades, baseCellU, worldPositionNode, normalNode, blendCells }) {
-  return Fn(() => queryCascadesTSL({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }))();
+const cover = (k) => select(usable(k), smooth01(q[k].weight.div(COVERAGE_WEIGHT_FADE)).mul(k === n - 1 ? smooth01(cb[k].border.div(blendCells)) : float(1)), float(0));
+let coverage = cover(n - 1);
+for (let k = n - 2; k >= 0; k--) coverage = max(coverage, cover(k));
+return { value: result, coverage };
+}
+/** finest-containing cascade + border blend + fall-through, mirrors referenceQueryCascades. @returns vec3 irradiance E */
+export function queryCascadesTSL(args) { return queryCascadesCoverageTSL(args).value; }
+/** AMBIENT-REPLACE uniforms: the scene HemisphereLight's irradiance premultiplied by intensity (what three's HemisphereLightNode adds to context.irradiance) */
+export function createAmbientUniforms(a = {}) { return { sky: uniform(vec3(...(a.sky ?? [0, 0, 0]))), ground: uniform(vec3(...(a.ground ?? [0, 0, 0]))) }; }
+/** hemi irradiance for normal n: mix(ground, sky, 0.5*n.y+0.5) - mirror of three r180 HemisphereLightNode.setup (light direction = +Y) */
+export const hemiIrradianceTSL = (n, amb) => mix(amb.ground, amb.sky, n.y.mul(0.5).add(0.5));
+/** 'replace' mode term: c*(gi - hemi(n)). Added next to the hemi light's own contribution -> net irradiance = mix(hemi, gi, c) */
+export const ambientReplaceTSL = (gi, coverage, n, amb) => coverage.mul(gi.sub(hemiIrradianceTSL(n, amb)));
+/** material-side query node (probe GI -> three IrradianceNode). ambient 'add' (default) = raw GI; 'replace' = c*(gi - hemi(n)) so GI substitutes the hemi sky ambient where it has coverage */
+export function createOpenQueryNode({ atlases, cascades, baseCellU, worldPositionNode, normalNode, blendCells, ambient = 'add', ambientU = null }) {
+if (ambient === 'replace') {
+if (!ambientU) throw new Error("createOpenQueryNode: ambient 'replace' needs ambientU (createAmbientUniforms)");
+return Fn(() => { const q = queryCascadesCoverageTSL({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }); return ambientReplaceTSL(q.value, q.coverage, normalNode, ambientU); })();
+}
+return Fn(() => queryCascadesTSL({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }))();
 }
 
 // ------------------------------------------------------------------ per-cascade round-robin batch → global probe id (ONE dispatch for all cascades)

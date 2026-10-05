@@ -7,7 +7,7 @@ import { VoxelWindow, VOXEL_DEFAULTS, extractMeshTriangles } from './voxel-windo
 import { OPEN_DEFAULTS } from './gi-reference.js';
 import {
   createProbeAtlases, createVoxelStorage, setVoxelBase, flushVoxelUploads, createCascadeUniforms, setCascadeBases,
-  createSkyUniforms, createBatchUniforms, setBatch, createOpenIrradianceKernel, createOpenDepthKernel, createOpenQueryNode,
+  createSkyUniforms, createAmbientUniforms, createBatchUniforms, setBatch, createOpenIrradianceKernel, createOpenDepthKernel, createOpenQueryNode,
 } from './gi-open-nodes.js';
 import { createRayParallelKernels } from './gi-open-raypar.js';
 import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
@@ -17,6 +17,9 @@ export const OPEN_PARAM_DEFAULTS = {
   voxel: VOXEL_DEFAULTS, // {cellSize, brickSize, bricks, maxBricksPerUpdate}
   sky: OPEN_DEFAULTS.sky, // fallback 3-colour gradient when no skySummary
   adaptive: OPEN_DEFAULTS.adaptive,
+  ambient: 'add', // 'add' (default, unchanged: GI irradiance is ADDED to whatever the scene's hemi light contributes) | 'replace' (GI substitutes the hemi sky ambient where it has coverage: net irradiance = mix(hemi(n), gi, coverage); coverage fades to 0 over the coarsest cascade's outer blendCells -> hemi takes over outside the volume)
+  skyScale: 1, // x on the sky radiance the probes see (miss rays + sky-lit bounce). 1 = as published by lighting.skySummary; set to hemiLum/giOpenSkyLum to CALIBRATE the GI open-sky level to the hemi light (docs/GI-AMBIENT.md)
+  ambientLight: null, // 'replace': HemisphereLight-like {color, groundColor, intensity} synced every update(); null = first HemisphereLight found in the scene (cached; re-searched only if it leaves the scene)
   relocateMax: null, // world units; null = half the finest spacing
   maxMarchDist: 48, // = OPEN_MARCH_STEPS*cell/2 at 1 m cells
   rayParallel: true, // DDGI 2-pass (trace: 1 thread per probe-ray -> ray buffer, then per-texel blend; docs/GI-RAYPAR.md). false = legacy per-texel full-ray kernels (A/B)
@@ -37,7 +40,10 @@ export class GIOpen {
     this.vs = createVoxelStorage(this.win);
     this.baseCellU = createCascadeUniforms(this.cascades);
     this.batch = createBatchUniforms();
-    this.sky = createSkyUniforms(p.sky ?? OPEN_DEFAULTS.sky);
+    this.skyScale = p.skyScale ?? 1; this._skyRaw = { ...(p.sky ?? OPEN_DEFAULTS.sky) };
+    this.sky = createSkyUniforms(this._skyRaw); this._applySky();
+    this.ambientMode = p.ambient === 'replace' ? 'replace' : 'add';
+    this.ambientU = createAmbientUniforms(); this._ambientManual = false; this._hemi = p.ambientLight ?? null; this._hemiMiss = 0; this.ambientSyncs = 0;
     this.sun = { direction: uniform(vec3(...p.sun.direction)), color: uniform(vec3(...p.sun.color)), intensity: uniform(p.sun.intensity) };
     const relocateMax = p.relocateMax ?? this.cascades[0].spacing * 0.5;
     const maxDist = Math.min(p.voxelMaxDist ?? 48, p.maxMarchDist ?? 48);
@@ -47,7 +53,7 @@ export class GIOpen {
     if (this.rayParallel) { const k = createRayParallelKernels({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.trace = k.trace; this.rayBuf = k.rayBuf; this.irr = k.irr; this.dep = k.dep; }
     else { this.irr = createOpenIrradianceKernel({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.dep = createOpenDepthKernel(common); }
     if (p.bounceScale != null) this.irr.bounceScale.value = p.bounceScale;
-    this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells });
+    this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells, ambient: this.ambientMode, ambientU: this.ambientU });
     this.baseCells = null; this.cursors = this.cascades.map(() => 0);
     this.stats = { frames: 0, bricksRebuilt: 0, bricksUploaded: 0, freshProbes: 0, dispatchedProbes: 0 };
     this.attachment?.attachAll(this.scene, this.queryNode);
@@ -59,7 +65,23 @@ export class GIOpen {
   /** convenience: three Mesh (matrixWorld baked; material.color × material.userData.meanColor) */
   addThreeMesh(id, mesh) { this.win.addMesh(id, extractMeshTriangles(mesh)); }
   /** environment.lighting.skySummary {zenith,horizon,ground} → sky uniforms (live, no rebuild) */
-  setSkySummary(s) { if (!s) return; for (const k of ['zenith', 'horizon', 'ground']) if (s[k]) this.sky[k].value.set(s[k][0], s[k][1], s[k][2]); }
+  setSkySummary(s) { if (!s) return; for (const k of ['zenith', 'horizon', 'ground']) if (s[k]) this._skyRaw[k] = [s[k][0], s[k][1], s[k][2]]; this._applySky(); }
+  _applySky() { const k = this.skyScale; for (const c of ['zenith', 'horizon', 'ground']) { const v = this._skyRaw[c]; this.sky[c].value.set(v[0] * k, v[1] * k, v[2] * k); } }
+  /** x on the probe-side sky radiance (see OPEN_PARAM_DEFAULTS.skyScale). Live: re-applies the last summary */
+  setSkyScale(v) { this.skyScale = v; this._applySky(); }
+  /** 'replace' mode: set the hemi ambient by hand {sky, ground (rgb array|{r,g,b}), intensity=1}; stops the per-update light sync */
+  setAmbient({ sky, ground, intensity = 1 } = {}) { this._ambientManual = true; this._writeAmbient(sky, ground, intensity); }
+  _writeAmbient(sky, ground, intensity) { const rgb = (c) => (Array.isArray(c) ? c : c ? [c.r, c.g, c.b] : [0, 0, 0]); const s = rgb(sky), g = rgb(ground); this.ambientU.sky.value.set(s[0] * intensity, s[1] * intensity, s[2] * intensity); this.ambientU.ground.value.set(g[0] * intensity, g[1] * intensity, g[2] * intensity); this.ambientSyncs++; }
+  /** 'replace' mode: copy the scene hemi light into the ambient uniforms (cheap; cached light, re-searched only when missing). Called by update(); callers that throttle update() may call it directly */
+  syncAmbient() {
+    if (this.ambientMode !== 'replace' || this._ambientManual) return false;
+    let h = this._hemi;
+    if (!h || (h.parent === null && !this.p.ambientLight)) { // gone from the scene -> re-search (throttled when none exists)
+      h = null; if (this._hemiMiss-- <= 0) { this.scene?.traverse?.((o) => { if (!h && o.isHemisphereLight) h = o; }); this._hemiMiss = h ? 0 : 120; } this._hemi = h;
+    }
+    if (!h) return false;
+    this._writeAmbient(h.color, h.groundColor, h.intensity ?? 1); return true;
+  }
   setBounceScale(v) { this.irr.bounceScale.value = v; }
   setSun(sun) { if (sun.direction) this.sun.direction.value.set(...sun.direction); if (sun.color) this.sun.color.value.set(...sun.color); if (sun.intensity != null) this.sun.intensity.value = sun.intensity; }
 
@@ -77,6 +99,7 @@ export class GIOpen {
     return n;
   }
   update(dt, cameraPos = [0, 0, 0]) {
+    this.syncAmbient();
     this.win.setCenter(cameraPos); setVoxelBase(this.vs, this.win);
     const r = this.win.update();
     const uploaded = flushVoxelUploads(this.vs, r.rebuilt);

@@ -15,7 +15,7 @@ import { fibonacciSphereDirs, integrateProbeIrradiance } from './irradiance.js';
 import { probeIndex, gridToWorld } from './probe-grid.js';
 import { marchOccupancy } from './voxelize.js';
 import { isSolid, unpackAlbedo } from './voxel-window.js';
-import { selectCascades, cellToWorld, slotOfCell, CASCADE_DEFAULTS } from './cascade.js';
+import { selectCascades, cellToWorld, slotOfCell, CASCADE_DEFAULTS, cascadeContains, borderDistanceCells } from './cascade.js';
 
 export const GI_REFERENCE_DEFAULTS = {
   albedo: 0.5, // PLACEHOLDER flat grey albedo when no surfaceAlbedoColor callback is given
@@ -403,4 +403,41 @@ export function referenceQueryCascades({ worldPos, normal, cascades, baseCells, 
     return [0, 0, 0];
   }
   return scale3(total, 1 / wTot);
+}
+
+// ---- AMBIENT-REPLACE (docs/GI-AMBIENT.md): GI substitutes the hemi sky ambient where it has coverage. CPU mirror of gi-open-nodes queryCascadesCoverageTSL / hemiIrradianceTSL / ambientReplaceTSL.
+export const COVERAGE_WEIGHT_EPS = 1e-6;   // cascade 'usable' gate (unchanged from the pre-coverage hard gate)
+export const COVERAGE_WEIGHT_FADE = 1e-3;  // coverage ramps in smoothly over weightSum in [EPS .. FADE]
+const smoothC = (t) => { const c = Math.min(1, Math.max(0, t)); return c * c * (3 - 2 * c); };
+/** coverage c in [0,1]: max over cascades of usable(k) * smooth(weightSum/FADE) * (coarsest: smooth(borderCells/blendCells) else 1). weights[k] = that cascade's weightSum at worldPos */
+export function referenceCoverage({ cascades, baseCells, worldPos, weights, blendCells = CASCADE_DEFAULTS.blendCells }) {
+  const n = cascades.length; let c = 0;
+  for (let k = 0; k < n; k++) {
+    if (!cascadeContains(cascades[k], baseCells[k], worldPos) || !(weights[k] > COVERAGE_WEIGHT_EPS)) continue;
+    const edge = k === n - 1 ? smoothC(borderDistanceCells(cascades[k], baseCells[k], worldPos) / blendCells) : 1;
+    c = Math.max(c, smoothC(weights[k] / COVERAGE_WEIGHT_FADE) * edge);
+  }
+  return c;
+}
+/** three r180 HemisphereLightNode: mix(ground, sky, 0.5*n.y+0.5); sky/ground already x intensity */
+export function hemiIrradiance(normal, sky, ground) {
+  const w = normal[1] * 0.5 + 0.5; return [0, 1, 2].map((i) => ground[i] + (sky[i] - ground[i]) * w);
+}
+/** 'replace' term added next to the hemi light's own contribution: c*(gi - hemi(n)) -> net = mix(hemi, gi, c) */
+export function ambientReplace(gi, coverage, normal, sky, ground) {
+  const h = hemiIrradiance(normal, sky, ground); return [0, 1, 2].map((i) => coverage * (gi[i] - h[i]));
+}
+/** GI open-sky irradiance for an unoccluded normal: E(n) = integral over the sphere of skyRadiance(dir) * max(0, dot(n,dir)) (what an unobstructed probe converges to; midpoint quadrature) */
+export function skyIrradiance(normal, sky, nTheta = 400, nPhi = 64) {
+  const E = [0, 0, 0];
+  for (let i = 0; i < nTheta; i++) {
+    const th = ((i + 0.5) / nTheta) * Math.PI; const dy = Math.cos(th); const sr = Math.sin(th);
+    for (let j = 0; j < nPhi; j++) {
+      const ph = ((j + 0.5) / nPhi) * 2 * Math.PI; const d = [sr * Math.cos(ph), dy, sr * Math.sin(ph)];
+      const cs = d[0] * normal[0] + d[1] * normal[1] + d[2] * normal[2]; if (cs <= 0) continue;
+      const r = skyRadiance(d, sky); const w = cs * sr * (Math.PI / nTheta) * ((2 * Math.PI) / nPhi);
+      E[0] += r[0] * w; E[1] += r[1] * w; E[2] += r[2] * w;
+    }
+  }
+  return E;
 }

@@ -171,6 +171,7 @@ export class LightingController {
       }
     }
     this.sunShadows?.syncCamera(camera ?? this.camera);
+    this.sunShadows?.tick();
   }
 
   _recompute(pos, L) {

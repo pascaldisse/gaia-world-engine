@@ -8,6 +8,7 @@ export const SHADOW_DEFAULTS = {
   cascades: 4,        // PORT: task spec
   maxFar: 600,        // m — PORT: task spec; beyond it fog/unshadowed
   mapSize: 2048,      // per cascade — PORT: task spec
+  stagger: true,      // PORT (standard CSM practice): cascade 0 renders every frame, cascades 1..N-1 round-robin one per frame (shadow.matrix is only rewritten when a map renders -> lookups stay consistent). Measured BP 10-05: 4 full passes/frame = CPU-bound
   bias: -0.0003,      // ASSUMED: tuned for 0.1–600 m splits, needs live check
   normalBias: 0.04,   // ASSUMED
   fade: true,         // PORT: CSMShadowNode.fade — blends neighbouring cascades
@@ -101,6 +102,22 @@ export class SunShadows {
   }
 
   // retarget cascades to another camera / refresh after fov/aspect/far change
+  // per frame: staggered refresh (cfg.stagger). Cascade lights exist only after the node's first compile (_init).
+  tick() {
+    const n = this.node, ls = n?.lights;
+    if (!ls?.length) return;
+    const on = this.config?.stagger !== false;
+    if (!on) { if (this._staggered) { ls.forEach((l) => { l.shadow.autoUpdate = true; }); this._staggered = false; } return; }
+    this._staggered = true;
+    ls[0].shadow.autoUpdate = true;
+    if (ls.length < 2) return;
+    const every = Math.max(1, Math.round(Number(this.config?.stagger) || 1)); // stagger:true|1 = one far cascade per frame; k = one far cascade every k frames
+    this._fc = (this._fc ?? 0) + 1;
+    const go = this._fc % every === 0;
+    if (go) this._rr = ((this._rr ?? 0) % (ls.length - 1)) + 1; // 1..N-1
+    for (let i = 1; i < ls.length; i++) { ls[i].shadow.autoUpdate = false; if (go && i === this._rr) ls[i].shadow.needsUpdate = true; }
+  }
+
   syncCamera(camera) {
     const n = this.node;
     if (!n || !camera) return;

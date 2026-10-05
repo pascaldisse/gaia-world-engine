@@ -13,7 +13,7 @@ const PINS = {
   'gi-nodes.js': 'aa4195ecabd5b3080cf40596b2d4b665990b248fcb55f5bbc277738d7baca4bc',
   'voxelize.js': '5dbcdbf9d8e9524adcc23dc79d0cc89a748194b705e23a49769ddfb5d93632ba',
   'probe-grid.js': '6a1f6e3463d5af745cd373879e66dab2375e9b53fff48b5f4a76b0989cc68a83',
-  'irradiance.js': 'd0b13516c63ea4955f63ff09e5ac044a652ebeeb2c5078a495f6f2abdeabc140',
+  'irradiance.js': '04c6b1cc0440e05849f53c8ebc87d3ad6b2318b0092b097ff24f51e7cc3a7adb', // re-pinned 10-05 c957276: dropped dead const-reassign line (TypeError when rotation set); RTS numeric pin below unchanged
   'octahedral.js': '7cf2b158ded68882a0ef810ead7800a5ddf2e951c118986d1981dc05c7d0b793',
   'chebyshev.js': '321f1586a49527549dd012bd373d7e821d6c1f2a6f74da9cd5eb37d2997e8467',
 };

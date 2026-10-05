@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>GI v2 open-world: GPU smoke + parity</title>
+<style>body{background:#111;color:#ddd;font:13px/1.5 ui-monospace,Menlo,monospace;padding:2em;white-space:pre-wrap}h1{color:#8fb3ff;font-size:14px}</style></head>
+<body><h1>running GI v2 open-world harness…</h1>
+<!-- Serve from the WORKTREE root (node_modules symlink escapes vite's fs sandbox, python http.server is fine):
+       cd ~/projects/GAIA-World-Engine/.lanes/l-gi && python3 -m http.server 8420
+     open http://localhost:8420/tools/gi-open-parity.html in a WebGPU browser. Result JSON -> window.__giOpen + page. -->
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/webgpu":"/node_modules/three/build/three.webgpu.js","three/tsl":"/node_modules/three/build/three.tsl.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script>
+<script type="module">
+  import { runOpenParity } from './gi-open-parity.mjs';
+  const h1 = document.querySelector('h1');
+  try { const r = await runOpenParity(); window.__giOpen = r; h1.textContent = r.pass ? 'PASS' : 'FAIL'; h1.style.color = r.pass ? '#7ee787' : '#ff7b72'; document.body.append(JSON.stringify(r, null, 1)); }
+  catch (e) { window.__giOpen = { pass: false, error: String(e?.stack ?? e) }; h1.textContent = 'ERROR'; document.body.append(String(e?.stack ?? e)); }
+</script></body></html>

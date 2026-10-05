@@ -1,3 +1,54 @@
+# GI-PROBES — v2 open-world (L-GI, 10-05) ← read first for Burnout-Paradise-class games
+§why Pascal 10-05 "make it better (like GTA VI), add it to the engine". RTS mode (below, everything after this section) = UNCHANGED, bit-identical (test/gi-rts-regression.test.js: sha256 pins of gi-nodes/voxelize/probe-grid/irradiance/octahedral/chebyshev + numeric ref hash + GI_DEFAULTS literal). Open mode = `gi.configure({enabled:true, mode:'open', ...})`.
+## API (BP)
+```js
+gi.configure({ enabled:true, mode:'open', raysPerProbe:64,
+  cascades:{ count:3, spacings:[2,6,18], dims:[{x:16,y:8,z:16},...], updateFractions:[1/4,1/8,1/16], blendCells:1.5 }, // PLACEHOLDER
+  voxel:{ cellSize:1, brickSize:8, bricks:{x:16,y:8,z:16}, maxBricksPerUpdate:16 },  // 128x64x128 m window, PLACEHOLDER
+  sky:{zenith,horizon,ground}, sun:{direction,color,intensity} })
+gi.addMesh(id, {triangles:Float32Array(world xyz*3/tri), color?, textureMean?, albedo?, aabb?})   // tile streamed in
+gi.addThreeMesh(id, threeMesh)   // extractMeshTriangles: matrixWorld baked, material.color x material.userData.meanColor
+gi.removeMesh(id)                // tile streamed out
+gi.setSkySummary(environment.lighting.skySummary)  // {zenith,horizon,ground} live
+gi.update(dt, cameraPos)         // every frame; car-camera pos; returns {bricksRebuilt,bricksPending,freshProbes,probesDispatched}
+```
+- Y scrolls too (RTS never). Static content: call addMesh once per tile; moving cars → removeMesh+addMesh (dirty bricks only) or leave out (cheap: dynamic objects not GI occluders = PLACEHOLDER).
+## S1 cascades (`cascade.js`)
+- N cascades, spacing/dims per cascade, window base = floor(cam/spacing)-dims/2 (3D, whole-cell snap). TOROIDAL slot = worldCell mod dims → in-window probes keep slot+atlas on scroll; entered probes = fresh (`scrollCascade().freshSlots`).
+- query = finest cascade containing p; last `blendCells` of finer window smoothstep→next-coarser (no pop). Shared flat atlas: globalIdx = cascade.baseIndex+slot.
+- per-cascade round-robin budget `updateFractions`; ONE dispatch/kernel/frame covers all cascades (uniform vec4 start/cum → kernel maps ordinal→cascade→(start+i)%count; no wrap split, no multi-dispatch uniform hazard).
+## S2 incremental voxelization (`voxel-window.js`)
+- registry addMesh/removeMesh (world AABB + tris). Window = toroidal brick grid (8^3 voxels), BRICK-MAJOR storage → dirty brick = 1 contiguous 512-uint run → `attr.addUpdateRange` (WebGPUAttributeUtils r180 honours updateRanges → partial writeBuffer).
+- dirty: add/remove → bricks overlapping mesh AABB; scroll → entering bricks; `update(max)` rebuilds ≤`maxBricksPerUpdate` nearest-first, rest stay dirty.
+- ONE packed uint/voxel: 0=empty, bit24=solid, rgb8 albedo = avg over covering tris of (material colour x texture mean). Occupancy+albedo in 1 storage buffer.
+- tri→voxel = AABB range + plane-box test (1 SAT axis): kills diagonal over-marking of RTS AABB-only mark. Edge/corner SAT axes NOT done (conservative, may over-mark a rim).
+- GPU: readVoxelTSL bounds-checks via select (no branch/var); CELL_BIAS=65536 keeps WGSL `%` positive; out-of-window = empty.
+## S3 shading (`gi-reference.js` §v2 = truth; `gi-open-nodes.js` = TSL mirror)
+- miss → `skyRadiance(dir)`: horizon→zenith above, horizon→ground below (smoothstep |y|) = sky visibility ⇒ tunnels/under-bridge darker with NO extra term.
+- hit → albedo/π × (E_sun[N·L, occupancy shadow march from hit+N·cell] + E_bounce); E_bounce = trilinear+Chebyshev cascade query of PREVIOUS atlas at hit+N·cell, normal N (replaces RTS nearest-probe-nearest-texel). 1/π = Lambert (atlas stores irradiance E; three IrradianceNode ×BRDF_Lambert) → bounce energy-stable (RTS skipped 1/π; RTS bounce was never wired).
+- hit normal = 6-neighbour occupancy gradient, flipped to face ray; zero gradient (1-voxel-thin wall) → −dir (RTS approx).
+- storage buffers: irradiance kernel = irradiance+depth+voxels(+touched) = 3–4; depth kernel = depth+voxels = 2 (≤8). Point lights NOT in open mode (todo).
+## S4 probe states
+- probe in solid voxel → relocate to nearest empty axis neighbour ≤ `relocateMax` (default ½ finest spacing; k=1..3 cells, ±x±y±z) else DISABLED: irradiance 0, depth sentinel (−1,−1). Query skips depth.x<0 probes (weight 0, no dark leak). Query ignores relocation offset (uses cell position).
+- depth sentinel doubles as FRESH flag: whole depth atlas starts −1; scroll writes −1 into entered probes' depth (CPU partial ranges only — a ranges-less needsUpdate would re-upload the whole CPU copy and clobber GPU state); irradiance kernel reads depth texel0<0 ⇒ alpha 0 (take new), depth kernel takes new directly.
+- adaptive hysteresis: per texel α_eff = mix(α, fast=0.5, clamp(relΔluma/0.5,0,1)) — big luminance change converges fast, steady stays 0.97.
+## PROOF (headless, node --test)
+- gi-cascade (15) · gi-voxel-window (14) · gi-open-reference (17: tunnel<open sky, red wall→red bounce, trilinear, border blend, normals, probe states, adaptive) · gi-open-nodes (9: helpers build w/ real r180 nodes + WGSL-hazard scans mirror of passes #6–#10, buffer budget) · gi-open-controller (10) · gi-rts-regression (8). Each key rule has a source-mutant (test/helpers/mutant.js) proven red.
+- TSL Fn/Loop BODIES are lazy in node (see §Parity proof without a GPU) ⇒ kernels' loop internals are only structurally scanned, never executed.
+## UNVERIFIED (live GPU needed — all of it)
+1. gi-open-nodes.js kernels never compiled/ran: WGSL validity, TSL method availability inside Fn (`min`, `shiftRight`, `bitAnd`, vec4 uniform .x/.w, `select` on vec3 w/ bool), loop-scoping hazards beyond what passes #6–#10 taught.
+2. GPU==CPU numeric parity of open mode (no open-mode harness scene exists yet; tools/gi-parity.* is RTS-only).
+3. Performance: 3 cascades x 2048 probes x 64 rays x (96-step march + shadow march + 8x2-corner bounce query) per round-robin batch — fractions 1/4,1/8,1/16 are PLACEHOLDER; frame cost unmeasured. Each thread re-traces its probe's whole ray set (texel-parallel recompute, same as RTS) = 64x redundant; ray-parallel scatter is the obvious next optimisation.
+4. Partial `updateRanges` upload for a storage attribute in the WebGPU backend (source-read only; not run). Same for CPU depth-sentinel ranges.
+5. Voxel window 128x64x128 m at 1 m: rays leaving it read SKY (no far geometry) ⇒ distant buildings give no occlusion; cell 1 m too coarse for thin cars/rails; CPU brick voxelize cost per frame (O(meshes in brick × tris), no spatial index) unmeasured.
+6. Spacings 2/6/18 m, dims, fractions, blendCells, relocateMax, adaptive params = PLACEHOLDER.
+7. Reading+writing the same irradiance atlas in one dispatch (bounce reads prev values, racy but hysteresis-smoothed) — same trade as RTS design intent.
+8. Probe-state relocation unrolled 18 voxel reads/thread; query ignores relocation offset (small bias near relocated probes).
+9. Material-side: `queryNode` attaches via existing GISceneAttachment/IrradianceNode (renderer.js NOT touched; BP must keep GI attach hook as RTS does).
+10. Dynamic occluders (cars) not voxelized unless caller add/removeMesh each move.
+## LIVE CHECK (Pascal) — see lane report
+
+---
 # GI-PROBES — probe-based dynamic diffuse GI (DDGI-class, software RT)
 
 §引 Pascal 09-29: GTA VI-class lighting. DF analysis (https://www.digitalfoundry.net/features/gta-6-an-extended-look-analysis-perhaps-the-most-impressive-showcase-weve-ever-seen-in-real-time-rendering) = HW RT diffuse GI + RT reflections + refined sun shadow maps. Ask = "raytraced GI using light probes to reduce perf cost" = DDGI class. Stack here = three r180 WebGPU+TSL, NO hardware RT accel struct → rays traced in compute (software), against a voxel occupancy grid built from scene meshes.

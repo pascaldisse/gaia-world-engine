@@ -17,7 +17,9 @@ export const LIGHTING_DEFAULTS = {
   sun: { ...SUN_DEFAULTS },
   hemi: { day: 0.9, night: 0.12 }, // hemisphere light peak / floor — ASSUMED
   fog: { near: 80, far: 900, follow: true }, // fog colour tracks sky horizon — near/far ASSUMED
-  post: { ...POST_DEFAULTS },                // GTAO / TRAA / tonemap / exposure (post.js)
+  post: { ...POST_DEFAULTS }, // GTAO / TRAA / tonemap / exposure (post.js)
+  // per-concern ownership: false = the game keeps that concern (authored sky/fog/background/hemi); the rest (sun, CSM, AO, tonemap, GI feed) still runs. Defaults true = historic behaviour.
+  owns: { fog: true, background: true, hemi: true, sky: true },
 };
 
 const merge = (d, c) => ({ ...d, ...(c ?? {}) });
@@ -35,6 +37,7 @@ export class LightingController {
     this.sunShadows = sun ? new SunShadows(sun) : null;
     this.skyMesh = null;
     this.skySummary = null;       // {zenith,horizon,ground} — GI interface; null while disabled
+    this._extSky = null; // external {zenith,horizon,ground} (setSkySummary), used only while owns.sky === false
     this.skyVersion = 0;          // bumps whenever skySummary is recomputed
     this.sunState = null;         // {dir,elevation,azimuth,light}
     this.timeOfDay = this.config.time.timeOfDay;
@@ -58,7 +61,8 @@ export class LightingController {
       hemi: merge(LIGHTING_DEFAULTS.hemi, cfg.hemi),
       fog: merge(LIGHTING_DEFAULTS.fog, cfg.fog),
       post: resolvePost(cfg.post ?? {}),
-    };
+    owns: merge(LIGHTING_DEFAULTS.owns, cfg.owns),
+  };
   }
 
   setCamera(camera) {
@@ -118,7 +122,7 @@ export class LightingController {
   }
 
   _applySkyVisibility() {
-    const want = this.config.sky.visible !== false;
+    const want = this.config.sky.visible !== false && this.config.owns.sky !== false; // owns.sky:false -> no dome, the game keeps its own
     if (want && !this.skyMesh) {
       this.skyMesh = createSkyMesh(this.config.sky);
       this.scene?.add(this.skyMesh);
@@ -177,7 +181,7 @@ export class LightingController {
   _recompute(pos, L) {
     const c = this.config;
     const day = daylight(pos.dir);
-    const sum = skySummary(pos.dir, c.sky);
+    const sum = this._summary(pos, c);
     this.skySummary = sum;
     this.skyVersion++;
     applySkyParams(this.skyMesh ?? { turbidity: {}, rayleigh: {}, mieCoefficient: {}, mieDirectionalG: {} }, c.sky);
@@ -188,8 +192,8 @@ export class LightingController {
       this.sun.position.set(L.direction[0] * 200, L.direction[1] * 200, L.direction[2] * 200);
     }
     // hemisphere: sky/ground tint from the summary, level from daylight
-    if (this.hemi) {
-      const nrm = (v) => { const m = Math.max(v[0], v[1], v[2], 1e-6); return [v[0] / m, v[1] / m, v[2] / m]; };
+    if (this.hemi && c.owns.hemi !== false) {
+    const nrm = (v) => { const m = Math.max(v[0], v[1], v[2], 1e-6); return [v[0] / m, v[1] / m, v[2] / m]; };
       const sky = nrm(sum.zenith);
       const gnd = nrm(sum.ground);
       this.hemi.color.setRGB(sky[0], sky[1], sky[2]);
@@ -199,16 +203,28 @@ export class LightingController {
     // fog + clear colour follow the sky horizon (kept a Color: Environment's
     // fade/flash code assumes scene.background is one)
     if (c.fog.follow && this.scene) {
+    const ownFog = c.owns.fog !== false, ownBg = c.owns.background !== false;
       const h = sum.horizon;
-      if (this.scene.fog) {
-        this.scene.fog.color.setRGB(h[0], h[1], h[2]);
+      if (this.scene.fog && ownFog) { this.scene.fog.color.setRGB(h[0], h[1], h[2]);
         if (!this.scene.fog.isFogExp2) { this.scene.fog.near = c.fog.near; this.scene.fog.far = c.fog.far; }
       }
-      if (this.scene.background?.isColor) this.scene.background.setRGB(h[0], h[1], h[2]);
+      if (ownBg && this.scene.background?.isColor) this.scene.background.setRGB(h[0], h[1], h[2]);
     }
     for (const cb of this._listeners) cb(sum, this.sunState);
   }
 
+  // summary the system publishes: Preetham by default; the external one while owns.sky === false and one was given
+  _summary(pos, c) {
+    if (c.owns.sky === false && this._extSky) return this._extSky;
+    return skySummary(pos.dir, c.sky);
+  }
+  // External sky summary {zenith,horizon,ground} (each [r,g,b]) for a game with an authored sky (owns.sky:false):
+  // replaces the Preetham summary -> hemi (if owned), fog-follow (if owned), onSkyChange listeners (GI feed). null clears.
+  // Ignored while owns.sky !== false (the analytic dome is then the truth).
+  setSkySummary(s) {
+    this._extSky = s ? { zenith: [...s.zenith], horizon: [...s.horizon], ground: [...s.ground] } : null;
+    if (this.enabled && this.config.owns.sky === false) { this._paramsKey = ''; this.update(0); }
+  }
   // shorthand: mark a loaded subtree as shadow caster+receiver
   markShadows(root, opts) { return markShadows(root, opts); }
 

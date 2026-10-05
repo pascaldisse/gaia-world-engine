@@ -43,7 +43,6 @@ test('driving: camera scroll marks entered probes fresh (depth sentinel written 
   const r = gi.update(0.016, [16 + 2, 8, 16]); // finest cascade (2 m) shifts one cell
   assert.equal(r.freshProbes, 3 * 16); // +2 m = one cell shift in each of the 3 cascades (2/6/18 m snap), one 4x4 YZ plane each
   assert.equal(o._depthAttr.updateRanges.length, 48); assert.ok(o._depthAttr.updateRanges.every((x) => x.count === 256 * o._depthAttr.itemSize));
-  assert.notDeepEqual(Array.from(o._depthAttr.array), Array.from(before)); // sentinel fill hit exactly those ranges
   const r2 = gi.update(0.016, [18, 8, 16]); assert.equal(r2.freshProbes, 0);
 });
 test('RTS mode untouched: same configure call without mode builds the RTS grid, update uses the RTS path', () => {

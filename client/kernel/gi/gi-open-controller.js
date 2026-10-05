@@ -42,6 +42,7 @@ export class GIOpen {
     const common = { atlases: this.atlases, vs: this.vs, cascades: this.cascades, baseCellU: this.baseCellU, batch: this.batch, raysPerProbe: p.raysPerProbe, maxDist, hysteresis: p, relocateMax };
     this.irr = createOpenIrradianceKernel({ ...common, sun: this.sun, sky: this.sky, adaptive: p.adaptive ?? OPEN_DEFAULTS.adaptive, blendCells: this.blendCells });
     this.dep = createOpenDepthKernel(common);
+    if (p.bounceScale != null) this.irr.bounceScale.value = p.bounceScale;
     this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells });
     this.baseCells = null; this.cursors = this.cascades.map(() => 0);
     this.stats = { frames: 0, bricksRebuilt: 0, bricksUploaded: 0, freshProbes: 0, dispatchedProbes: 0 };
@@ -55,6 +56,7 @@ export class GIOpen {
   addThreeMesh(id, mesh) { this.win.addMesh(id, extractMeshTriangles(mesh)); }
   /** environment.lighting.skySummary {zenith,horizon,ground} → sky uniforms (live, no rebuild) */
   setSkySummary(s) { if (!s) return; for (const k of ['zenith', 'horizon', 'ground']) if (s[k]) this.sky[k].value.set(s[k][0], s[k][1], s[k][2]); }
+  setBounceScale(v) { this.irr.bounceScale.value = v; }
   setSun(sun) { if (sun.direction) this.sun.direction.value.set(...sun.direction); if (sun.color) this.sun.color.value.set(...sun.color); if (sun.intensity != null) this.sun.intensity.value = sun.intensity; }
 
   _markFresh(freshByCascade) {

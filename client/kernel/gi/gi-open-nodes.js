@@ -256,6 +256,7 @@ export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, b
   const alpha = uniform(hysteresis?.irradianceAlpha ?? 0.97);
   const totalDefault = atlases.probeCount * irradianceRes * irradianceRes; const validCount = uniform(totalDefault, 'uint');
   const fastAlpha = float(adaptive.fast), thr = float(adaptive.threshold);
+  const bounceScale = uniform(1); // multi-bounce strength (0 = single-bounce; parity harness uses 0 for a race-free GPU==CPU check)
   const fn = Fn(() => {
     const texelIndex = instanceIndex;
     If(uint(texelIndex).lessThan(validCount), () => {
@@ -282,7 +283,7 @@ export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, b
         const sunT = marchVoxelsTSL(vs, outPos, L, maxDist, 'shadowStepI', hit.and(ndotl.greaterThan(0)));
         const sunE = select(hit.and(ndotl.greaterThan(0)).and(sunT.lessThan(0)), sun.color.mul(ndotl).mul(sun.intensity), vec3(0, 0, 0));
         const bounce = vec3(0, 0, 0).toVar(); bounce.assign(vec3(0, 0, 0));
-        If(hit, () => { bounce.assign(queryCascadesTSL({ atlases, cascades, baseCellU, worldPos: outPos, normal: N, blendCells, tag: 'b' })); });
+        If(hit, () => { bounce.assign(queryCascadesTSL({ atlases, cascades, baseCellU, worldPos: outPos, normal: N, blendCells, tag: 'b' }).mul(bounceScale)); });
         const radiance = select(hit, albedo.mul(sunE.add(bounce)).mul(RECIP_PI), skyRadianceTSL(dir, sky));
         sampleEstimate.assign(sampleEstimate.add(radiance.mul(max(0, dot(texelDir, dir)))));
       });
@@ -295,7 +296,7 @@ export function createOpenIrradianceKernel({ atlases, vs, cascades, baseCellU, b
       if (touched) touched.element(probeIdx).assign(uint(1));
     });
   });
-  return { kernel: fn().compute(totalDefault, [64]), alpha, validCount, totalTexels: totalDefault };
+  return { kernel: fn().compute(totalDefault, [64]), alpha, bounceScale, validCount, totalTexels: totalDefault };
 }
 
 export function createOpenDepthKernel({ atlases, vs, cascades, baseCellU, batch, raysPerProbe, maxDist, hysteresis, relocateMax }) {

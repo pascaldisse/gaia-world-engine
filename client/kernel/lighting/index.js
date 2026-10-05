@@ -73,11 +73,12 @@ export class LightingController {
 
   // configure({enabled, shadows, time, sky, sun, hemi, fog}) — missing keys fall
   // back to defaults (same re-derive contract as Environment.apply).
-  configure(cfg = {}) {
+  // opts.restoreLights=false: on disable, leave sun/hemi/fog as the caller (Environment.apply) set them
+  configure(cfg = {}, { restoreLights = true } = {}) {
     const c = this._resolve(cfg);
     this.config = c;
     if (!c.enabled) {
-      if (this.enabled) this._disable();
+      if (this.enabled) this._disable(restoreLights);
       return this;
     }
     if (!this.enabled) this._enable();
@@ -127,11 +128,11 @@ export class LightingController {
     }
   }
 
-  _disable() {
+  _disable(restoreLights = true) {
     this.sunShadows?.disable();
     if (this.skyMesh) { this.scene?.remove(this.skyMesh); this.skyMesh = null; }
     const s = this._saved;
-    if (s && this.sun) {
+    if (s && this.sun && restoreLights) {
       this.sun.color.copy(s.sunColor); this.sun.intensity = s.sunIntensity; this.sun.position.copy(s.sunPos);
       this.hemi.color.copy(s.hemiColor); this.hemi.groundColor.copy(s.hemiGround); this.hemi.intensity = s.hemiIntensity;
     }

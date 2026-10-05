@@ -1,13 +1,24 @@
 // Open-world lighting rig (L-SUN). Default OFF → constructing this allocates
 // nothing and touches no scene object. docs/LIGHTING-OPENWORLD.md
 import { SunShadows, SHADOW_DEFAULTS, markShadows } from './shadows.js';
+import { sunPosition, sunFromDirection, sunLight, daylight, SUN_DEFAULTS } from './sun.js';
+import { SKY_DEFAULTS, skyRadiance, skyRadianceTSL, skySummary, createSkyMesh, applySkyParams } from './sky.js';
 
-export { markShadows, SHADOW_DEFAULTS };
+export { markShadows, SHADOW_DEFAULTS, SKY_DEFAULTS, SUN_DEFAULTS, skyRadiance, skyRadianceTSL, skySummary, sunPosition, sunLight };
 
 export const LIGHTING_DEFAULTS = {
   enabled: false,
   shadows: { ...SHADOW_DEFAULTS },
+  // sun: {timeOfDay,latitude,dayOfYear} (solar hours) OR {direction:[x,y,z]} explicit.
+  // speed = in-game hours per real second (0 = frozen).
+  time: { timeOfDay: 14, latitude: 40, dayOfYear: 172, direction: null, speed: 0 },
+  sky: { ...SKY_DEFAULTS, visible: true },
+  sun: { ...SUN_DEFAULTS },
+  hemi: { day: 0.9, night: 0.12 }, // hemisphere light peak / floor — ASSUMED
+  fog: { near: 80, far: 900, follow: true }, // fog colour tracks sky horizon — near/far ASSUMED
 };
+
+const merge = (d, c) => ({ ...d, ...(c ?? {}) });
 
 export class LightingController {
   constructor({ renderer, scene, sun, hemi, camera = null, post = null } = {}) {
@@ -18,8 +29,30 @@ export class LightingController {
     this.camera = camera;
     this.post = post;
     this.enabled = false;
-    this.config = { ...LIGHTING_DEFAULTS, shadows: { ...SHADOW_DEFAULTS } };
+    this.config = this._resolve({});
     this.sunShadows = sun ? new SunShadows(sun) : null;
+    this.skyMesh = null;
+    this.skySummary = null;       // {zenith,horizon,ground} — GI interface; null while disabled
+    this.skyVersion = 0;          // bumps whenever skySummary is recomputed
+    this.sunState = null;         // {dir,elevation,azimuth,light}
+    this.timeOfDay = this.config.time.timeOfDay;
+    this._listeners = new Set();
+    this._lastSunDir = null;
+    this._paramsKey = '';
+    this._saved = null;
+  }
+
+  _resolve(cfg) {
+    return {
+      ...LIGHTING_DEFAULTS,
+      ...cfg,
+      shadows: merge(SHADOW_DEFAULTS, cfg.shadows),
+      time: merge(LIGHTING_DEFAULTS.time, cfg.time),
+      sky: merge(LIGHTING_DEFAULTS.sky, cfg.sky),
+      sun: merge(LIGHTING_DEFAULTS.sun, cfg.sun),
+      hemi: merge(LIGHTING_DEFAULTS.hemi, cfg.hemi),
+      fog: merge(LIGHTING_DEFAULTS.fog, cfg.fog),
+    };
   }
 
   setCamera(camera) {
@@ -27,37 +60,132 @@ export class LightingController {
     this.sunShadows?.syncCamera(camera);
   }
 
-  // configure({enabled, shadows:{cascades,maxFar,mapSize,bias,normalBias,fade,lightMargin}})
-  // Missing keys fall back to defaults (same re-derive contract as Environment.apply).
+  // GI lane subscribes: cb(skySummary, sunState) fires on every recompute
+  onSkyChange(cb) { this._listeners.add(cb); return () => this._listeners.delete(cb); }
+
+  setTimeOfDay(h) { this.timeOfDay = ((h % 24) + 24) % 24; this.config.time.direction = null; }
+
+  // configure({enabled, shadows, time, sky, sun, hemi, fog}) — missing keys fall
+  // back to defaults (same re-derive contract as Environment.apply).
   configure(cfg = {}) {
-    const c = {
-      ...LIGHTING_DEFAULTS,
-      ...cfg,
-      shadows: { ...SHADOW_DEFAULTS, ...(cfg.shadows ?? {}) },
-    };
+    const c = this._resolve(cfg);
     this.config = c;
     if (!c.enabled) {
       if (this.enabled) this._disable();
       return this;
     }
-    this.enabled = true;
+    if (!this.enabled) this._enable();
+    this.timeOfDay = c.time.timeOfDay;
     if (c.shadows && c.shadows.enabled !== false && this.sunShadows) this.sunShadows.enable(c.shadows);
     else this.sunShadows?.disable();
+    this._applySkyVisibility();
+    this._paramsKey = ''; // force a recompute
+    this._lastSunDir = null;
+    this.update(0);
     return this;
+  }
+
+  _enable() {
+    this.enabled = true;
+    // remember what we override so disable restores it
+    this._saved = {
+      sunColor: this.sun?.color.clone(), sunIntensity: this.sun?.intensity,
+      sunPos: this.sun?.position.clone(),
+      hemiColor: this.hemi?.color.clone(), hemiGround: this.hemi?.groundColor.clone(),
+      hemiIntensity: this.hemi?.intensity,
+    };
+  }
+
+  _applySkyVisibility() {
+    const want = this.config.sky.visible !== false;
+    if (want && !this.skyMesh) {
+      this.skyMesh = createSkyMesh(this.config.sky);
+      this.scene?.add(this.skyMesh);
+    } else if (!want && this.skyMesh) {
+      this.scene?.remove(this.skyMesh);
+      this.skyMesh = null;
+    }
   }
 
   _disable() {
     this.sunShadows?.disable();
+    if (this.skyMesh) { this.scene?.remove(this.skyMesh); this.skyMesh = null; }
+    const s = this._saved;
+    if (s && this.sun) {
+      this.sun.color.copy(s.sunColor); this.sun.intensity = s.sunIntensity; this.sun.position.copy(s.sunPos);
+      this.hemi.color.copy(s.hemiColor); this.hemi.groundColor.copy(s.hemiGround); this.hemi.intensity = s.hemiIntensity;
+    }
+    this._saved = null;
+    this.skySummary = null;
+    this.sunState = null;
     this.enabled = false;
   }
 
-  update(_dt, camera = this.camera) {
+  update(dt, camera = this.camera) {
     if (!this.enabled) return;
-    this.sunShadows?.syncCamera(camera);
+    const c = this.config;
+    if (c.time.speed && !c.time.direction && dt > 0) this.timeOfDay = (this.timeOfDay + c.time.speed * dt) % 24;
+    const pos = c.time.direction
+      ? sunFromDirection(c.time.direction)
+      : sunPosition({ timeOfDay: this.timeOfDay, latitude: c.time.latitude, dayOfYear: c.time.dayOfYear });
+    const L = sunLight(pos.dir, c.sun);
+    this.sunState = { ...pos, light: L };
+    const key = JSON.stringify(c.sky);
+    const moved = !this._lastSunDir || pos.dir.some((v, i) => Math.abs(v - this._lastSunDir[i]) > 1e-5);
+    if (moved || key !== this._paramsKey) {
+      this._lastSunDir = pos.dir;
+      this._paramsKey = key;
+      this._recompute(pos, L);
+    }
+    // sky dome: unit sun vector, camera-centred so the box never clips
+    if (this.skyMesh) {
+      this.skyMesh.sunPosition.value.set(...pos.dir);
+      const cam = camera ?? this.camera;
+      if (cam) {
+        this.skyMesh.position.copy(cam.position);
+        this.skyMesh.scale.setScalar((cam.far ?? 4000) * (c.sky.size ?? 0.7));
+      }
+    }
+    this.sunShadows?.syncCamera(camera ?? this.camera);
+  }
+
+  _recompute(pos, L) {
+    const c = this.config;
+    const day = daylight(pos.dir);
+    const sum = skySummary(pos.dir, c.sky);
+    this.skySummary = sum;
+    this.skyVersion++;
+    applySkyParams(this.skyMesh ?? { turbidity: {}, rayleigh: {}, mieCoefficient: {}, mieDirectionalG: {} }, c.sky);
+    // key light
+    if (this.sun) {
+      this.sun.color.setRGB(L.color[0], L.color[1], L.color[2]);
+      this.sun.intensity = L.intensity;
+      this.sun.position.set(L.direction[0] * 200, L.direction[1] * 200, L.direction[2] * 200);
+    }
+    // hemisphere: sky/ground tint from the summary, level from daylight
+    if (this.hemi) {
+      const nrm = (v) => { const m = Math.max(v[0], v[1], v[2], 1e-6); return [v[0] / m, v[1] / m, v[2] / m]; };
+      const sky = nrm(sum.zenith);
+      const gnd = nrm(sum.ground);
+      this.hemi.color.setRGB(sky[0], sky[1], sky[2]);
+      this.hemi.groundColor.setRGB(gnd[0] * 0.5, gnd[1] * 0.5, gnd[2] * 0.5);
+      this.hemi.intensity = c.hemi.night + (c.hemi.day - c.hemi.night) * day;
+    }
+    // fog + clear colour follow the sky horizon (kept a Color: Environment's
+    // fade/flash code assumes scene.background is one)
+    if (c.fog.follow && this.scene) {
+      const h = sum.horizon;
+      if (this.scene.fog) {
+        this.scene.fog.color.setRGB(h[0], h[1], h[2]);
+        if (!this.scene.fog.isFogExp2) { this.scene.fog.near = c.fog.near; this.scene.fog.far = c.fog.far; }
+      }
+      if (this.scene.background?.isColor) this.scene.background.setRGB(h[0], h[1], h[2]);
+    }
+    for (const cb of this._listeners) cb(sum, this.sunState);
   }
 
   // shorthand: mark a loaded subtree as shadow caster+receiver
   markShadows(root, opts) { return markShadows(root, opts); }
 
-  dispose() { this._disable(); }
+  dispose() { this._disable(); this._listeners.clear(); }
 }

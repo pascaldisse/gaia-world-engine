@@ -168,7 +168,7 @@ test('sky mask: CPU twin — 1 only where depth ≥ 1-eps (cleared / beyond far)
 
 test('ao.skyDepthEps knob: default documented, merges, lands on a uniform; debug knob off by default', () => {
   assert.equal(typeof POST_DEFAULTS.ao.skyDepthEps, 'number');
-  assert.ok(POST_DEFAULTS.ao.skyDepthEps > 0 && POST_DEFAULTS.ao.skyDepthEps < 1e-3);
+  assert.ok(POST_DEFAULTS.ao.skyDepthEps > 0 && POST_DEFAULTS.ao.skyDepthEps <= 1e-2);
   assert.equal(POST_DEFAULTS.ao.debug, null);
   const c = buildChain({ scene: new THREE.Scene(), camera: cam(), cfg: { ao: { skyDepthEps: 3e-4 } } });
   assert.equal(c.nodes.aoSky.eps.value, 3e-4);

@@ -14,6 +14,8 @@ import { chebyshevWeight } from './chebyshev.js';
 import { fibonacciSphereDirs, integrateProbeIrradiance } from './irradiance.js';
 import { probeIndex, gridToWorld } from './probe-grid.js';
 import { marchOccupancy } from './voxelize.js';
+import { isSolid, unpackAlbedo } from './voxel-window.js';
+import { selectCascades, cellToWorld, slotOfCell, CASCADE_DEFAULTS } from './cascade.js';
 
 export const GI_REFERENCE_DEFAULTS = {
   albedo: 0.5, // PLACEHOLDER flat grey albedo when no surfaceAlbedoColor callback is given
@@ -248,4 +250,157 @@ export function referenceQueryIrradiance({
   }
   if (weightSum < 1e-6) return [0, 0, 0];
   return scale3(total, 1 / weightSum);
+}
+
+// ======================================================================
+// v2 open-world reference (docs/GI-PROBES.md §v2 open-world). ADDITIVE — nothing
+// above changed (RTS mode pinned bit-identical by test/gi-rts-regression.test.js).
+// ======================================================================
+export const OPEN_DEFAULTS = {
+  sky: { zenith: [0.25, 0.45, 0.9], horizon: [0.6, 0.7, 0.85], ground: [0.15, 0.13, 0.1] }, // PLACEHOLDER 3-colour gradient
+  adaptive: { fast: 0.5, threshold: 0.5 }, // PLACEHOLDER hysteresis adaptation
+  relocateSteps: 3, // PLACEHOLDER max cells probed per axis dir when relocating a solid-embedded probe
+};
+export const RECIP_PI = 1 / Math.PI;
+
+/** sky radiance for a direction: horizon→zenith above, horizon→ground below (sky visibility = the under-bridge/tunnel darkening) */
+export function skyRadiance(dir, sky = OPEN_DEFAULTS.sky) {
+  const y = dir[1];
+  const t = Math.min(1, Math.max(0, Math.abs(y)));
+  const s = t * t * (3 - 2 * t);
+  const end = y >= 0 ? sky.zenith : sky.ground;
+  return [sky.horizon[0] + (end[0] - sky.horizon[0]) * s, sky.horizon[1] + (end[1] - sky.horizon[1]) * s, sky.horizon[2] + (end[2] - sky.horizon[2]) * s];
+}
+
+/** fixed-step march over a VoxelWindow-like {cellSize,getVoxelAtWorld}; step=cell/2 (same as RTS march). @returns t|null */
+export function marchVoxelWindow(vox, origin, dir, maxDist) {
+  const step = vox.cellSize * 0.5;
+  for (let t = 0; t < maxDist; t += step) {
+    const p = [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+    if (isSolid(vox.getVoxelAtWorld(p))) return t;
+  }
+  return null;
+}
+/** hit normal from the occupancy gradient (6-neighbour central difference), facing the ray; zero gradient (thin wall) → -dir */
+export function voxelNormal(vox, hitPos, dir) {
+  const s = vox.cellSize;
+  const cx = Math.floor(hitPos[0] / s), cy = Math.floor(hitPos[1] / s), cz = Math.floor(hitPos[2] / s);
+  const o = (x, y, z) => (isSolid(vox.getVoxel(x, y, z)) ? 1 : 0);
+  let g = [o(cx - 1, cy, cz) - o(cx + 1, cy, cz), o(cx, cy - 1, cz) - o(cx, cy + 1, cz), o(cx, cy, cz - 1) - o(cx, cy, cz + 1)];
+  if (g[0] === 0 && g[1] === 0 && g[2] === 0) return scale3(dir, -1);
+  g = normalize3(g);
+  return dot3(g, dir) > 0 ? scale3(g, -1) : g;
+}
+
+/**
+ * v2 single-ray trace+shade. miss → sky radiance. hit → voxelAlbedo/π × (sun·N.L w/ occupancy shadow march + multi-bounce).
+ * `sampleAtlasIrradiance(pos, normal)` = trilinear cascade query of the PREVIOUS atlas (irradiance E).
+ */
+export function traceSingleRayOpen({ probePos, dir, vox, maxDist, sun = null, sky = OPEN_DEFAULTS.sky, sampleAtlasIrradiance = null }) {
+  const hitT = marchVoxelWindow(vox, probePos, dir, maxDist);
+  if (hitT === null) return { dir, hit: false, hitT: null, N: null, radiance: skyRadiance(dir, sky), dist: maxDist };
+  const hitPos = add3(probePos, scale3(dir, hitT));
+  const N = voxelNormal(vox, hitPos, dir);
+  const albedo = unpackAlbedo(vox.getVoxelAtWorld(hitPos));
+  const bias = vox.cellSize * 1.01; // leave the hit voxel along N before shadow marching
+  const outPos = add3(hitPos, scale3(N, bias));
+  let E = [0, 0, 0];
+  let shadowT = null;
+  if (sun) {
+    const L = normalize3(scale3(sun.direction, -1));
+    const ndotl = Math.max(0, dot3(N, L));
+    if (ndotl > 0) {
+      shadowT = marchVoxelWindow(vox, outPos, L, maxDist);
+      if (shadowT === null) E = add3(E, scale3(sun.color, ndotl * (sun.intensity ?? 1)));
+    }
+  }
+  if (sampleAtlasIrradiance) E = add3(E, sampleAtlasIrradiance(outPos, N));
+  return { dir, hit: true, hitT, N, shadowT, radiance: scale3(mul3(albedo, E), RECIP_PI), dist: hitT };
+}
+
+/** probe in a solid voxel: relocate along axis to nearest empty cell (≤ maxOffset) else disable (state: 'active'|'relocated'|'disabled') */
+export function resolveProbePosition(vox, pos, maxOffset, steps = OPEN_DEFAULTS.relocateSteps) {
+  if (!isSolid(vox.getVoxelAtWorld(pos))) return { state: 'active', pos };
+  const dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  for (let k = 1; k <= steps; k++) {
+    if (k * vox.cellSize > maxOffset) break;
+    for (const d of dirs) {
+      const q = [pos[0] + d[0] * k * vox.cellSize, pos[1] + d[1] * k * vox.cellSize, pos[2] + d[2] * k * vox.cellSize];
+      if (!isSolid(vox.getVoxelAtWorld(q))) return { state: 'relocated', pos: q };
+    }
+  }
+  return { state: 'disabled', pos };
+}
+const luma = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+/** adaptive hysteresis: big relative luminance change → faster alpha (DDGI §4.3 style). returns alpha actually used */
+export function adaptiveAlpha(oldRGB, newRGB, alpha, { fast = OPEN_DEFAULTS.adaptive.fast, threshold = OPEN_DEFAULTS.adaptive.threshold } = {}) {
+  const lo = luma(oldRGB), ln = luma(newRGB);
+  const rel = Math.abs(ln - lo) / (Math.max(lo, ln) + 1e-3);
+  const t = Math.min(1, Math.max(0, rel / threshold));
+  return alpha + (fast - alpha) * t;
+}
+
+/** one probe's v2 update: resolve state, trace (sky/hit/multibounce), bake atlas texels. Disabled → irradiance 0, depth sentinel (-1,-1). */
+export function openUpdateProbe({ probePos, vox, maxDist, raysPerProbe, rotation = null, sun = null, sky, sampleAtlasIrradiance = null, irradianceRes = 8, depthRes = 16, relocateMax = Infinity }) {
+  const st = resolveProbePosition(vox, probePos, relocateMax);
+  if (st.state === 'disabled') {
+    return { state: 'disabled', irradianceTexels: Array.from({ length: irradianceRes * irradianceRes }, () => [0, 0, 0]), depthTexels: Array.from({ length: depthRes * depthRes }, () => [-1, -1]) };
+  }
+  const rays = fibonacciSphereDirs(raysPerProbe, rotation).map((dir) => traceSingleRayOpen({ probePos: st.pos, dir, vox, maxDist, sun, sky, sampleAtlasIrradiance }));
+  const irradianceTexels = [], depthTexels = [];
+  for (let v = 0; v < irradianceRes; v++) for (let u = 0; u < irradianceRes; u++) irradianceTexels.push(integrateProbeIrradiance(decodeOct([((u + 0.5) / irradianceRes) * 2 - 1, ((v + 0.5) / irradianceRes) * 2 - 1]), rays));
+  for (let v = 0; v < depthRes; v++) for (let u = 0; u < depthRes; u++) {
+    const n = decodeOct([((u + 0.5) / depthRes) * 2 - 1, ((v + 0.5) / depthRes) * 2 - 1]);
+    let wS = 0, dS = 0, d2S = 0;
+    for (const r of rays) { const w = Math.max(0, dot3(n, r.dir)); if (w === 0) continue; wS += w; dS += w * r.dist; d2S += w * r.dist * r.dist; }
+    depthTexels.push(wS > 0 ? [dS / wS, d2S / wS] : [0, 0]);
+  }
+  return { state: st.state, irradianceTexels, depthTexels };
+}
+
+/**
+ * Trilinear + Chebyshev query of ONE toroidal cascade (corner slots via slotOfCell; disabled probes (depth mean<0) get weight 0).
+ * @returns {{value:[number,number,number], weight:number}} weight = Σ corner weights (0 = no usable probe)
+ */
+export function queryCascade({ worldPos, normal, cascade, baseCell, irradianceAtlas, depthAtlas, irradianceRes, depthRes }) {
+  const sp = cascade.spacing; const o = cellToWorld(baseCell, sp);
+  const rel = [(worldPos[0] - o[0]) / sp, (worldPos[1] - o[1]) / sp, (worldPos[2] - o[2]) / sp];
+  const b = rel.map(Math.floor); const f = rel.map((v, i) => v - b[i]);
+  let total = [0, 0, 0], wSum = 0;
+  for (let c = 0; c < 8; c++) {
+    const ox = c & 1, oy = (c >> 1) & 1, oz = (c >> 2) & 1;
+    const trilW = trilinearWeight(f, ox, oy, oz); if (trilW <= 0) continue;
+    const cx = baseCell[0] + b[0] + ox, cy = baseCell[1] + b[1] + oy, cz = baseCell[2] + b[2] + oz;
+    const slot = slotOfCell(cascade, cx, cy, cz);
+    const cornerWorld = [cx * sp, cy * sp, cz * sp];
+    const toProbe = sub3(cornerWorld, worldPos); const testDist = length3(toProbe);
+    const backface = testDist < 1e-6 ? 1 : Math.max(0, dot3(normal, normalize3(toProbe)));
+    const [iu, iv] = encodeOct(normal);
+    const irr = irradianceAtlas[(cascade.baseIndex + slot) * irradianceRes * irradianceRes + octUvToTexelIndex(iu, iv, irradianceRes)];
+    const dDir = testDist < 1e-6 ? normal : normalize3(sub3(worldPos, cornerWorld));
+    const [du, dv] = encodeOct(dDir);
+    const [mean, mean2] = depthAtlas[(cascade.baseIndex + slot) * depthRes * depthRes + octUvToTexelIndex(du, dv, depthRes)];
+    if (mean < 0) continue; // disabled probe sentinel
+    const w = trilW * backface * chebyshevWeight(mean, mean2, testDist);
+    total = add3(total, scale3(irr, w)); wSum += w;
+  }
+  return wSum < 1e-6 ? { value: [0, 0, 0], weight: 0 } : { value: scale3(total, 1 / wSum), weight: wSum };
+}
+/** multi-cascade query: finest containing cascade + border blend; falls through to coarser if the finer has no usable probe */
+export function referenceQueryCascades({ worldPos, normal, cascades, baseCells, irradianceAtlas, depthAtlas, irradianceRes, depthRes, blendCells = CASCADE_DEFAULTS.blendCells }) {
+  const sel = selectCascades(cascades, baseCells, worldPos, blendCells);
+  let total = [0, 0, 0], wTot = 0;
+  for (const { index, weight } of sel) {
+    const q = queryCascade({ worldPos, normal, cascade: cascades[index], baseCell: baseCells[index], irradianceAtlas, depthAtlas, irradianceRes, depthRes });
+    if (q.weight === 0) continue;
+    total = add3(total, scale3(q.value, weight)); wTot += weight;
+  }
+  if (wTot === 0) { // fallback: any coarser cascade that contains p
+    for (let k = (sel[sel.length - 1]?.index ?? -1) + 1; k < cascades.length; k++) {
+      const q = queryCascade({ worldPos, normal, cascade: cascades[k], baseCell: baseCells[k], irradianceAtlas, depthAtlas, irradianceRes, depthRes });
+      if (q.weight > 0) return q.value;
+    }
+    return [0, 0, 0];
+  }
+  return scale3(total, 1 / wTot);
 }

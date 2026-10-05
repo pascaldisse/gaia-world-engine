@@ -17,13 +17,22 @@ test('open mode: configure builds cascades+voxel storage+kernels; RTS resources 
   assert.equal(gi.resources.open.cascades.length, 3);
   assert.equal(gi.resources.open.atlases.probeCount, 3 * 64);
 });
-test('update: ONE compute per kernel per frame (all cascades batched), sizes = batch probes x texels', () => {
-  const { gi, calls } = mk(); gi.configure(OPEN);
+test('update (rayParallel:false legacy): ONE compute per kernel per frame (all cascades batched), sizes = batch probes x texels', () => {
+  const { gi, calls } = mk(); gi.configure({ ...OPEN, rayParallel: false });
   const r = gi.update(0.016, [16, 8, 16]);
-  assert.equal(calls.length, 2); assert.equal(r.mode, 'open');
+  assert.equal(calls.length, 2); assert.equal(r.mode, 'open'); assert.equal(gi.resources.open.trace, null);
   assert.equal(calls[0], r.probesDispatched * 64); assert.equal(calls[1], r.probesDispatched * 256);
   const plan = planCascadeBatches(buildCascades(OPEN.cascades), [0, 0, 0]);
   assert.equal(r.probesDispatched, plan.counts.reduce((a, b) => a + b, 0));
+});
+test('update (rayParallel default): trace (probes x rays) -> irradiance blend -> depth blend, in that order, ONE dispatch each', () => {
+  const { gi, calls } = mk(); gi.configure(OPEN);
+  const r = gi.update(0.016, [16, 8, 16]); const o = gi.resources.open;
+  assert.equal(o.rayParallel, true); assert.ok(o.trace && o.rayBuf);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls, [r.probesDispatched * OPEN.raysPerProbe, r.probesDispatched * 64, r.probesDispatched * 256]);
+  assert.equal(o.trace.validCount.value, r.probesDispatched * OPEN.raysPerProbe);
+  assert.equal(o.irr.bounceScale, o.trace.bounceScale, 'bounceScale uniform shared (setBounceScale reaches the trace pass)');
 });
 test('addMesh/removeMesh: dirty bricks rebuilt+uploaded incrementally, only changed bricks re-uploaded', () => {
   const { gi } = mk(); gi.configure(OPEN);

@@ -9,6 +9,7 @@ import {
   createProbeAtlases, createVoxelStorage, setVoxelBase, flushVoxelUploads, createCascadeUniforms, setCascadeBases,
   createSkyUniforms, createBatchUniforms, setBatch, createOpenIrradianceKernel, createOpenDepthKernel, createOpenQueryNode,
 } from './gi-open-nodes.js';
+import { createRayParallelKernels } from './gi-open-raypar.js';
 import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
 
 export const OPEN_PARAM_DEFAULTS = {
@@ -18,6 +19,7 @@ export const OPEN_PARAM_DEFAULTS = {
   adaptive: OPEN_DEFAULTS.adaptive,
   relocateMax: null, // world units; null = half the finest spacing
   maxMarchDist: 48, // = OPEN_MARCH_STEPS*cell/2 at 1 m cells
+  rayParallel: true, // DDGI 2-pass (trace: 1 thread per probe-ray -> ray buffer, then per-texel blend; docs/GI-RAYPAR.md). false = legacy per-texel full-ray kernels (A/B)
 };
 
 export class GIOpen {
@@ -40,8 +42,10 @@ export class GIOpen {
     const relocateMax = p.relocateMax ?? this.cascades[0].spacing * 0.5;
     const maxDist = Math.min(p.voxelMaxDist ?? 48, p.maxMarchDist ?? 48);
     const common = { atlases: this.atlases, vs: this.vs, cascades: this.cascades, baseCellU: this.baseCellU, batch: this.batch, raysPerProbe: p.raysPerProbe, maxDist, hysteresis: p, relocateMax };
-    this.irr = createOpenIrradianceKernel({ ...common, sun: this.sun, sky: this.sky, adaptive: p.adaptive ?? OPEN_DEFAULTS.adaptive, blendCells: this.blendCells });
-    this.dep = createOpenDepthKernel(common);
+    const adaptive = p.adaptive ?? OPEN_DEFAULTS.adaptive;
+    this.rayParallel = p.rayParallel !== false; this.trace = null; this.rayBuf = null;
+    if (this.rayParallel) { const k = createRayParallelKernels({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.trace = k.trace; this.rayBuf = k.rayBuf; this.irr = k.irr; this.dep = k.dep; }
+    else { this.irr = createOpenIrradianceKernel({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.dep = createOpenDepthKernel(common); }
     if (p.bounceScale != null) this.irr.bounceScale.value = p.bounceScale;
     this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells });
     this.baseCells = null; this.cursors = this.cascades.map(() => 0);
@@ -88,7 +92,8 @@ export class GIOpen {
     const total = setBatch(this.batch, plan.starts, plan.counts);
     const irrN = total * this.atlases.irradianceRes ** 2, depN = total * this.atlases.depthRes ** 2;
     this.irr.validCount.value = irrN; this.dep.validCount.value = depN;
-    this.renderer?.compute(this.irr.kernel, irrN); this.renderer?.compute(this.dep.kernel, depN);
+    if (this.trace) { const traceN = total * this.p.raysPerProbe; this.trace.validCount.value = traceN; this.renderer?.compute(this.trace.kernel, traceN); } // pass 1 (ray-parallel): one thread per (probe, ray)
+    this.renderer?.compute(this.irr.kernel, irrN); this.renderer?.compute(this.dep.kernel, depN); // irr BEFORE dep (irr reads the depth sentinel)
     const newlyAttached = this.attachment?.syncNewMeshes(this.scene, this.queryNode) ?? 0;
     const st = this.stats; st.frames++; st.bricksRebuilt += r.rebuilt.length; st.bricksUploaded += uploaded; st.freshProbes += nFresh; st.dispatchedProbes += total;
     return { dispatched: true, mode: 'open', bricksRebuilt: r.rebuilt.length, bricksPending: r.remaining, freshProbes: nFresh, probesDispatched: total, newlyAttached };

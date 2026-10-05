@@ -74,7 +74,7 @@ function encodeOctTSL(dir) {
   const u0 = dir.x.mul(inv), v0 = dir.y.mul(inv); const folded = dir.z.lessThan(0);
   return vec2(select(folded, float(1).sub(abs(v0)).mul(signNotZero(u0)), u0), select(folded, float(1).sub(abs(u0)).mul(signNotZero(v0)), v0));
 }
-function decodeOctTSL(uv) {
+export function decodeOctTSL(uv) {
   const z0 = float(1).sub(abs(uv.x)).sub(abs(uv.y)); const folded = z0.lessThan(0);
   const ox = float(1).sub(abs(uv.y)).mul(signNotZero(uv.x)), oy = float(1).sub(abs(uv.x)).mul(signNotZero(uv.y));
   return normalize(vec3(select(folded, ox, uv.x), select(folded, oy, uv.y), z0));
@@ -83,7 +83,7 @@ function octTexel(uv, res) {
   const t = (c) => clamp(int(floor(c.add(1).div(2).mul(res))), int(0), int(res - 1));
   return t(uv.x).add(int(res).mul(t(uv.y)));
 }
-function fibonacciDirTSL(i, rayCount) {
+export function fibonacciDirTSL(i, rayCount) {
   const fi = float(i); const y = float(1).sub(fi.div(max(float(rayCount - 1), 1)).mul(2));
   const rad = clamp(float(1).sub(y.mul(y)), 0, 1).sqrt(); const th = fi.mul(FIB_PHI);
   return vec3(th.cos().mul(rad), y, th.sin().mul(rad));
@@ -132,7 +132,7 @@ function cascadeFields(cascades, baseCellU, probeIdx) {
   return { spacing, dx, dy, baseIndex, baseCell };
 }
 /** world position of a global probe (toroidal slot → absolute cell → *spacing) */
-function probeWorldPos(cascades, baseCellU, probeIdx) {
+export function probeWorldPos(cascades, baseCellU, probeIdx) {
   const f = cascadeFields(cascades, baseCellU, probeIdx);
   let dz = int(cascades[0].dims.z);
   for (let k = 1; k < cascades.length; k++) dz = select(probeIdx.greaterThanEqual(int(cascades[k].baseIndex)), int(cascades[k].dims.z), dz);
@@ -161,7 +161,7 @@ export function resolveProbeTSL(vs, probePos, relocateMax, steps = 3) {
 }
 
 // ------------------------------------------------------------------ S3: trilinear cascade query (shared by materials AND the bounce read)
-const luma = (c) => c.x.mul(0.2126).add(c.y.mul(0.7152)).add(c.z.mul(0.0722));
+export const luma = (c) => c.x.mul(0.2126).add(c.y.mul(0.7152)).add(c.z.mul(0.0722));
 /** one cascade, 8 corners, Chebyshev + backface + disabled-sentinel skip. @returns vec4(value.xyz, weightSum) */
 function queryCascadeTSL({ atlases, cascade, baseCell, worldPos, normal, tag }) {
   const { irradiance, depth, irradianceRes, depthRes } = atlases; const sp = cascade.spacing;
@@ -237,7 +237,7 @@ export function setBatch(b, starts, counts) {
   b.startU.value.set(st[0], st[1], st[2], st[3]); b.cumU.value.set(cum[0], cum[1], cum[2], cum[3]);
   return acc; // total probes this dispatch
 }
-function batchProbeIndex(cascades, b, ordinal) {
+export function batchProbeIndex(cascades, b, ordinal) {
   const st = [b.startU.x, b.startU.y, b.startU.z, b.startU.w]; const cum = [b.cumU.x, b.cumU.y, b.cumU.z, b.cumU.w];
   let within = ordinal, start = int(st[0]), count = int(cascades[0].count), baseIndex = int(cascades[0].baseIndex);
   for (let k = 1; k < cascades.length; k++) {

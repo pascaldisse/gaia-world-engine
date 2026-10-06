@@ -1012,6 +1012,11 @@ impl RenderCore {
         self.three.mats.insert(id, m);
         Ok(())
     }
+    /// Live three uniform values (tsl-export `pkg.live.update()` → `[{key,value}]`, changed only) → material's reflected
+    /// uniform members; packed into every instance buffer at the next render (r4, three_material.rs).
+    pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<usize, String> {
+        self.three.mats.get_mut(&material).ok_or_else(|| format!("set_three_uniforms: {material} is not a three material"))?.set_uniforms(json)
+    }
     pub fn set_three_time(&mut self, seconds: f32) {
         self.three_time = seconds;
     }

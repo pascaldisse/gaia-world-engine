@@ -213,6 +213,8 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       return id;
     },
     setShaderTime(seconds) { gpu.setThreeTime(seconds); },
+    // r4: changed live uniform values [{key,value}] (tsl-export pkg.live.update()) → core reflected uniform buffer.
+    setShaderUniforms(id, changed) { if (changed.length) gpu.setThreeUniforms(id, JSON.stringify(changed)); },
     destroyMaterial(id) {
       gpu.destroyMaterial(id);
       for (const t of matTextures.get(id) || []) gpu.destroyTexture(t);

@@ -21,8 +21,18 @@ const cam = camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000);
 const sc = scene ?? new THREE.Scene();
 const b = new Ctor(obj, r);
 b.scene = sc; b.material = material; b.camera = cam; b.context.material = material;
-b.lightsNode = null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
+// (b) real lights: three's own LightsNode over the scene's Directional/Point lights (shadows not exported) → lit node materials shade.
+// Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
+const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
+b.lightsNode = lights.length ? r.lighting.createNode(lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
 b.build();
+// uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
+const refs = new Map();
+for (const n of [...b.updateNodes, ...b.updateBeforeNodes]) if ('property' in n && 'reference' in n && n.node?.uuid) refs.set(n.node.uuid, n);
+// uniform node uuid → light uuid for light-node-owned uniforms (color, cutoff, decay; view-space positions stay 'uniform')
+const lightUuids = new Map();
+for (const n of b.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightUuids.set(v.uuid, n.light.uuid);
+const liveUniforms = [];
   const semantics = builtinSemantics(THREE);
 const groups = b.getBindings().map((g) => ({
 group: g.index, name: g.name,
@@ -30,7 +40,14 @@ bindings: g.bindings.map((bd, i) => {
 const out = { binding: i, name: bd.name, kind: kindOf(bd), stage: stageOf(bd.visibility) };
 if (bd.isUniformsGroup) {
 out.size = bd.bytesPerElement ? undefined : undefined;
-out.uniforms = bd.uniforms.map((u) => ({ name: u.name, semantic: semantics.get(u.nodeUniform?.node?.uuid) ?? (/^camera|^time$|^deltaTime$/.test(u.name) ? u.name : null), type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) }));
+out.uniforms = bd.uniforms.map((u) => {
+  const semantic = semantics.get(u.nodeUniform?.node?.uuid) ?? (/^camera|^time$|^deltaTime$/.test(u.name) ? u.name : null);
+  const node = u.nodeUniform?.node, source = semantic ? { kind: 'host', semantic } : sourceOf(node, refs, lightUuids);
+  // key = stable id the backend uses for set_three_uniforms (uniform node uuid; unique per package)
+  const key = semantic ? null : (node?.uuid ?? `${g.index}.${i}.${u.name}`);
+  if (key) liveUniforms.push({ key, u });
+  return { name: u.name, semantic, key, source, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) };
+});
 } else if (bd.texture) out.textureUuid = bd.texture.uuid;
 return out;
 }),
@@ -47,9 +64,38 @@ material: { name: material.name, type: material.type, transparent: !!material.tr
 const textureSources = {};
 for (const g of b.getBindings()) for (const bd of g.bindings) if (bd.texture) textureSources[bd.texture.uuid] = bd.texture;
 Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
+// (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over builder.updateNodes — reference(), uniform
+// onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
+const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r;
+const last = new Map(liveUniforms.map(({ key, u }) => [key, JSON.stringify(toPlain(u.getValue?.()))]));
+let version = 0;
+Object.defineProperty(pkg, 'live', { enumerable: false, value: {
+  keys: liveUniforms.map((x) => x.key),
+  get version() { return version; },
+  update({ object = obj, camera = cam, scene = sc, time } = {}) {
+    frame.update(); if (time != null) frame.time = time;
+    frame.renderId++; frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
+    for (const n of b.updateBeforeNodes) frame.updateBeforeNode(n);
+    for (const n of b.updateNodes) frame.updateNode(n);
+    const changed = [];
+    for (const { key, u } of liveUniforms) {
+      const v = toPlain(u.getValue?.()), j = JSON.stringify(v);
+      if (j !== last.get(key)) { last.set(key, j); changed.push({ key, value: v }); }
+    }
+    if (changed.length) version++;
+    return changed;
+  },
+} });
 return pkg;
 }
 
+// three source of a uniform: material/object property (reference) · TSL uniform() node · light uniform.
+function sourceOf(node, refs, lightUuids) {
+  if (!node) return null;
+  const ref = refs.get(node.uuid);
+  if (ref) return { kind: (ref.material ?? ref.reference)?.isMaterial || ref.type === 'MaterialReferenceNode' ? 'material' : 'reference', property: ref.property };
+  return { kind: lightUuids.get(node.uuid) ? 'light' : 'uniform', uuid: node.uuid, name: node.name || null, update: node.updateType ?? 'none', light: lightUuids.get(node.uuid) ?? undefined };
+}
 function toPlain(v) {
 if (v == null) return null;
 if (typeof v === 'number' || typeof v === 'boolean') return v;

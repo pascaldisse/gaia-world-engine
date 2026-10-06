@@ -71,9 +71,22 @@ p.users.add(rec);
 return p;
 }
 
+// r4 live TSL uniforms: per frame, three's own node updates (pkg.live) → only changed values → backend.setShaderUniforms.
+// Lights are baked into the package's lightsNode at export (scene passed below); their VALUES ride the same path.
+let frameScene = null, frameCamera = null;
+function syncLiveUniforms() {
+  for (const [, e] of mats) {
+    const live = e.conv?.kind === 'wgsl' && e.epoch === epoch ? e.conv.package?.live : null;
+    if (!live) continue;
+    const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined });
+    if (!changed.length) continue;
+    if (backend.setShaderUniforms) { backend.setShaderUniforms(e.id, changed); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; }
+    else stats.degraded.add('setShaderUniforms-missing:tsl-values-frozen');
+  }
+}
 function ensureMaterial(m) {
 let e = mats.get(m);
-const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions });
+const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
 const sig = conv.sig;
 if (!e) {
 const id = createMat(conv);
@@ -255,7 +268,7 @@ return {
 stats,
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
 sync(scene, camera = null) {
-epoch++; stats.frames++;
+epoch++; stats.frames++; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const seen = new Set();
 visit(scene, true, seen);
@@ -263,6 +276,8 @@ for (const [o, rec] of recs) if (!seen.has(o) || (o.isInstancedMesh && !backend.
 for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
+if (camera && updateMatrices) camera.updateMatrixWorld?.();
+syncLiveUniforms();
 if (camera) {
 if (updateMatrices) camera.updateMatrixWorld?.();
 const view = Array.from(camera.matrixWorldInverse?.elements ?? []), proj = Array.from(camera.projectionMatrix?.elements ?? []);

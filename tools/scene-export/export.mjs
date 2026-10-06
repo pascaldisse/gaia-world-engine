@@ -11,8 +11,13 @@
 //     ambient?: { sky:[r,g,b], ground:[r,g,b], scale? } (hemisphere ambient, linear, shader units; -> scenes[0].extras.gaia.ambient = colour x scale),
 //     pointLights?: [{ name, position:[x,y,z], color:[r,g,b], intensity, range }],
 //     camera?: { name, position:[x,y,z], yawDeg, pitchDeg, fovYDeg, near, far },
+//     visibilityGroups?: { draw?:'drawGroups', display?:'displayGroups', parent?:'drawParent' } (SOURCE node-extras key names; defaults shown) -> node extras.gaia.visibilityGroups (see below),
 //     skinned?: { nodes?: regex (skinned node names, default '^skinned:'), clip?: regex (animation name; default = first clip
 //                 whose name starts with the node's character id), maxCharacters? } }   // -> glTF skins + ONE merged animation
+// Visibility groups (engine-generic; the game names live in the source data): a node whose extras carry int[] <draw>/<display> and/or a string <parent>
+//   (a node name, exact or after the first ':' of '<kind>:<name>') gets extras.gaia.visibilityGroups = { draw:int[], display:int[], parent?:string, parentNode?:<output node index> }.
+//   Source keys stay on the node verbatim. A parent that was pruned from the output has its effective draw groups INLINED (parent kept as a string, no parentNode).
+//   The source's root extras.<draw> (whole-map collision table, any shape) is copied verbatim to the output root extras under the same key.
 // Output contract: POSITION/NORMAL/TEXCOORD_0 (+TANGENT/TEXCOORD_1/COLOR_0 if present) · u32 indices · PBR MR materials ·
 // PNG textures (DDS decoded) · node transforms · KHR_lights_punctual · one camera node. Skins + one animation ONLY when manifest.skinned.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -73,7 +78,7 @@ export function exportScene(manifest, baseDir = '.') {
   const ex = manifest.exclude ?? {}, inc = manifest.include ?? {};
   const nodeEx = (ex.nodes ?? []).map(r => new RegExp(r)), matEx = (ex.materials ?? []).map(r => new RegExp(r));
   const skipSkinned = ex.skinned !== false;
-  const stats = { warnings: [], skippedPrimitives: { skinned: 0, material: 0, noPosition: 0, nonTriangles: 0 }, generatedNormals: 0, droppedNodes: 0 };
+  const stats = { warnings: [], visibilityNodes: 0, skippedPrimitives: { skinned: 0, material: 0, noPosition: 0, nonTriangles: 0 }, generatedNormals: 0, droppedNodes: 0 };
 
   // output builders
   const outNodes = [], outMeshes = [], outMaterials = [], outTextures = [], outImages = [], accessors = [], bufferViews = [], chunks = [];
@@ -161,7 +166,28 @@ if (at.COLOR_0 !== undefined) { const ca = src.accessors[at.COLOR_0]; attrs.COLO
 outMeshes.push({ name: sm.name, primitives: prims }); meshMap.set(key, outMeshes.length - 1); return outMeshes.length - 1;
   };
 
-  // nodes: depth-first copy with pruning
+  // visibility groups (manifest.visibilityGroups = source key names; no game knowledge here)
+const vk = { draw: 'drawGroups', display: 'displayGroups', parent: 'drawParent', ...(manifest.visibilityGroups ?? {}) };
+const intSet = (a) => Array.isArray(a) ? [...new Set(a.filter(Number.isInteger))].sort((x, y) => x - y) : undefined;
+const nodeMap = new Map(), visPending = [];
+const withVisibility = (n, ni, outIdx) => {
+const e = n.extras, draw = intSet(e[vk.draw]), display = intSet(e[vk.display]), parent = typeof e[vk.parent] === 'string' ? e[vk.parent] : undefined;
+if (draw === undefined && display === undefined && parent === undefined) return e;
+const v = { draw: draw ?? [], display: display ?? [] }; if (parent !== undefined) v.parent = parent;
+stats.visibilityNodes++; visPending.push({ v, ni, outIdx, parent });
+return { ...e, gaia: { ...(e.gaia ?? {}), visibilityGroups: v } };
+};
+let nameIdx; const findNode = (name) => { if (!nameIdx) { nameIdx = new Map(); src.nodes.forEach((x, i) => { const nm = x.name ?? ''; if (!nameIdx.has(nm)) nameIdx.set(nm, i); const c = nm.indexOf(':'); if (c >= 0 && !nameIdx.has(nm.slice(c + 1))) nameIdx.set(nm.slice(c + 1), i); }); } return nameIdx.get(name); };
+const srcDraw = (ni, depth = 0) => { const e = src.nodes[ni]?.extras; if (!e || depth > 32) return []; const par = typeof e[vk.parent] === 'string' ? findNode(e[vk.parent]) : undefined; return par !== undefined ? srcDraw(par, depth + 1) : (intSet(e[vk.draw]) ?? []); };
+const resolveVisibilityParents = () => {
+for (const { v, parent, ni } of visPending) {
+if (parent === undefined) continue;
+const pi = findNode(parent);
+if (pi !== undefined && nodeMap.has(pi)) v.parentNode = nodeMap.get(pi);
+else { v.draw = srcDraw(ni); stats.warnings.push(`visibility parent '${parent}' of '${src.nodes[ni].name}' ${pi === undefined ? 'not found' : 'pruned from output'} -> effective draw groups inlined`); }
+}
+};
+// nodes: depth-first copy with pruning
   const copyNode = (ni) => {
     const n = src.nodes[ni];
     if ((skipSkinned && n.skin !== undefined) || nodeEx.some(r => r.test(n.name ?? ''))) { stats.droppedNodes++; return -1; }
@@ -169,8 +195,8 @@ outMeshes.push({ name: sm.name, primitives: prims }); meshMap.set(key, outMeshes
     let mesh; if (n.mesh !== undefined) { mesh = mapMesh(n.mesh); if (mesh < 0) mesh = undefined; }
     if (mesh === undefined && !kids.length) return -1;
     const o = {}; for (const k of ['name', 'matrix', 'translation', 'rotation', 'scale']) if (n[k] !== undefined) o[k] = n[k];
-    if (mesh !== undefined) o.mesh = mesh; if (kids.length) o.children = kids; if (n.extras) o.extras = n.extras;
-    outNodes.push(o); return outNodes.length - 1;
+    if (mesh !== undefined) o.mesh = mesh; if (kids.length) o.children = kids; if (n.extras) o.extras = withVisibility(n, ni, outNodes.length);
+    outNodes.push(o); nodeMap.set(ni, outNodes.length - 1); return outNodes.length - 1;
   };
   const roots = [];
   for (const r of src.scenes[src.scene ?? 0].nodes) {
@@ -194,8 +220,8 @@ const s = src.skins[n.skin], joints = s.joints.map(ensure);
 const skin = { name: n.name, joints, ...(s.skeleton !== undefined ? { skeleton: ensure(s.skeleton) } : {}) };
 if (s.inverseBindMatrices !== undefined) skin.inverseBindMatrices = addAcc(readAccessor(src, bin, s.inverseBindMatrices, true), 5126, 'MAT4');
 outSkins.push(skin); chars++;
-const o = { name: n.name, mesh, skin: outSkins.length - 1 }; if (n.extras) o.extras = n.extras;
-const pi = par.get(ni), po = pi !== undefined ? ensure(pi) : -1; outNodes.push(o); const oi = outNodes.length - 1; if (po >= 0) (outNodes[po].children ??= []).push(oi); else roots.push(oi);
+const o = { name: n.name, mesh, skin: outSkins.length - 1 }; if (n.extras) o.extras = withVisibility(n, ni, outNodes.length);
+const pi = par.get(ni), po = pi !== undefined ? ensure(pi) : -1; outNodes.push(o); const oi = outNodes.length - 1; nodeMap.set(ni, oi); if (po >= 0) (outNodes[po].children ??= []).push(oi); else roots.push(oi);
 const id = n.extras?.character ?? (n.name ?? '').replace(/^skinned:/, '');
 const jointSet = new Set(s.joints);
 const ok = (a) => (clipRe ? clipRe.test(a.name ?? '') : true) && a.channels.some(c => jointSet.has(c.target.node));
@@ -245,7 +271,9 @@ Object.assign(stats, { skins: outSkins.length, joints: outSkins.reduce((a, s) =>
 ...(outSkins.length ? { skins: outSkins } : {}),
 ...(outAnims.length ? { animations: outAnims } : {}),
 };
-  if (manifest.ambient) { const a = manifest.ambient, k = a.scale ?? 1, f = (c) => c.map(x => +(x * k).toFixed(6)); gltf.scenes[0].extras = { gaia: { ambient: { sky: f(a.sky), ground: f(a.ground ?? a.sky) } } }; }
+  resolveVisibilityParents();
+if (src.extras?.[vk.draw] !== undefined) gltf.extras = { ...(gltf.extras ?? {}), [vk.draw]: src.extras[vk.draw] };
+if (manifest.ambient) { const a = manifest.ambient, k = a.scale ?? 1, f = (c) => c.map(x => +(x * k).toFixed(6)); gltf.scenes[0].extras = { gaia: { ambient: { sky: f(a.sky), ground: f(a.ground ?? a.sky) } } }; }
   if (lights.length) { gltf.extensionsUsed = ['KHR_lights_punctual']; gltf.extensions = { KHR_lights_punctual: { lights } }; }
   const pad = (4 - (binLen % 4)) % 4; if (pad) { chunks.push(Buffer.alloc(pad)); binLen += pad; }
   gltf.buffers[0].byteLength = binLen;

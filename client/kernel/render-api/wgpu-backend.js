@@ -269,6 +269,11 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       if (lightsDirty) pushLights();
       return gpu.renderTimed();
     },
+    // wgpu-only: render + Promise<{scene,upscale,total} GPU-timestamp ms | null> (null: no timestamp-query / sample in flight)
+    renderFrameGpuTimed() {
+      if (lightsDirty) pushLights();
+      return gpu.renderGpuTimed();
+    },
     resize(renderHeight) { gpu.setRenderHeight(renderHeight); },
     dispose() { for (const id of [...nodes.keys()]) if (nodes.has(id) && !nodes.get(id).parent) backend.removeNode(id); gpu.free(); },
   };

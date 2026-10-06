@@ -86,6 +86,6 @@ fn three_tsl_packages_render_as_is() {
         std::fs::write(format!("{dir}/{name}.native.ppm"), ppm).unwrap();
         let lit = px.chunks(4).filter(|c| c[..3] != px[..3]).count();
         println!("THREE-NATIVE {name}: draws={} covered_px={lit}/{}", core.last_draw_calls, size * size);
-        if lit < 1000 { println!("THREE-NATIVE {name}: NOT VISIBLE (UNVERIFIED path)"); }
+        if lit < 1000 { println!("THREE-NATIVE {name}: NOT VISIBLE — judge vs three r180 ground truth (tools/render-wasm/three-ref.html), not by coverage"); }
     }
 }

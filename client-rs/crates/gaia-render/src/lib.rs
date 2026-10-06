@@ -4,6 +4,7 @@
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
 pub mod scene;
 mod three_material;
+mod timing_async;
 pub use three_material::ThreeFrame;
 
 use glam::{Mat4, Vec3};
@@ -396,6 +397,8 @@ struct Timing {
     readback: wgpu::Buffer,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     period_ns: f32,
+    /// readback mapped by `request_timings_async` and not yet unmapped (timing_async.rs).
+    pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -596,6 +599,7 @@ impl RenderCore {
                     mapped_at_creation: false,
                 }),
                 period_ns: queue.get_timestamp_period(),
+                pending: Default::default(),
             });
         Self {
             camera: Camera {
@@ -1331,6 +1335,8 @@ impl RenderCore {
     /// Encode a copy of this frame's timestamps; call after `render`, before submit.
     pub fn encode_timing_readback(&self, encoder: &mut wgpu::CommandEncoder) -> bool {
         match &self.timing {
+            // async readback still mapped → copying into it would be a validation error; skip this frame's sample.
+            Some(tm) if tm.pending.load(std::sync::atomic::Ordering::Acquire) => false,
             Some(tm) => {
                 encoder.copy_buffer_to_buffer(&tm.resolve, 0, &tm.readback, 0, 32);
                 true

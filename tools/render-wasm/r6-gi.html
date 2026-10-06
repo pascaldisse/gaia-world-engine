@@ -92,6 +92,11 @@ try {
   for (let i = 0; i < 60; i++) gi.update(0.016, camPos);
   await renderer.renderAsync(scene, cam); await bridge.tick();
   const sunThree = await shotThree(); const sunWgpu = await shotWgpu(); finish('gisun', sunThree, sunWgpu);
+  // ---- GPU cost of the GI term in forward.wgsl (wgpu timestamp queries, median of 40 frames, scene pass ms; 640x480) ----
+  const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+  const gpuMs = async () => { const v = []; for (let i = 0; i < 40; i++) { adapter.sync(scene, cam); const t = await backend.renderFrameGpuTimed(); await raf(); if (t) v.push(t.scene); } return { median: med(v), n: v.length }; };
+  backend.clearGiProbes(); R.gpuSceneMsGiOff = await gpuMs();
+  await bridge.tick(); R.bridge2 = { ...bridge.stats }; R.gpuSceneMsGiOn = await gpuMs();
   R.adapterStats = { unsupported: [...adapter.stats.unsupported], degraded: [...adapter.stats.degraded] };
   R.ok = true;
 } catch (e) { log('EXC', e.stack || e); R.ok = false; }

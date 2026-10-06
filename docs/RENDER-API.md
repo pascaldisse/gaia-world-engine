@@ -116,3 +116,30 @@ NOTE three side = WebGPURenderer + bloom post + engine shadow map + game's TSL; 
 10. Bloom/ACES tonemap/post chain (core has Reinhard only); engine `post` (TSL PostProcessing) bypassed.
 11. Perf: adapter `sync` 10 ms/frame on 7k-mesh scene (143k material/node updates per 1000 frames — something is marked dirty every frame; per-frame traverse + matrix compare); frustum culling/LOD in core; GPU-timestamp parity on the three side.
 12. Browser GPU timestamps readback exists (renderGpuTimed); three's resolveTimestampsAsync unusable here.
+
+## 10. r6 — hemi/ambient + background + probe-GI on renderBackend=wgpu (lane `lampas/r6-probe`, 2026-10-06)
+§closes §9 missing #3 (background Color only) + #5 (Hemisphere/AmbientLight; GI). Still open: Texture/CubeTexture/sky-dome background, fog, IBL.
+## Enable
+- `?renderBackend=wgpu` (hemi/ambient/background automatic). GI: engine config `gi:{enabled:true, mode:'open', ambient:'replace'}` (environment.gi) → bridge on by default; `&wgpuGi=0` off · `&wgpuGiEvery=30` frames between atlas readbacks.
+- Chain: scene-adapter (Hemisphere/AmbientLight → `backend.setAmbient({sky,ground})` E=colour×intensity, Ambient folded into both; `scene.background` Color → `backend.setBackground`; Texture/Cube → `stats.unsupported['background:*']`, clear colour kept) · wgpu-present (`gi-bridge.js`: async 1-in-flight `renderer.getArrayBufferAsync` of irradiance+depth atlas, every N frames → `backend.setGiProbes`) · gaia-render `gi.rs` (atlases → Rgba32Float/Rg32Float 4096-wide textures + cascade-params uniform, frame group bindings 1–3) · forward.wgsl `gi_query*` = port of `queryCascadesCoverageTSL` (cites gi-open-nodes.js line refs) + `ambientReplaceTSL`.
+## Math (three r180 source-checked)
+- hemi/ambient: HemisphereLightNode.setup irradiance=mix(ground·I, sky·I, 0.5·n.y+0.5), AmbientLightNode irradiance=colour·I, both `+=` context.irradiance; PhysicalLightingModel.indirect:665 adds `E·BRDF_Lambert(diffuseColor)` = E·albedo/π, diffuseColor=albedo·(1−metalness). Core stores E/π (`set_hemisphere_irradiance`), shader ×albedo×(1−metallic). No-hemi scene ⇒ ambient 0 (adapter sends zeros; core's old 0.08 default no longer visible via adapter).
+- background: **three tone-maps scene.background** (measured: 0x9ec0e8 → on-screen 138,159,178 = Reinhard(linear)+sRGB, NOT raw 158,192,232) ⇒ core `set_background_color` = Reinhard(c·exposure).
+- GI: 'replace' net E = mix(hemi, gi, coverage) (coverage from cascade weights + coarsest border fade), 'add' = hemi+gi; ×albedo/π. Same Chebyshev/backface/sentinel/toroidal-slot maths; hemi light must be present in scene for replace (as three).
+## Proof (headless Brave/Metal, own :9771/:9772, `bun tools/render-wasm/run.mjs --page r6-gi.html --w 640 --h 480 --rh 480 --out .scratch/r6/gi.png`)
+Scene: 160 m ground slab, building, wall, canopy on 4 pillars (probe-occlusion), Hemisphere light, sky-blue background, Reinhard exposure 1; engine GI open mode (3 cascades 2/6/18 m, 16×8×16, rays 32, converged 90 updates, skyScale 0.134), `MeshStandardNodeMaterial` (adapter PBR twin). Same camera pose, 640×480 both. Pixel strips (three | wgpu | |diff|×4) in `docs/render-api-r6/*.png`; I opened all four.
+| variant | what | mean abs (0-255, RGB) | % px any-channel >8 | max |
+|---|---|---|---|---|
+| hemi | hemi+bg, sun 0, no GI (S1/S2) | 0.0002 | 0.0016 (5 px) | 21 |
+| gi | GI replace, sun 0, bridge on (S3) | 0.0037 | 0.0016 (5 px) | 27 (1.0 % px differ ≤2) |
+| gi_off | three GI vs wgpu bridge OFF (what GI adds) | 0.723 | 7.13 | 34 |
+| gisun | GI + sun, shadows both sides | 0.934 | 0.93 | 64 (shadow-map/PCF edges + three shadow acne moiré; direct light not this lane) |
+Costs: readback 18.9 MB (3×2048 probes) per tick, async 13.6 ms wall, main-thread `setGiProbes` (wasm copy+upload) 4.6 ms/tick (default every 30 frames); wgpu scene pass GPU median 2.72 ms GI off vs 2.68 ms GI on (640×480, 40 frames; timestamps coarse).
+Tests: `cargo test -p gaia-render --test lighting` (7: hemi up/ground/flat/metal, bg tone-map vs three-measured, GI replace/trilinear/toroidal slots, disabled sentinel, outside-window→hemi, add) · `bun test test/render-api-ambient.test.js test/render-api-gi-bridge.test.js`.
+## Remaining gaps (exact)
+1. GI staleness: atlas = snapshot every N frames (+≈14 ms read) ⇒ lighting lags fast scene change by ≤N frames; windows use the base-cell snapshot taken WITH the read (consistent); a camera that scrolls a cascade between reads sees the stale window (coverage fades by the stale window).
+2. GI only in built-in PBR (forward.wgsl). `wgpuTsl=1` TSL-package materials (external WGSL) bake their own `lightsNode`; hemi/ambient/GI do NOT reach them (needs group(0) GI bindings declared in the exporter's WGSL — bindings exist in the frame layout already).
+3. Not ported: HemisphereLight direction ≠ +Y (flagged `degraded`), multiple hemis sum fine; ambient specular/IBL/env (three has none either w/o env map); `gi.configure({ambient:'add'})` ported but only 'replace' proven by pixels (add = cargo-tested only).
+4. Perf unmeasured on game scale: GPU cost above = tiny test scene; per-fragment 3 cascades×8 corners×2 textureLoad (all cascades evaluated, as the TSL does) — an early-out on the finest cascade could cut it. Readback grows with probe count (default 18.9 MB).
+5. Background: Texture/CubeTexture/sky-dome unsupported (sky meshes still go through §9 #3 depth-at-far), exposure change after creation not re-applied to the clear colour.
+6. gisun residual = shadows (three PCFShadowMap 2048 vs wgpu CSM) — out of this lane.

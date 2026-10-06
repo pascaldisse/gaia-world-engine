@@ -9,6 +9,7 @@
 // Atlas memory layout (gi-nodes.js createProbeAtlases): irradiance = instancedArray(n,'vec3') → WGSL stride 16 B (4 f32/texel, w pad),
 // depth = instancedArray(n,'vec2') → 2 f32/texel (mean, mean²). Params snapshot = cascades + window base cells AT READBACK TIME (toroidal slot→cell map).
 export const GI_PARAM_HEADER = 8, GI_PARAM_CASCADE = 8;
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /** pure: pack GIOpen state into the setGiProbes `params` array. open = GIController.resources.open (GIOpen). */
 export function packGiParams(open) {
@@ -20,14 +21,14 @@ export function packGiParams(open) {
 }
 
 export function createGiBridge({ backend, renderer, getController, everyFrames = 30 } = {}) {
-  const st = { frames: 0, reads: 0, skipped: 0, errors: 0, inFlight: false, active: false, lastMs: 0, lastBytes: 0, lastError: null };
+  const st = { frames: 0, reads: 0, skipped: 0, errors: 0, inFlight: false, active: false, lastMs: 0, lastSetMs: 0, lastBytes: 0, lastError: null };
   let wasActive = false;
   const openOf = () => { const c = getController?.(); return c?.resources?.open ?? c?._open ?? null; };
   async function read(open, params) {
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
       const [ib, db] = await Promise.all([renderer.getArrayBufferAsync(open.atlases.irradiance.value), renderer.getArrayBufferAsync(open.atlases.depth.value)]);
-      backend.setGiProbes(new Float32Array(ib), new Float32Array(db), params);
+      const ts = now(); backend.setGiProbes(new Float32Array(ib), new Float32Array(db), params); st.lastSetMs = now() - ts; // wasm copy + texture upload (main-thread cost per readback)
       st.reads++; st.lastBytes = ib.byteLength + db.byteLength; st.active = true; wasActive = true;
     } catch (e) { st.errors++; st.lastError = String(e?.message ?? e); }
     finally { st.inFlight = false; st.lastMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0; }

@@ -165,3 +165,10 @@ PROOF (.scratch/r5/, camera -13,215,80 yaw0 pitch-12, GAIA_ANIM_TIME=1.2, biline
 OPEN / UNVERIFIED
 - COLOR_0 for sky in the real pipeline: scratch injector `.scratch/inject_vc.py` was HAND work → fix belongs in companion glb-add-vertex-colors (extend to Alp/Edge MTD users, alpha only). Not done here (not my lane).
 - Remaining: horizontal cloud-card bands (m9000 mesh:5 / m5201 mesh:1 cards still overlap with sharp lit stripes under the sun: lit GGX on near-horizontal cards) · bottom cliff patch still dark grey (shadow-only) · Lit_Black quad (draw groups) · no DS reference screenshot / three.js render compared (no DS client run) → grey-vs-white sky judged from pre-r4 shot + MTD names only · fog (FogBank) not implemented · DS tone scale unsourced · "170 BLEND drawn opaque" load note is stale.
+
+## Round 6 — HEMI/AMBIENT + BACKGROUND + PROBE GI (lampas/r6-probe, 2026-10-06)
+- API: `set_hemisphere_irradiance(sky,ground)` (three E; stores E/π; shader ×albedo×(1−metallic)) · `set_background_color(rgb)` (Reinhard(c·exposure): three tone-maps its background, measured) · `set_clear_color` raw · `set_gi_probes(device,queue,irr,depth,params)` / `clear_gi_probes`. wasm: setHemisphereIrradiance / setBackgroundColor / setClearColor / setGiProbes / clearGiProbes.
+- `gi.rs`: atlases = flat probe-major arrays (texel = probe·res²+oct) → 4096-wide Rgba32Float (irradiance, vec3 padded to 16 B) + Rg32Float (depth mean,mean²) textures read by `textureLoad`; `GiUniform` (160 B) = cascades ≤4 [baseCell.xyz,spacing | dims.xyz,baseIndex], blendCells, res, mode. Frame bind group now bindings 0..3 (external WGSL may ignore 1..3).
+- forward.wgsl: `gi_query_cascade/gi_query` port of gi-open-nodes.js queryCascadeTSL:45-78 / queryCascadesCoverageTSL:95-109 (+ createOpenQueryNode ambientReplaceTSL:116). WGSL fix hit: vector `&&` illegal → `all()`.
+- Tests: `tests/lighting.rs` 7 (device = Metal). Mutation check: x-slot +1 → `gi_disabled_probe…` fails (tolerance ±1 for GI cases).
+- Proof + numbers + gaps: docs/RENDER-API.md §10 (three vs wgpu: hemi 0.0002 mean abs, GI 0.0037, 5 px >8 of 307200).

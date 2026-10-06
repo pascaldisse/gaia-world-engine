@@ -20,7 +20,15 @@ export const PIXEL_IRON = {
   step: 0.5,     // 2 → 1.5 → 1.0: three rungs, no cliff
   window: 30,    // frames in the rolling mean
   holdMs: 1200,  // minimum dwell between changes
+  targetHeight: null, // render height in px (e.g. 720 -> 1108x720 on a 3024x1964 panel); null = unchanged (adaptive DPR). Set = fixed ratio targetHeight/innerHeight, adaptive off. URL ?renderHeight=<px> overrides (perf tooling)
 };
+
+function urlRenderHeight() {
+  if (typeof location === 'undefined') return null;
+  const v = new URLSearchParams(location.search).get('renderHeight');
+  const n = v === null ? NaN : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 export function createPixelGovernor(renderer, options = {}) {
   const O = { ...PIXEL_IRON, ...options };
@@ -29,9 +37,21 @@ export function createPixelGovernor(renderer, options = {}) {
   let acc = 0;
   let n = 0;
   let last = -Infinity;
+  let targetHeight = options.targetHeight ?? urlRenderHeight() ?? O.targetHeight;
+  const fit = () => {
+    if (!(targetHeight > 0) || typeof window === 'undefined') return;
+    ratio = targetHeight / window.innerHeight; // width follows the window aspect
+    renderer.setPixelRatio(ratio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  };
   renderer.setPixelRatio(ratio);
+  if (targetHeight > 0) { O.adaptivePixelRatio = false; fit(); }
   return {
     get ratio() { return ratio; },
+    get targetHeight() { return targetHeight; },
+    /** px render height (null = back to adaptive DPR); re-fits now and on every window resize (call refit() from the resize handler) */
+    setTargetHeight(h) { targetHeight = h > 0 ? h : null; if (targetHeight) { O.adaptivePixelRatio = false; fit(); } else { O.adaptivePixelRatio = PIXEL_IRON.adaptivePixelRatio; ratio = cap; renderer.setPixelRatio(ratio); renderer.setSize(window.innerWidth, window.innerHeight); } },
+    refit: fit,
     set enabled(v) { O.adaptivePixelRatio = !!v; },
     /** call once per frame with the frame's dt in seconds */
     sample(dt, now = performance.now()) {
@@ -56,7 +76,7 @@ export function createPixelGovernor(renderer, options = {}) {
 }
 
 export async function createRenderer() {
-  const renderer = new THREE.WebGPURenderer({ antialias: true });
+  const renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: typeof location !== 'undefined' && new URLSearchParams(location.search).get('gpuTs') === '1' }); // ?gpuTs=1 = GPU timestamp queries (perf tooling; default off)
   await renderer.init();
   // pixel ratio is owned by the governor below (§IRON PIXEL_IRON)
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -87,10 +107,12 @@ export async function createRenderer() {
   sun.shadow.camera.far = 400;
   scene.add(sun);
 
+  let pixels = null;
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    pixels?.refit?.();
   });
 
   // bloom post chain (TSL) — falls back to a plain render if unavailable
@@ -114,6 +136,6 @@ export async function createRenderer() {
     console.warn('[gaia] post chain unavailable, rendering plain:', err);
   }
 
-  const pixels = createPixelGovernor(renderer);
+  pixels = createPixelGovernor(renderer);
   return { renderer, scene, camera, hemi, sun, post, pixels };
 }

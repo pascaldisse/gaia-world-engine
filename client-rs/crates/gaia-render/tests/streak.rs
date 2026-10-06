@@ -74,11 +74,6 @@ fn report(label: &str, px: &[u8]) -> (u8, u8, u32) {
     eprintln!("{label}: min {lo} max {hi} column-steps>6 {steps} | {line}");
     (lo, hi, steps)
 }
-fn sun_low() -> [f32; 3] {
-    // travels toward -x (hits the +x face), slightly down (~14deg elevation), and along -z (away from camera: sun behind the camera)
-    let v = Vec3::new(-0.9, -0.25, -0.35).normalize();
-    [v.x, v.y, v.z]
-}
 /// worst per-pixel |ON - OFF| and the number of pixels differing by > 3
 fn diff(a: &[u8], b: &[u8]) -> (i32, u32, (u32, u32)) {
     let mut worst = 0; let mut n = 0; let mut at = (0, 0);
@@ -112,4 +107,42 @@ fn wall_lit_uniform_with_shadows_on() {
         if n > 0 { bad.push(format!("{name}: worst {worst} at {at:?} n={n}")); }
     }
     assert!(bad.is_empty(), "shadow artefacts on a uniform wall: {bad:?}");
+}
+
+/// r9 S2 (CAUSE): three r180 WebGPU renders `shadowSide ?? side` into the shadow map (Renderer.js:2902) = FrontSide for a default material, so a single-sided
+/// surface whose FRONT faces away from the sun casts NOTHING in three; the core caster pass is double-sided (cull None) and shadows anyway.
+/// receiver y=0 facing up, caster quad y=2 straight above, sun straight down; centre pixel of the receiver.
+fn caster_centre(device: &wgpu::Device, queue: &wgpu::Queue, caster_faces_sun: bool, cull_back: bool) -> u8 {
+    let mut opts = RenderOptions::default();
+    opts.render_height = H;
+    let mut core = RenderCore::new(device, queue, opts);
+    core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 3.0);
+    core.set_hemisphere_irradiance([0.0; 3], [0.0; 3]);
+    for id in [1, 2] {
+        core.create_material(device, id, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+    }
+    let s = 4.0;
+    core.create_mesh(device, 1, &[-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s], &[0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.], &[0.0; 8], &[0, 2, 1, 0, 3, 2]).unwrap();
+    core.create_instance(1, 1, 1, I);
+    core.set_instance_cast_shadow(1, false);
+    let c = 1.0;
+    let (n, idx): (f32, [u32; 6]) = if caster_faces_sun { (1.0, [0, 2, 1, 0, 3, 2]) } else { (-1.0, [0, 1, 2, 0, 2, 3]) };
+    core.create_mesh(device, 2, &[-c, 2., -c, c, 2., -c, c, 2., c, -c, 2., c], &[0., n, 0., 0., n, 0., 0., n, 0., 0., n, 0.], &[0.0; 8], &idx).unwrap();
+    core.create_instance(2, 2, 2, I);
+    core.set_instance_cast_shadow(2, true);
+    if cull_back { core.set_material_shadow_cull_back(2, true); }
+    core.set_camera(Mat4::look_at_rh(Vec3::new(5.0, 1.0, 0.0), Vec3::ZERO, Vec3::Y).inverse().to_cols_array(), 40f32.to_radians(), 0.1, Some(100.0));
+    let px = shoot(device, queue, &mut core);
+    px[((H / 2) * W + W / 2) as usize]
+}
+#[test]
+fn single_sided_caster_facing_away_from_sun_casts_nothing_like_three() {
+    let (device, queue) = device();
+    let facing_away_double = caster_centre(&device, &queue, false, false);
+    let facing_away_front_only = caster_centre(&device, &queue, false, true);
+    let facing_sun_front_only = caster_centre(&device, &queue, true, true);
+    eprintln!("away/double-sided {facing_away_double} | away/FrontSide(cull back) {facing_away_front_only} | facing-sun/FrontSide {facing_sun_front_only}");
+    assert!(facing_away_double < 40, "double-sided caster must still shadow ({facing_away_double})");
+    assert!(facing_sun_front_only < 40, "sun-facing FrontSide caster must shadow ({facing_sun_front_only})");
+    assert!(facing_away_front_only > 100, "FrontSide caster facing away from the sun must NOT shadow (three): got {facing_away_front_only}");
 }

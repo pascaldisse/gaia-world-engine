@@ -4,7 +4,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use gaia_render::{
-    MaterialBinding, MaterialDesc, RenderCore, RenderOptions, ShaderMaterialDesc, UpscaleSize,
+    MaterialBinding, MaterialDesc, RenderCore, RenderOptions, ShaderMaterialDesc, ShadowOptions, UpscaleSize,
 };
 use js_sys::{Array, Float32Array, Promise, Reflect, Uint8Array};
 use std::collections::HashMap;
@@ -44,6 +44,31 @@ fn opt_vec(o: &JsValue, k: &str, n: usize) -> Option<Vec<f32>> {
     (a.len() == n).then_some(a)
 }
 
+/// JS object → ShadowOptions over `base` (every key optional; unknown keys ignored). Keys = gaia-render ShadowOptions fields, camelCase.
+fn shadow_opts(o: &JsValue, mut b: ShadowOptions) -> ShadowOptions {
+if !o.is_object() {
+return b;
+}
+let bo = |k: &str| Reflect::get(o, &JsValue::from_str(k)).ok().and_then(|v| v.as_bool());
+let f = |k: &str| opt_f32(o, k);
+if let Some(v) = bo("enabled") { b.enabled = v; }
+if let Some(v) = f("cascades") { b.cascades = v as u32; }
+if let Some(v) = f("resolution") { b.resolution = v as u32; }
+if let Some(v) = f("maxDistance") { b.max_distance = v; }
+if let Some(v) = f("splitLambda") { b.split_lambda = v; }
+if let Ok(v) = Reflect::get(o, &JsValue::from_str("splits")) { if !v.is_undefined() && !v.is_null() { b.splits = Array::from(&v).iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect(); } }
+if let Some(v) = f("normalBias") { b.normal_bias = v; }
+if let Some(v) = f("depthBias") { b.depth_bias = v; }
+if let Some(v) = f("slopeBias") { b.slope_bias = v; }
+if let Some(v) = f("constantBias") { b.constant_bias = v as i32; }
+if let Some(v) = f("pcfRadius") { b.pcf_radius = v as u32; }
+if let Some(v) = f("blend") { b.blend = v; }
+if let Some(v) = bo("cache") { b.cache = v; }
+if let Some(v) = f("casterMargin") { b.caster_margin = v; }
+if let Some(v) = bo("alphaTestCasters") { b.alpha_test_casters = v; }
+if let Some(v) = f("importMaxCasterDiagonal") { b.import_max_caster_diagonal = v; }
+b
+}
 #[wasm_bindgen]
 pub struct GaiaRender {
     canvas: web_sys::HtmlCanvasElement,
@@ -131,7 +156,10 @@ impl GaiaRender {
         if let Some(v) = opt_vec(&options, "clearColor", 4) {
             opts.clear_color = [v[0] as f64, v[1] as f64, v[2] as f64, v[3] as f64];
         }
-        let core = RenderCore::new(&device, &queue, opts);
+        if let Ok(sh) = Reflect::get(&options, &JsValue::from_str("shadows")) {
+opts.shadows = shadow_opts(&sh, opts.shadows.clone());
+}
+let core = RenderCore::new(&device, &queue, opts);
         Ok(GaiaRender {
             canvas,
             surface,
@@ -368,7 +396,44 @@ impl GaiaRender {
         self.core.instance_count()
     }
 
-    // ---- camera + lights ----
+    // ---- shadows (gaia-render shadow.rs) ----
+/// instances default DYNAMIC (redrawn into the live layer every frame); static = cached per cascade until moved/changed.
+#[wasm_bindgen(js_name = setInstanceStatic)]
+pub fn set_instance_static(&mut self, id: u32, is_static: bool) {
+self.core.set_instance_static(id, is_static);
+}
+#[wasm_bindgen(js_name = setInstanceCastShadow)]
+pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {
+self.core.set_instance_cast_shadow(id, cast);
+}
+/// Re-create the shadow system with `opts` (object, camelCase ShadowOptions keys; omitted keys keep current values). Heavy (reallocates maps).
+#[wasm_bindgen(js_name = setShadowOptions)]
+pub fn set_shadow_options(&mut self, opts: JsValue) {
+let cur = self.core.shadow_options().clone();
+let n = shadow_opts(&opts, cur);
+self.core.set_shadow_options(&self.device, n);
+}
+/// Last frame's shadow work: {enabled,cascades,passes,copies,totalDraws,cpuCullMs,staticRerendered:[..],staticDraws:[..],dynamicDraws:[..]}.
+#[wasm_bindgen(js_name = shadowStats)]
+pub fn shadow_stats(&self) -> JsValue {
+let s = self.core.shadow_stats();
+let o = js_sys::Object::new();
+let set = |k: &str, v: JsValue| { let _ = Reflect::set(&o, &JsValue::from_str(k), &v); };
+set("enabled", s.enabled.into());
+set("cascades", JsValue::from_f64(s.cascades as f64));
+set("passes", JsValue::from_f64(s.passes as f64));
+set("copies", JsValue::from_f64(s.copies as f64));
+set("totalDraws", JsValue::from_f64(s.total_draws as f64));
+set("cpuCullMs", JsValue::from_f64(s.cpu_cull_ms));
+let arr = |it: Vec<f64>| -> JsValue { it.into_iter().map(JsValue::from_f64).collect::<Array>().into() };
+set("staticRerendered", arr(s.static_rerendered.iter().map(|&b| b as u8 as f64).collect()));
+set("staticDraws", arr(s.static_draws.iter().map(|&b| b as f64).collect()));
+set("dynamicDraws", arr(s.dynamic_draws.iter().map(|&b| b as f64).collect()));
+set("staticInstances", arr(s.static_instances.iter().map(|&b| b as f64).collect()));
+set("dynamicInstances", arr(s.dynamic_instances.iter().map(|&b| b as f64).collect()));
+o.into()
+}
+// ---- camera + lights ----
     /// `world` = camera-to-world mat4. zfar <= 0 → infinite far plane.
     #[wasm_bindgen(js_name = setCamera)]
     pub fn set_camera(&mut self, world: &[f32], yfov: f32, znear: f32, zfar: f32) -> Result<(), JsError> {

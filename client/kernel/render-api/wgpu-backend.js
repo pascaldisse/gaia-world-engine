@@ -87,7 +87,11 @@ export function texturePixels(t) {
   const c = new OffscreenCanvas(w, h).getContext('2d'); c.drawImage(img, 0, 0);
   return { width: w, height: h, data: new Uint8Array(c.getImageData(0, 0, w, h).data.buffer) };
 }
-export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl' } = {}) {
+// r4-browser (additive): `options.shadows` = ShadowOptions object (camelCase keys, passed to wasm create). `staticInstances`:
+// 'none' (default) = every instance DYNAMIC in the shadow system (safe for moving games) · 'non-skinned' = every instance whose mesh is NOT a
+// skinned mesh is marked static (cached shadow layers; moving one re-renders the cache) — per-node override: flags.static / updateNode({static}).
+// flags.castShadow (three semantics; the adapter always sends a bool) → core per-instance cast flag; undefined = core default (casts).
+export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl', staticInstances = 'none' } = {}) {
   if (!canvas) throw new Error('createWgpuBackend requires { canvas }');
   if (!wasm?.GaiaRender) throw new Error('createWgpuBackend requires { wasm } = the render_wasm.js module');
   if (!navigator.gpu) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)');
@@ -97,6 +101,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   let next = 1;
   const nodes = new Map();      // NodeId → { id, kind, parent, children:Set, local, world, visible, mesh, material, rid }
   const lights = new Map();     // LightId → { kind:'sun'|'point', ... }
+  const skinnedMeshes = new Set(); // wasm mesh ids that are skinned (always dynamic casters)
   const matTextures = new Map(); // MaterialId → [wasm texture ids] owned by that material
   let lightsDirty = false;
   let sunId = 0;
@@ -116,6 +121,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
           if (node.rid) gpu.removeInstance(node.rid);
           node.rid = gpu.createInstance(node.mesh, node.material, w);
           node.ridMat = node.material; node.ridMesh = node.mesh;
+          applyShadowFlags(node);
         }
       } else if (node.rid) { gpu.removeInstance(node.rid); node.rid = 0; }
     }
@@ -127,6 +133,11 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
     let vis = true; for (let q = p; q; q = q.parent ? nodes.get(q.parent) : null) vis = vis && q.visible;
     return [p.world, vis];
   };
+  function applyShadowFlags(node) {
+  if (node.castShadow !== undefined) gpu.setInstanceCastShadow(node.rid, node.castShadow);
+  const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
+  if (st) gpu.setInstanceStatic(node.rid, true);
+  }
   function link(node, parentId) {
     if (parentId) need(nodes, parentId, 'parent node').children.add(node.id);
     node.parent = parentId || 0;
@@ -151,7 +162,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -174,9 +185,10 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       const positions = Float32Array.from(arrays.positions);
       const normals = arrays.normals ? Float32Array.from(arrays.normals) : computeNormals(positions, indices);
       const uvs = arrays.uvs ? Float32Array.from(arrays.uvs) : new Float32Array(n * 2);
-      return gpu.createSkinnedMesh(skin, positions, normals, uvs, Uint32Array.from(arrays.joints), Float32Array.from(arrays.weights), indices);
+      const mid = gpu.createSkinnedMesh(skin, positions, normals, uvs, Uint32Array.from(arrays.joints), Float32Array.from(arrays.weights), indices);
+      skinnedMeshes.add(mid); return mid;
     },
-    destroySkinnedMesh(id) { gpu.destroySkinnedMesh(id); },
+    destroySkinnedMesh(id) { skinnedMeshes.delete(id); gpu.destroySkinnedMesh(id); },
 
     // params = three-style; preset → degrades to pbr; opacity/doubleSide/fog/flatShading not in the core yet (drawn opaque, no cull).
     createMaterial(params = {}, textures = null) {
@@ -227,7 +239,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0 };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static };
       nodes.set(node.id, node); link(node, flags.parent);
       const [pw, pv] = parentState(node); sync(node, pw, pv);
       return node.id;
@@ -237,7 +249,11 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       if (patch.mat4) node.local = Float64Array.from(asMat(patch.mat4));
       if (patch.visible !== undefined) node.visible = !!patch.visible;
       if (patch.material !== undefined && node.kind === 'instance') node.material = patch.material;
-      // castShadow/receiveShadow/renderOrder/euler: accepted, no-ops (no shadows / ordering in the core yet)
+      if (node.kind === 'instance') {
+      if (patch.castShadow !== undefined && patch.castShadow !== node.castShadow) { node.castShadow = !!patch.castShadow; if (node.rid) gpu.setInstanceCastShadow(node.rid, node.castShadow); }
+      if (patch.static !== undefined && patch.static !== node.static) { node.static = !!patch.static; if (node.rid) gpu.setInstanceStatic(node.rid, node.static); }
+      }
+      // receiveShadow/renderOrder/euler: accepted, no-ops (core receivers = all opaque; no ordering)
       const [pw, pv] = parentState(node); sync(node, pw, pv);
     },
     removeNode(id) {
@@ -289,6 +305,9 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       return gpu.renderGpuTimed();
     },
     resize(renderHeight) { gpu.setRenderHeight(renderHeight); },
+    // wgpu-only (r4-browser): last frame's shadow work (passes/draws/cache hits) + runtime option change (re-creates the shadow system)
+    shadowStats() { return gpu.shadowStats(); },
+    setShadowOptions(o) { gpu.setShadowOptions(o); },
     dispose() { for (const id of [...nodes.keys()]) if (nodes.has(id) && !nodes.get(id).parent) backend.removeNode(id); gpu.free(); },
   };
   return backend;

@@ -8,7 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ? process.argv[i + 1] : d; };
 const port = Number(arg('port', 5391)), cdp = Number(arg('cdp', 9391));
 const w = arg('w', 1280), h = arg('h', 800), rh = arg('rh', 720), frames = arg('frames', 120);
-const out = resolve(root, arg('out', '.scratch/render-wasm.png')), page = arg('page', '');
+const out = resolve(root, arg('out', '.scratch/render-wasm.png')), page = arg('page', ''), extraQ = arg('q', ''); // --q 'mode=gaia&cam=…' appended to the page URL (r4)
 const profile = resolve(root, '.scratch/brave-profile');
 const brave = process.env.BRAVE || '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 mkdirSync(profile, { recursive: true }); mkdirSync(dirname(out), { recursive: true });
@@ -29,7 +29,7 @@ const send = (method, params = {}) => new Promise((r) => { const i = ++id; pendi
 try {
   await send('Runtime.enable'); await send('Page.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: Number(w), height: Number(h), deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url: `http://localhost:${port}/${page}?w=${w}&h=${h}&rh=${rh}&frames=${frames}` });
+  await send('Page.navigate', { url: `http://localhost:${port}/${page}?w=${w}&h=${h}&rh=${rh}&frames=${frames}${extraQ ? '&' + extraQ : ''}` });
   let res = null;
   for (let i = 0; i < 600; i++) { await sleep(500); const r = await send('Runtime.evaluate', { expression: 'window.__result && window.__result.done ? JSON.stringify(window.__result) : null', returnByValue: true }); if (r.result?.result?.value) { res = JSON.parse(r.result.result.value); break; } }
   if (!res) throw new Error('timeout waiting for window.__result');

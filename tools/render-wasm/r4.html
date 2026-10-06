@@ -1,0 +1,128 @@
+<!doctype html><meta charset=utf-8><title>r4-browser: game-style three scene → adapter → wgpu → wasm  vs  three WebGPURenderer</title>
+<style>html,body{margin:0;background:#000}canvas{display:block}</style>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js","three/addons/":"/nm/three/examples/jsm/"}}</script>
+<canvas id=c></canvas>
+<script type=module>
+// ?mode=gaia|three  &w=1280 &h=720 &frames=300 &fps=30 (animation clock: t = frame/fps, identical for both modes)
+//  &cam=x,y,z,tx,ty,tz (default: 3.2 m behind/above first skinned character's root)  &sun=1 (default on)  &sunI=3
+// gaia  = three scene (GLTFLoader + AnimationMixer, game-style) → scene-adapter → wgpu-backend → wasm, rAF loop, ONLY that path draws.
+// three = same scene object + camera + clip time → three's own WebGPURenderer (Reinhard, same sun/ambient numbers).
+import * as THREE from 'three/webgpu';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const q = new URLSearchParams(location.search), num = (k, d) => (q.has(k) ? Number(q.get(k)) : d);
+const MODE = q.get('mode') || 'gaia', W = num('w', 1280), H = num('h', 720), FRAMES = num('frames', 300), FPS = num('fps', 30), SUN_I = num('sunI', 3);
+const AMBIENT = [0.08, 0.09, 0.11]; // = gaia-render RenderOptions.ambient default; three side gets the same numbers (×π, see below)
+const R = window.__result = { done: false, mode: MODE, W, H, frames: FRAMES, log: [] };
+const canvas = document.getElementById('c'); canvas.width = W; canvas.height = H; canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+const raf = () => new Promise(requestAnimationFrame);
+const pct = (a, p) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * p))] : null; };
+const stat = (a) => ({ n: a.length, mean: a.length ? a.reduce((x, y) => x + y, 0) / a.length : null, median: pct(a, 0.5), p95: pct(a, 0.95), min: pct(a, 0), max: pct(a, 1) });
+try {
+  // ---- scene, the way a game builds it ----
+  const t0 = performance.now();
+  const buf = await (await fetch('/asylum.glb')).arrayBuffer();
+  R.glb_bytes = buf.byteLength; R.fetch_ms = performance.now() - t0;
+  const t1 = performance.now();
+  const gltf = await new GLTFLoader().parseAsync(buf, '/');
+  R.parse_ms = performance.now() - t1;
+  const scene = new THREE.Scene(); scene.add(gltf.scene);
+  let meshes = 0, skinned = 0, tris = 0; const mats = new Set(), toCull = [];
+  gltf.scene.traverse((o) => {
+    if (o.isLight) { o.visible = false; return; } // glb lights: sun points UP + uncalibrated units (gaia-render NOTES) → game's own sun below
+    if (!o.isMesh) return;
+    meshes++; if (o.isSkinnedMesh) skinned++;
+    const g = o.geometry; g.computeBoundingBox?.(); const diag = g.boundingBox ? g.boundingBox.max.distanceTo(g.boundingBox.min) : 0;
+    tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+    o.castShadow = diag < 400; o.receiveShadow = true; // sky/backdrop prims (>400 m) never cast — same rule gaia-render applies on glb import
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) mats.add(m);
+    o.frustumCulled = false; // skinned bounds are bind-pose; same for both sides
+  });
+  R.scene = { meshes, skinned, tris, materials: mats.size, animations: gltf.animations.length, clipSeconds: Math.max(...gltf.animations.map((a) => a.duration)) };
+  const mixer = new THREE.AnimationMixer(gltf.scene);
+  for (const clip of gltf.animations) mixer.clipAction(clip).play();
+  const tAt = (f) => f / FPS;
+  mixer.setTime(0); scene.updateMatrixWorld(true);
+  // camera
+  const cam = new THREE.PerspectiveCamera(60, W / H, 0.1, 1500);
+  let eye, tgt;
+  if (q.has('cam')) { const c = q.get('cam').split(',').map(Number); eye = c.slice(0, 3); tgt = c.slice(3, 6); }
+  else {
+    // &char=<regex on skinned mesh name or ancestor name> (default: first skinned mesh); &dist=<m> (default 4)
+    const re = q.has('char') ? new RegExp(q.get('char')) : null, chars = []; let ch = null;
+    gltf.scene.traverse((o) => { if (!o.isSkinnedMesh) return; let n = o.name, a = o.parent; while (a && a !== gltf.scene) { n += '/' + a.name; a = a.parent; } const bb = new THREE.Box3(); for (const b of o.skeleton.bones) bb.expandByPoint(b.getWorldPosition(new THREE.Vector3())); chars.push({ n, size: +bb.getSize(new THREE.Vector3()).length().toFixed(1), at: bb.getCenter(new THREE.Vector3()).toArray().map((v) => +v.toFixed(1)) }); if (!ch && (!re || re.test(n))) ch = o; });
+    R.chars = chars.slice(0, 60); R.char_count = chars.length;
+    const p = new THREE.Vector3(); ch.skeleton.bones[0].getWorldPosition(p); R.character = { name: ch.name, root: p.toArray() };
+    const d = num('dist', 4); eye = [p.x + d * 0.55, p.y + d * 0.5, p.z + d * 0.65]; tgt = [p.x, p.y + 0.9, p.z];
+  }
+  cam.position.set(...eye); cam.lookAt(...tgt); cam.updateMatrixWorld(true); R.camera = { eye, tgt };
+  // sun (+shadows) — toward-light vector (0.4,0.8,0.3) like gaia's proof sun; ambient = core default
+  const toLight = new THREE.Vector3(0.4, 0.8, 0.3).normalize();
+  const sun = new THREE.DirectionalLight(0xffffff, SUN_I);
+  sun.position.set(tgt[0], tgt[1], tgt[2]).addScaledVector(toLight, 100); sun.target.position.set(...tgt); scene.add(sun.target);
+  sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
+  Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 45, bottom: -45, near: 1, far: 300 }); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03;
+  scene.add(sun);
+  scene.background = null;
+  let amb = null;
+  if (MODE === 'three') { amb = new THREE.AmbientLight(0xffffff, 1); amb.color.setRGB(AMBIENT[0] * Math.PI, AMBIENT[1] * Math.PI, AMBIENT[2] * Math.PI); scene.add(amb); } // core: ambient*albedo (no 1/π)
+
+  const cpu = { mixer: [], sync: [], submit: [], total: [] }, gpuP = [], gpuThree = [], draws = [];
+  const animate = (f) => { const t = performance.now(); mixer.setTime(tAt(f)); cpu.mixer.push(performance.now() - t); };
+  if (MODE === 'gaia') {
+    const wasm = await import('/pkg/render_wasm.js');
+    const { createWgpuBackend } = await import('/kernel/wgpu-backend.js');
+    const { createSceneAdapter } = await import('/kernel/scene-adapter.js');
+    // adapter's material-map reads textures from canvas/DataTexture only; GLTFLoader gives ImageBitmaps → game-side prep: read `map` pixels ONCE into {width,height,data} (same Texture objects; a canvas image makes material-map getImageData() it per mesh per frame)
+    const tp = performance.now(); let conv = 0;
+    for (const m of mats) { const t = m.map; if (t?.image && typeof ImageBitmap !== 'undefined' && t.image instanceof ImageBitmap) { const c = document.createElement('canvas'); c.width = t.image.width; c.height = t.image.height; c.getContext('2d').drawImage(t.image, 0, 0); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height); t.image = { width: c.width, height: c.height, data: new Uint8Array(d.data.buffer) }; conv++; } }
+    R.texture_prep = { converted: conv, ms: performance.now() - tp };
+    const tb = performance.now();
+    const backend = await createWgpuBackend({ canvas, wasm, renderHeight: H, staticInstances: 'non-skinned', options: { ambient: AMBIENT, exposure: 1, shadows: { enabled: num('shadows', 1) !== 0 } } });
+    R.backend = { name: backend.name, caps: backend.capabilities, init_ms: performance.now() - tb };
+    const adapter = createSceneAdapter(backend, { three: THREE });
+    animate(0);
+    const ts = performance.now(); adapter.sync(scene, cam); R.first_sync_ms = performance.now() - ts;
+    cpu.mixer.length = 0;
+    R.instances = backend.gpu.instanceCount();
+    for (let f = 0; f < FRAMES; f++) {
+      await raf();
+      animate(f);
+      const a = performance.now(); adapter.sync(scene, cam); const b = performance.now();
+      const p = backend.renderFrameGpuTimed(); const c = performance.now();
+      cpu.sync.push(b - a); cpu.submit.push(c - b); cpu.total.push(c - a);
+      gpuP.push(p); draws.push(backend.gpu.drawCalls());
+      if (f === FRAMES - 1) R.shadow_last = backend.shadowStats();
+      if (f % 30 === 0) R.log.push(`f${f} sync ${(b - a).toFixed(2)} submit ${(c - b).toFixed(2)} draws ${draws[f]} shadowDraws ${backend.shadowStats().totalDraws}`);
+    }
+    const g = (await Promise.all(gpuP)).filter(Boolean);
+    R.gpu_ms = { total: stat(g.map((x) => x.total)), scene: stat(g.map((x) => x.scene)), samples: g.length, nulls: gpuP.length - g.length };
+    R.skin_uploads = adapter.stats.skinUploads; R.adapter = { created: adapter.stats.created, updated: adapter.stats.updated, degraded: [...adapter.stats.degraded], unsupported: [...adapter.stats.unsupported] };
+    R.draws = { median: pct(draws, 0.5), last: draws[draws.length - 1] };
+    R.instances_last = backend.gpu.instanceCount();
+  } else {
+    const renderer = new THREE.WebGPURenderer({ canvas, antialias: false, trackTimestamp: true });
+    renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+    renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1;
+    renderer.shadowMap.enabled = num('shadows', 1) !== 0; renderer.shadowMap.type = THREE.PCFShadowMap;
+    const tb = performance.now(); await renderer.init(); R.backend = { name: 'three-webgpu', init_ms: performance.now() - tb, timestamps: renderer.backend?.hasFeature?.('timestamp-query') };
+    animate(0); const ts = performance.now(); await renderer.compileAsync?.(scene, cam); R.first_sync_ms = performance.now() - ts; cpu.mixer.length = 0;
+    let tsNull = 0; scene.matrixWorldAutoUpdate = false; // we update once per frame ourselves (counted in `sync`)
+    for (let f = 0; f < FRAMES; f++) {
+      await raf();
+      animate(f);
+      const a = performance.now(); scene.updateMatrixWorld(true); const b = performance.now();
+      renderer.render(scene, cam); const c = performance.now();
+      cpu.sync.push(b - a); cpu.submit.push(c - b); cpu.total.push(c - a);
+      draws.push(renderer.info.render.drawCalls);
+      try { await renderer.resolveTimestampsAsync('render'); const v = renderer.info.render.timestamp; if (v > 0) gpuThree.push(v); else tsNull++; } catch (e) { tsNull++; R.ts_err = String(e); }
+      if (f % 30 === 0) R.log.push(`f${f} matrixWorld ${(b - a).toFixed(2)} render ${(c - b).toFixed(2)} draws ${draws[f]} ts ${renderer.info.render.timestamp}`);
+    }
+    R.gpu_ms = { total: stat(gpuThree), samples: gpuThree.length, nulls: tsNull };
+    R.draws = { median: pct(draws, 0.5), last: draws[draws.length - 1], info: { ...renderer.info.render, timestamp: undefined } };
+  }
+  R.cpu_ms = Object.fromEntries(Object.entries(cpu).map(([k, v]) => [k, stat(v)]));
+  R.last_t = tAt(FRAMES - 1);
+  R.ok = true;
+} catch (e) { R.error = String(e.stack || e); }
+R.done = true;
+</script>

@@ -454,6 +454,8 @@ impl ShadowSystem {
             queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&su)); // params.x = 0 → shader skips
             return false;
         }
+        // std::time::Instant::now() PANICS on wasm32-unknown-unknown (found r4-browser, first browser run) → native-only clock; wasm reports 0 (JS times the frame)
+        #[cfg(not(target_arch = "wasm32"))]
         let t0 = std::time::Instant::now();
         let d = sun_dir.normalize();
         let up = if d.y.abs() > 0.99 { Vec3::X } else { Vec3::Y };
@@ -595,7 +597,10 @@ impl ShadowSystem {
         }
         // any dynamic caster anywhere in the frame → receiver samples LIVE (cache copy + dyn)
         self.use_live = dyn_total > 0;
-        self.stats.cpu_cull_ms = t0.elapsed().as_secs_f64() * 1e3;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.stats.cpu_cull_ms = t0.elapsed().as_secs_f64() * 1e3;
+        }
 
         // ---- step plan (for first/last-pass timestamps) ----
         enum Step {

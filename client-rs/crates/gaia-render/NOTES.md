@@ -183,3 +183,10 @@ OPEN / UNVERIFIED
 - three r180 WebGPU tone-maps toneMapped:false too (measured r8-blend.html) -> unlit stays tone-mapped. Gap: three blends HDR-linear then tone-maps; core blends post-tonemap (a=.5 white: 165 vs 157).
 - receiveShadow:false -> `MaterialFlags.no_receive_shadow` (per material, all-users rule). Shadow geometry itself verified correct (r8-shadow.html). Skinned lighting parity test green -> character darkness not in core path (UNVERIFIED cause).
 - Overlap r6-mat: blend/depthWrite/side (see RENDER-API §12). Detail: docs/RENDER-API.md §12.
+
+## Round 9 — STREAK (lampas/r9-streak, 2026-10-06)
+- Wedge on Eden right wall = shadow cast by a SINGLE-SIDED surface whose front faces away from the sun. three r180 WebGPU shadow pass = `material.shadowSide ?? material.side` (Renderer.js:2902) = FrontSide default -> back-facing-to-sun surfaces cast NOTHING; core caster pass was cull None -> cast.
+- Ruled out (tests/streak.rs `wall_lit_uniform_with_shadows_on`: 600 m wall, 4 low suns, shadows ON == OFF per pixel, worst |diff| 0): cascade split, shadow-frustum coverage, wall self-acne.
+- Fix: `MaterialFlags.shadow_cull_back` / `set_material_shadow_cull_back` (call after set_material_flags) + back-cull caster pipelines; wasm `setMaterialShadowCullBack`; wgpu-backend pushes it for three FrontSide (Double/Back keep double-sided caster). Default false = old behaviour for non-three users.
+- Proof: cargo away/double 0 · away/FrontSide 154 · sun-facing FrontSide 0; browser tools/render-wasm/r9-streak.html wall px three 113 vs wgpu 27 (before) -> 110 (after), meanAbs 7.48 -> 2.9.
+- Open: three `shadowSide` explicit overrides ignored; negative-determinant instance transforms flip winding (three flips frontFace per object; core does not); forward pass still double-sided (r6-mat `side` lane); real Eden pair NOT re-shot (UNVERIFIED that the wedge disappears there).

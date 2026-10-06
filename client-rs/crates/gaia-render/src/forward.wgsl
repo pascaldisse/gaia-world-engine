@@ -18,6 +18,7 @@ struct Frame {
     cam_fwd: vec4<f32>,      // xyz camera forward (view depth for fog)
     env: vec4<f32>,          // x = IBL diffuse on (1) / off (0), y = intensity
     sh: array<vec4<f32>, 9>, // IBL diffuse irradiance, SH9, already cosine-convolved and /PI: E(n)/PI = sum Y_i(n) sh[i].rgb
+    post: vec4<f32>,         // r10: x = 1 HDR scene target (linear out, exposure + tone map happen in the post resolve)
 };
 struct Material {
     base_color: vec4<f32>,
@@ -316,7 +317,8 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if (material.flags.x > 0.5) {
         let cu = apply_fog(base.rgb, in.world);
         if (material.flags.z > 0.5) { // unlit but tone-mapped (three MeshBasicMaterial toneMapped:true): exposure + Reinhard, no lighting
-            let eu = cu * frame.ambient.w;
+            if (frame.post.x > 0.5) { return vec4<f32>(cu, base.a); }
+        let eu = cu * frame.ambient.w;
             return vec4<f32>(eu / (vec3<f32>(1.0) + eu), base.a);
         }
         return vec4<f32>(cu, base.a); // unlit: authored colour as-is (backdrops, sky domes, additive cards)
@@ -372,6 +374,7 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     if (frame.env.x > 0.5) { color = color + sh_irradiance(n) * frame.env.y * base.rgb * (1.0 - metallic) * ao; }
     color = apply_fog(color, in.world);
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
+    if (frame.post.x > 0.5) { return vec4<f32>(color, base.a); }
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).
     return vec4<f32>(e / (vec3<f32>(1.0) + e), base.a);

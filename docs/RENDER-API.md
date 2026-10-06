@@ -85,3 +85,34 @@ Files (client/kernel/render-api/): `scene-adapter.js` (`createSceneAdapter(backe
 - **TSL→WGSL headless**: builder class obtained from a never-`init()`ed `WebGPURenderer` on a stub canvas (`renderer.backend.createNodeBuilder`), `hasFeature`/`backend.utils` stubbed; output `{vertex,fragment,bindGroups[{group,name,bindings[{kind,uniforms[{name,type,value}]}]}],attributes}`. Proven (test/render-api-tsl.test.js, naga 30.0.1 `naga <file.wgsl>`): boomtown powerbox · empire-earth gfx-sprite (injected three, SpriteNodeMaterial) · burnout bp-paintlerp (NodeMaterial subclass) — all built + naga-valid per stage.
 - **FINDINGS for gaia-render core (OPEN items in its NOTES confirmed)**: (1) three emits **vertex and fragment as two separate WGSL modules** (each with own structs/entry `main`); core's `create_shader_material` takes one `wgsl` + vertex_entry/fragment_entry → must accept two modules or the adapter must merge (rename entries). (2) TSL layout = group(0) `render` (camera matrices, vertex) + group(1) `object` (uniform buffer + texture_2d + sampler…) — group 0 is TSL's own camera UBO, NOT gaia Frame; vertex attrs by node-builder order (`position,normal,uv` @location 0..n), not the core's fixed 0/1/2/3..6. Core must take a per-material group/location map (package has them) and feed `cameraProjectionMatrix/cameraViewMatrix` + `modelWorldMatrix` (object group) itself. (3) `uniform.offset` is 0 until three allocates its buffer → layout must come from naga reflection, not the package.
 - Validated per stage separately (vertex.wgsl / fragment.wgsl); a combined module was not tried.
+
+## 9. Game run — Burnout Paradise on renderBackend=wgpu (lane `lampas/r5-game`, 2026-10-06)
+Seam (generic, engine): `?renderBackend=wgpu` → `client/main.js` builds `kernel/render-api/wgpu-present.js` (overlay canvas + `createWgpuBackend` + `createSceneAdapter`); three keeps owning the scene graph / game code / DOM HUD, only the draw call is replaced (`adapter.sync(scene,camera)` + `backend.renderFrame()`; three canvas hidden). Params: `wgpuPkg` (url of render_wasm.js, default `/pkg/render_wasm.js`) `wgpuHeight` `wgpuShadows=0` `wgpuTsl=1` (opt-in, see below) `wgpuTexPrep=0`. `window.gaia.{renderer,scene,camera}` + `window.__wgpu` exposed for probes. build.sh awk bug fixed (wbg version parse).
+Run: game repo branch `lampas/r5-wgpu` (`tools/r5-run.mjs <three|wgpu>`; own Brave :9492, server :15492/:18892), `GAIA_ENGINE=<this worktree> ./play.sh`. 9-tile world, bpDrive=1, bpRadius=700, 1280×720 dpr1, renderHeight=720 both.
+**Status: RUNS** (no crash, 0 console errors with TSL export off). Same spawn/camera pose both sides (1724.4,2.99,27.6). Geometry, car, shadows, camera framing identical; look differs hard (below).
+| 9-tile spawn, headless Brave/Metal | three | wgpu (no texprep) | wgpu (texprep) |
+|---|---|---|---|
+| fps (rAF) | 19.5 (med frame 41.8 ms, p95 96) | 59.5 (vsync cap, p95 17.6) | 26.9 (22 ms sync: texture pixel upload) |
+| CPU ms draw call | three.render 2.8 mean | sync 10.3 + submit 1.2 | sync 22.0 + submit 2.0 |
+| GPU ms | not obtainable (resolveTimestampsAsync cumulative, 478 ms = invalid) | 8.7 total / 5.1 scene | 9.2 / 5.8 |
+| draws | 9860 (incl. bloom/shadow) | 768 main (+237 shadow) | 1234 |
+NOTE three side = WebGPURenderer + bloom post + engine shadow map + game's TSL; wgpu = flat PBR + cascaded shadows, so this is NOT apples-to-apples (it is what a game gets today).
+### Per object class (screens `.scratch/{three,wgpu,wgpu3}.png` in game worktree)
+- world tiles (static meshes): geometry+placement exact; **untextured grey** (map is ImageBitmap → `textureData` undefined); with texprep roads/asphalt textured, walls/buildings still grey (bp-texarr DataArrayTexture + TSL materials). fog/hemi/ambient missing → flat grey sun-lit look.
+- car: exact shape; paint blue only with texprep; no env reflections/glass transparency (glass drawn opaque dark).
+- sky: NOT exercised (needs `&bpSky=1`; neither screenshot has a dome — overpass view). Expected: bp-sky legacy-GLSL ShaderMaterial has no wgpu path (adapter 'NodeMaterial-without-exporter'/unsupported) → grey clear colour. UNVERIFIED.
+- shadows: cascaded sun shadows run on game scene (4 passes, 237 draws, static cache).
+- TSL NodeMaterials (paintlerp/terrain/road/water/fx): adapter falls back to PBR (`pbr-fallback`). With `wgpuTsl=1` the export succeeds but core aborts the frame: `three attribute nodeAttribute0 not provided by core meshes (position/normal/uv)` → 0 frames. 
+### Missing renderer features (named, game-driven)
+1. Custom vertex attributes (TSL `attribute()`/nodeAttributeN, vertex colour, uv1/uv2, instance attributes bp-instattr) — core accepts position/normal/uv only; kills every game TSL material.
+2. Per-material group/location map + camera/modelWorldMatrix feed for TSL two-module WGSL (open since §8 finding 2).
+3. Sky/background: scene.background Color/Texture/CubeTexture, procedural sky dome w/ depth-at-far (`gl_Position.xyww`), BackSide culling.
+4. Fog (THREE.Fog linear, game animates near/far/color per frame). 
+5. HemisphereLight + AmbientLight (adapter 'unsupported'); IBL/env maps.
+6. Texture arrays (DataArrayTexture, 2D-array sampling) — bp-texarr merges ~20 tile materials into array layers; compressed/KTX textures; mipmaps+anisotropy; sRGB vs linear flag (core forces sRGB).
+7. Backend-side ImageBitmap/HTMLImage/canvas texture decode (adapter gap; presenter workaround mutates `texture.image` and conflicts with texarr's createImageBitmap(t.image) → console errors; r5-adapter lane owns the fix).
+8. Material opacity/alphaTest/transparent blend, doubleSide, normal/roughness/metalness/emissive/AO maps (buildings' windows/glass).
+9. InstancedMesh native path (backend lacks createInstanced → expanded per instance; traffic/props) and BatchedMesh.
+10. Bloom/ACES tonemap/post chain (core has Reinhard only); engine `post` (TSL PostProcessing) bypassed.
+11. Perf: adapter `sync` 10 ms/frame on 7k-mesh scene (143k material/node updates per 1000 frames — something is marked dirty every frame; per-frame traverse + matrix compare); frustum culling/LOD in core; GPU-timestamp parity on the three side.
+12. Browser GPU timestamps readback exists (renderGpuTimed); three's resolveTimestampsAsync unusable here.

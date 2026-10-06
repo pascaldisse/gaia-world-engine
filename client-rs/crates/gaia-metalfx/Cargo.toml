@@ -1,0 +1,21 @@
+[package]
+name = "gaia-metalfx"
+version = "0.1.0"
+edition = "2021"
+description = "MetalFX spatial/temporal upscaling for the wgpu renderer (macOS only; empty stub elsewhere)"
+license = "MIT"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "30.0.0", features = ["metal"] }
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-metal = { version = "0.3.2", features = ["objc2-core-foundation"] }
+objc2-metal-fx = { version = "0.3.2", default-features = false, features = ["std", "MTLFXSpatialScaler", "MTLFXTemporalScaler"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+pollster = "0.4"
+png = "0.17"
+
+[[example]]
+name = "spatial_bench"

@@ -78,6 +78,14 @@ test('shadow cameras of sun lights gain the proxy layer', () => {
   assert.ok(sun.shadow.camera.layers.isEnabled(5)); assert.ok(sun.shadow.camera.layers.isEnabled(0));
 });
 
+test('CSM cascade lights (clones inside shadowNode.lights, castShadow unset) gain the proxy layer too', () => {
+  const { scene, mk, run } = rig();
+  const sun = new THREE.DirectionalLight(); sun.castShadow = true; scene.add(sun);
+  const casc = [new THREE.DirectionalLight(), new THREE.DirectionalLight()]; sun.shadow.shadowNode = { lights: casc };
+  mk(0); mk(1); run();
+  for (const c of casc) { assert.ok(c.shadow.camera.layers.isEnabled(5)); assert.ok(c.shadow.camera.layers.isEnabled(0)); }
+});
+
 test('disable() restores everything', () => {
   const { scene, mk, b, run } = rig(); const a = mk(0); mk(1); run(); assert.ok(b.chunks.length);
   b.setOptions({ enabled: false }); b.update();

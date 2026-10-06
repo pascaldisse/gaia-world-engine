@@ -57,7 +57,12 @@ export class StaticBatcher {
 
   // sun-shadow cameras (incl. CSM cascade lights) must see the proxy layer; a layer bit beyond 0 also keeps three from re-adopting the main camera mask
   _enableShadowLayer() {
-    this.scene.traverse((l) => { if (l.isDirectionalLight && l.castShadow && l.shadow?.camera && !l.shadow.camera.layers.isEnabled(this.opt.shadowLayer)) { l.shadow.camera.layers.mask |= 1; l.shadow.camera.layers.enable(this.opt.shadowLayer); } });
+    const L = this.opt.shadowLayer, on = (l) => { const cam = l?.shadow?.camera; if (cam && !cam.layers.isEnabled(L)) { cam.layers.mask |= 1; cam.layers.enable(L); } };
+    this.scene.traverse((l) => {
+      if (!l.isDirectionalLight) return;
+      if (l.castShadow) on(l);
+      for (const c of l.shadow?.shadowNode?.lights ?? []) on(c); // CSM cascade lights are clones living in the node (not necessarily in the scene graph)
+    });
   }
 
   // call once per frame BEFORE render

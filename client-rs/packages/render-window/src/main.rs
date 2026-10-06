@@ -551,6 +551,7 @@ struct Renderer {
     core: Option<gaia_render::RenderCore>,
     frame_index: u64,
     timing_every: u32,
+    cpu_encode_ms: f64,
 }
 
 impl Renderer {
@@ -789,6 +790,7 @@ impl Renderer {
             core,
             frame_index: 0,
             timing_every,
+            cpu_encode_ms: 0.0,
         })
     }
 
@@ -894,7 +896,9 @@ impl Renderer {
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
             if let Some(core) = self.core.as_mut() {
+                let started = Instant::now();
                 core.render(&self.device, &self.queue, &mut encoder, &view, output);
+                self.cpu_encode_ms = started.elapsed().as_secs_f64() * 1e3;
             } else {
                 self.encode_world_pass(
                     &mut encoder,
@@ -973,10 +977,13 @@ impl Renderer {
         {
             let internal = core.internal_size().unwrap_or(output);
             eprintln!(
-                "[gpu-ms] frame={} scene={:.3} upscale={:.3} internal={}x{} output={}x{}",
+                "[gpu-ms] frame={} scene={:.3} upscale={:.3} total={:.3} cpu_encode={:.3} draws={} internal={}x{} output={}x{}",
                 self.frame_index,
                 t.scene_ms,
                 t.upscale_ms,
+                t.total_ms,
+                self.cpu_encode_ms,
+                core.last_draw_calls,
                 internal.width,
                 internal.height,
                 output.width,

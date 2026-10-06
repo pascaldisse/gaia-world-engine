@@ -10,3 +10,6 @@ wgpu = "30.0.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 glam = "0.30.9"
 gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_lights_punctual", "KHR_materials_emissive_strength"] }
+
+[dev-dependencies]
+pollster = "0.4.0"

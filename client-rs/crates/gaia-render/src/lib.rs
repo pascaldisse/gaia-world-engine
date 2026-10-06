@@ -33,6 +33,10 @@ pub struct RenderOptions {
     pub clear_color: [f64; 4],
     /// Scale applied to KHR_lights_punctual intensities (lux / candela → shader units).
     pub light_intensity_scale: f32,
+    /// Camera fit when the glb has no camera: fraction of half-extent behind center,
+    /// and fraction of half-height below center.
+    pub fit_eye_back: f32,
+    pub fit_height_bias: f32,
 }
 
 impl Default for RenderOptions {
@@ -48,6 +52,8 @@ impl Default for RenderOptions {
             default_fov_y_degrees: 60.0,
             clear_color: [0.45, 0.55, 0.7, 1.0],
             light_intensity_scale: 1.0,
+            fit_eye_back: 0.6,
+            fit_height_bias: 0.5,
         }
     }
 }
@@ -258,9 +264,15 @@ impl Camera {
         let center = (scene.bounds_min + scene.bounds_max) * 0.5;
         let radius = ((scene.bounds_max - scene.bounds_min).length() * 0.5).max(1e-3);
         let yfov = opts.default_fov_y_degrees.to_radians();
-        let eye = center + Vec3::new(0.0, radius * 0.15, radius * 0.9);
+        // Fit: stand inside the bounds on the longest horizontal axis, look along it.
+        let half = (scene.bounds_max - scene.bounds_min) * 0.5;
+        let axis = if half.x >= half.z { Vec3::X } else { Vec3::Z };
+        let reach = axis * half.dot(axis);
+        let low = Vec3::Y * (-half.y * opts.fit_height_bias);
+        let eye = center - reach * opts.fit_eye_back + low;
+        let target = center + reach + low;
         Self {
-            world: Mat4::look_at_rh(eye, center, Vec3::Y).inverse(),
+            world: Mat4::look_at_rh(eye, target, Vec3::Y).inverse(),
             yfov,
             znear: radius * 0.002,
             zfar: Some(radius * 4.0),
@@ -297,6 +309,8 @@ struct Timing {
 pub struct GpuTimings {
     pub scene_ms: f64,
     pub upscale_ms: f64,
+    /// scene-begin → upscale-end span (passes may overlap on tile GPUs).
+    pub total_ms: f64,
 }
 
 /// Data-only resource API (mirrors the JS render-api lane: meshes/materials/
@@ -319,8 +333,33 @@ struct GpuMesh {
 }
 
 struct GpuMaterial {
-    desc: MaterialDesc,
+    /// None = external shader material (no built-in desc to rebuild from).
+    desc: Option<MaterialDesc>,
     bind: wgpu::BindGroup,
+    /// Some = external WGSL pipeline; None = built-in PBR pipeline.
+    pipeline: Option<wgpu::RenderPipeline>,
+}
+
+/// External material (three TSL node builder output): WGSL module + group(1)
+/// layout + data. Contract the WGSL must honour (same as built-in forward.wgsl):
+/// group(0) binding(0) = gaia Frame uniform; vertex @location 0 pos, 1 normal,
+/// 2 uv, 3..6 instance model matrix columns; one color target (Rgba8UnormSrgb).
+/// group(1) = exactly `bindings`.
+#[derive(Clone, Debug)]
+pub struct ShaderMaterialDesc {
+    pub wgsl: String,
+    pub vertex_entry: String,
+    pub fragment_entry: String,
+    pub bindings: Vec<MaterialBinding>,
+}
+
+#[derive(Clone, Debug)]
+pub enum MaterialBinding {
+    /// std140-ish bytes exactly as the WGSL struct lays out (caller packs).
+    Uniform { binding: u32, data: Vec<u8>, visibility_vertex: bool },
+    /// Texture id from `create_texture`; missing id binds 1x1 white.
+    Texture { binding: u32, texture: u32 },
+    Sampler { binding: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -335,6 +374,7 @@ pub struct RenderCore {
     pub camera: Camera,
     pipeline: wgpu::RenderPipeline,
     material_layout: wgpu::BindGroupLayout,
+    frame_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
     frame_buffer: wgpu::Buffer,
@@ -347,6 +387,8 @@ pub struct RenderCore {
     instance_buffer: Option<wgpu::Buffer>,
     batches: Vec<(u32, u32, std::ops::Range<u32>)>,
     instances_dirty: bool,
+    /// draw_indexed calls issued by the last `render` (one per mesh+material batch).
+    pub last_draw_calls: u32,
     frame: FrameUniform,
     targets: Option<Targets>,
     upscaler: Box<dyn Upscaler>,
@@ -384,53 +426,7 @@ impl RenderCore {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gaia-render forward PBR"),
-            layout: Some(&pl),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                buffers: &[
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<scene::Vertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
-                    }),
-                    Some(wgpu::VertexBufferLayout {
-                        array_stride: 64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4],
-                    }),
-                ],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: INTERNAL_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            // cull off: glTF double-sided handled by one pipeline (shader flips back-face normal).
-            primitive: wgpu::PrimitiveState {
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main");
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("base color sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -496,6 +492,7 @@ impl RenderCore {
             opts,
             pipeline,
             material_layout,
+            frame_layout,
             sampler,
             white,
             frame_buffer,
@@ -507,6 +504,7 @@ impl RenderCore {
             instance_buffer: None,
             batches: Vec::new(),
             instances_dirty: true,
+            last_draw_calls: 0,
             frame,
             targets: None,
             timing,
@@ -592,12 +590,13 @@ impl RenderCore {
         let ids: Vec<u32> = self
             .materials
             .iter()
-            .filter(|(_, m)| m.desc.base_color_texture == Some(id))
+            .filter(|(_, m)| m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id)))
             .map(|(k, _)| *k)
             .collect();
         for mid in ids {
-            let desc = self.materials[&mid].desc.clone();
-            self.create_material(device, mid, desc);
+            if let Some(desc) = self.materials[&mid].desc.clone() {
+                self.create_material(device, mid, desc);
+            }
         }
         Ok(())
     }
@@ -645,7 +644,127 @@ impl RenderCore {
                 },
             ],
         });
-        self.materials.insert(id, GpuMaterial { desc, bind });
+        self.materials.insert(
+            id,
+            GpuMaterial {
+                desc: Some(desc),
+                bind,
+                pipeline: None,
+            },
+        );
+    }
+
+    /// Primary material path: external WGSL + layout. Validated with naga BEFORE
+    /// wgpu sees it (error = Err, never a device-lost panic). wgpu then lowers it
+    /// (naga → MSL on Metal; WGSL passthrough on WebGPU).
+    pub fn create_shader_material(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        desc: &ShaderMaterialDesc,
+    ) -> Result<(), String> {
+        let module = wgpu::naga::front::wgsl::parse_str(&desc.wgsl)
+            .map_err(|e| format!("material {id} WGSL parse: {}", e.emit_to_string(&desc.wgsl)))?;
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .map_err(|e| format!("material {id} WGSL validate: {e:?}"))?;
+        let entries: Vec<wgpu::BindGroupLayoutEntry> = desc
+            .bindings
+            .iter()
+            .map(|b| match b {
+                MaterialBinding::Uniform {
+                    binding,
+                    visibility_vertex,
+                    ..
+                } => uniform_entry(
+                    *binding,
+                    if *visibility_vertex {
+                        wgpu::ShaderStages::VERTEX_FRAGMENT
+                    } else {
+                        wgpu::ShaderStages::FRAGMENT
+                    },
+                ),
+                MaterialBinding::Texture { binding, .. } => texture_entry(*binding),
+                MaterialBinding::Sampler { binding } => wgpu::BindGroupLayoutEntry {
+                    binding: *binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            })
+            .collect();
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shader material layout"),
+            entries: &entries,
+        });
+        let buffers: Vec<Option<wgpu::Buffer>> = desc
+            .bindings
+            .iter()
+            .map(|b| match b {
+                MaterialBinding::Uniform { data, .. } => {
+                    Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("shader material uniform"),
+                        contents: nonempty(data),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    }))
+                }
+                _ => None,
+            })
+            .collect();
+        let bind_entries: Vec<wgpu::BindGroupEntry> = desc
+            .bindings
+            .iter()
+            .zip(&buffers)
+            .map(|(b, buf)| match b {
+                MaterialBinding::Uniform { binding, .. } => wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: buf.as_ref().expect("uniform buffer").as_entire_binding(),
+                },
+                MaterialBinding::Texture { binding, texture } => wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: wgpu::BindingResource::TextureView(
+                        self.textures.get(texture).unwrap_or(&self.white),
+                    ),
+                },
+                MaterialBinding::Sampler { binding } => wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            })
+            .collect();
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shader material bind"),
+            layout: &layout,
+            entries: &bind_entries,
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("external material"),
+            source: wgpu::ShaderSource::Wgsl(desc.wgsl.clone().into()),
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("external material pipeline layout"),
+            bind_group_layouts: &[Some(&self.frame_layout), Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = forward_pipeline(
+            device,
+            &pl,
+            &shader,
+            &desc.vertex_entry,
+            &desc.fragment_entry,
+        );
+        self.materials.insert(
+            id,
+            GpuMaterial {
+                desc: None,
+                bind,
+                pipeline: Some(pipeline),
+            },
+        );
+        Ok(())
     }
 
     pub fn remove_material(&mut self, id: u32) {
@@ -855,18 +974,22 @@ impl RenderCore {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.frame_bind, &[]);
+            let mut draws = 0u32;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
                 for (mesh, material, range) in &self.batches {
                     let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
                         continue; // dangling ids: counted by caller via instance_count vs drawn
                     };
+                    pass.set_pipeline(mat.pipeline.as_ref().unwrap_or(&self.pipeline));
                     pass.set_bind_group(1, &mat.bind, &[]);
                     pass.set_vertex_buffer(0, m.vertices.slice(..));
                     pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..m.index_count, 0, range.clone());
+                    draws += 1;
                 }
             }
+            self.last_draw_calls = draws;
         }
         self.upscaler.encode(
             device,
@@ -922,6 +1045,7 @@ impl RenderCore {
         Some(GpuTimings {
             scene_ms: ms(ts[0], ts[1]),
             upscale_ms: ms(ts[2], ts[3]),
+            total_ms: ms(ts[0], ts[3]),
         })
     }
 }
@@ -1040,4 +1164,61 @@ pub fn load_scene_into(
         .collect();
     core.set_point_lights(&packed);
     Ok(())
+}
+
+/// Shared pipeline shape for built-in PBR AND external (TSL-generated) WGSL materials.
+fn forward_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    vs: &str,
+    fs: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gaia-render forward PBR"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some(vs),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<scene::Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4],
+                    }),
+                ],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(fs),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: INTERNAL_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            // cull off: glTF double-sided handled by one pipeline (shader flips back-face normal).
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
 }

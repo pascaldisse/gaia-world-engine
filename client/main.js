@@ -1,5 +1,6 @@
 import { GAIA_PORT } from './kernel/port.js';
 import { createRenderer } from './kernel/renderer.js';
+import { createStaticBatcher } from './kernel/static-batch.js';
 import { WorldStore } from './kernel/world.js';
 import { View } from './kernel/view.js';
 import { Player } from './kernel/player.js';
@@ -44,6 +45,7 @@ const hintEl = document.getElementById('hint');
 const { renderer, scene, camera, hemi, sun, post, pixels } = await createRenderer();
 const store = new WorldStore();
 const audio = new AudioEngine(camera);
+const staticBatch = createStaticBatcher(scene); // engine option, default OFF (?staticBatch=1 / GAIA_RENDER_CONFIG.staticBatch)
 const effects = new Effects({ scene, audio });
 const environment = new Environment({ renderer, scene, hemi, sun, post, audio, camera });
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
@@ -859,6 +861,7 @@ document.addEventListener('pointerlockchange', syncCrosshair);
 // plugins self-register on window.gaia before this line — never overwrite, extend
 // (3 independent victims 07-28: scrubber, QA intro, frame-check menu)
 window.gaia = Object.assign(window.gaia ?? {}, {
+  staticBatch,
   pixels, // §IRON pixel governor — proofs pin it to measure at a known ratio
   store,
   view,
@@ -952,6 +955,7 @@ renderer.setAnimationLoop(() => {
   gizmos.update();
   outliner.update();
   publishPresence(now);
+  staticBatch.update();
   if (post) post.render();
   else renderer.render(scene, camera);
   if (pendingShot !== null) captureShot();

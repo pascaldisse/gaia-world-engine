@@ -11,6 +11,8 @@ export const VOXEL_DEFAULTS = {
   brickSize: 8,
   bricks: { x: 16, y: 8, z: 16 }, // window = 128x64x128 voxels at 1 m (PLACEHOLDER; rays leaving it read sky)
   maxBricksPerUpdate: 16, // PLACEHOLDER voxelize budget / update() call
+  index: false, // CC-GIVOX: brick-keyed spatial index of the mesh registry (O(candidates) per _buildBrick instead of O(all meshes)); bit-identical output (candidates visited in insertion order). Opt-in; BP passes true.
+  indexMaxBricks: 512, // meshes whose AABB spans more bricks than this go to the always-scanned `big` list
 };
 export const SOLID_BIT = 1 << 24;
 export const posMod = (a, n) => ((a % n) + n) % n;
@@ -63,6 +65,26 @@ export class VoxelWindow {
     this.meshes = new Map(); // id -> {tri, aabb, albedo}
     this.dirty = new Map(); // key -> [bx,by,bz]
     this._centered = false;
+    this.indexOn = !!c.index; this.indexMaxBricks = c.indexMaxBricks; this.cells = new Map(); this.big = new Map(); this._seq = 0; this._sum = new Float32Array(this.voxelsPerBrick * 4);
+    this.scan = { bricks: 0, meshesScanned: 0, trisScanned: 0 }; // CC-GIVOX counters (deterministic): _buildBrick calls, meshes AABB-tested, tris examined
+  }
+  _cellKey(x, y, z) { return `${x},${y},${z}`; }
+  _indexAdd(id, m) {
+    const w = this.brickWorld, a = m.aabb; const lo = [0, 1, 2].map((k) => Math.floor(a[k] / w)), hi = [0, 1, 2].map((k) => Math.floor(a[k + 3] / w));
+    const n = (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
+    if (!(n <= this.indexMaxBricks)) { m.big = true; this.big.set(id, m); return; } // also catches NaN/Infinity AABBs
+    m.big = false; m.lo = lo; m.hi = hi;
+    for (let z = lo[2]; z <= hi[2]; z++) for (let y = lo[1]; y <= hi[1]; y++) for (let x = lo[0]; x <= hi[0]; x++) { const k = this._cellKey(x, y, z); let c = this.cells.get(k); if (!c) this.cells.set(k, c = new Map()); c.set(id, m); }
+  }
+  _indexRemove(id, m) {
+    if (m.big) { this.big.delete(id); return; }
+    for (let z = m.lo[2]; z <= m.hi[2]; z++) for (let y = m.lo[1]; y <= m.hi[1]; y++) for (let x = m.lo[0]; x <= m.hi[0]; x++) { const k = this._cellKey(x, y, z); const c = this.cells.get(k); if (c) { c.delete(id); if (!c.size) this.cells.delete(k); } }
+  }
+  /** meshes whose AABB can touch brick (bx,by,bz), in registry insertion order */
+  _candidates(bx, by, bz) {
+    const c = this.cells.get(this._cellKey(bx, by, bz));
+    if (!this.big.size) return c ? [...c.values()] : [];
+    const out = c ? [...c.values()] : []; for (const m of this.big.values()) out.push(m); out.sort((p, q) => p.seq - q.seq); return out;
   }
   get brickWorld() { return this.bs * this.cellSize; }
   /** world min corner of the window */
@@ -88,9 +110,11 @@ export class VoxelWindow {
     const aabb = mesh.aabb ?? aabbOf(tri);
     this.meshes.set(id, { tri, aabb, albedo: meshAlbedo(mesh) });
     this._markAabb(aabb);
+    const rec = this.meshes.get(id); rec.seq = this._seq++; if (this.indexOn) this._indexAdd(id, rec);
   }
   removeMesh(id) {
     const m = this.meshes.get(id); if (!m) return false;
+    if (this.indexOn) this._indexRemove(id, m);
     this.meshes.delete(id); this._markAabb(m.aabb); return true;
   }
   /** snap window to camera (brick granularity, 3D). Entering bricks become dirty. @returns number of bricks entered */
@@ -121,17 +145,17 @@ export class VoxelWindow {
   _buildBrick(bx, by, bz) {
     const bs = this.bs, cs = this.cellSize, w = this.brickWorld, h = cs / 2;
     const o = [bx * w, by * w, bz * w];
-    const sum = new Float32Array(this.voxelsPerBrick * 4);
-    for (const m of this.meshes.values()) {
-      const a = m.aabb;
+    const sum = this._sum; sum.fill(0); const sc = this.scan; sc.bricks++;
+    for (const m of (this.indexOn ? this._candidates(bx, by, bz) : this.meshes.values())) {
+      const a = m.aabb; sc.meshesScanned++;
       if (a[3] < o[0] || a[0] > o[0] + w || a[4] < o[1] || a[1] > o[1] + w || a[5] < o[2] || a[2] > o[2] + w) continue;
       const t = m.tri;
       for (let i = 0; i < t.length; i += 9) {
-        const lo = [0, 1, 2].map((k) => Math.min(t[i + k], t[i + 3 + k], t[i + 6 + k]));
-        const hi = [0, 1, 2].map((k) => Math.max(t[i + k], t[i + 3 + k], t[i + 6 + k]));
+        sc.trisScanned++;
+        const lo = _lo, hi = _hi; for (let k = 0; k < 3; k++) { lo[k] = Math.min(t[i + k], t[i + 3 + k], t[i + 6 + k]); hi[k] = Math.max(t[i + k], t[i + 3 + k], t[i + 6 + k]); }
         if (hi[0] < o[0] || lo[0] > o[0] + w || hi[1] < o[1] || lo[1] > o[1] + w || hi[2] < o[2] || lo[2] > o[2] + w) continue;
-        const r0 = [0, 1, 2].map((k) => Math.max(0, Math.floor((lo[k] - o[k]) / cs)));
-        const r1 = [0, 1, 2].map((k) => Math.min(bs - 1, Math.floor((hi[k] - o[k]) / cs)));
+        for (let k = 0; k < 3; k++) { _r0[k] = Math.max(0, Math.floor((lo[k] - o[k]) / cs)); _r1[k] = Math.min(bs - 1, Math.floor((hi[k] - o[k]) / cs)); }
+        const r0 = _r0, r1 = _r1;
         // plane-box test kills the diagonal over-marking of a pure AABB mark (one SAT axis of Akenine-Möller)
         const e1 = [t[i + 3] - t[i], t[i + 4] - t[i + 1], t[i + 5] - t[i + 2]];
         const e2 = [t[i + 6] - t[i], t[i + 7] - t[i + 1], t[i + 8] - t[i + 2]];
@@ -164,4 +188,5 @@ export class VoxelWindow {
     return { rebuilt, remaining: this.dirty.size };
   }
 }
+const _lo = [0, 0, 0], _hi = [0, 0, 0], _r0 = [0, 0, 0], _r1 = [0, 0, 0]; // scratch (single-threaded _buildBrick)
 const d2 = (a, c) => (a[0] - c[0]) ** 2 + (a[1] - c[1]) ** 2 + (a[2] - c[2]) ** 2;

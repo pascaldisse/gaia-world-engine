@@ -833,3 +833,8 @@ as additional defense-in-depth even though neither was THE actual cause.
 - The GPU bounce term reads a single nearest-probe-nearest-texel value (cost cut vs. the CPU reference's full trilinear bounce query) — correctness on a real multi-bounce scene is unverified.
 - `attachGI()` (gi-material.js) is not yet called by the controller against any real material's `positionWorld`/`normalWorld` nodes — the query graph exists and is tested standalone, but per-material wiring (which material(s) get GI, and feeding their real world-position/normal nodes into `createGIQueryNode`) is the next integration step, not done here.
 - `raysPerProbe`, `updateFraction`, both hysteresis alphas, Chebyshev epsilon, voxel cell size, max march steps — all PLACEHOLDER, tuned on a real frame later.
+
+## CC-GIVOX (10-06) — VoxelWindow mesh index
+- `voxel.index` (default false = linear registry scan, unchanged): brick-keyed spatial index of registered meshes; `_buildBrick` visits only meshes whose AABB brick-range covers the brick, in registry insertion order (`seq`) → voxel output bit-identical (test/gi-voxel-index.test.js: random churn/scroll/boundary-touching/big meshes, 3 seeds). Meshes spanning > `indexMaxBricks` (512) bricks stay in an always-scanned `big` list.
+- Why: drive = camera scroll marks ~410 entering bricks/s dirty, each `_buildBrick` AABB-tested ALL registered meshes (BP: ~3400 → 5 per brick, −99.85 %); win.update 0.38 → 0.17 ms/f, 40 → 17 µs/brick.
+- Counters `win.scan {bricks, meshesScanned, trisScanned}`. Also scratch arrays instead of per-tri/per-brick allocations (both modes).

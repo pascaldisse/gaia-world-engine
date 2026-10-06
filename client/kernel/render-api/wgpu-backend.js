@@ -8,7 +8,7 @@
 // Core handles: mesh/material ids come straight from the wasm core. NodeId (groups + instances) and LightId are minted here:
 // the core only knows flat world-space instances, so node hierarchy (parent × local) + visibility are resolved in JS and
 // pushed down as world mat4s. Capabilities are the honest subset gaia-render has TODAY (see NOTES in crates/gaia-render).
-import { RENDER_API_VERSION, validateMeshArrays, isMat4, IDENTITY_MAT4 } from './interface.js';
+import { RENDER_API_VERSION, validateMeshArrays, isMat4, IDENTITY_MAT4, normalizeGroups, bitsToWords } from './interface.js';
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 // '#rrggbb' | 0xrrggbb are authoring (sRGB) colors → linear (three ColorManagement); [r,g,b] arrays are taken as linear.
@@ -147,7 +147,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
           if (node.rid) gpu.removeInstance(node.rid);
           node.rid = gpu.createInstance(node.mesh, node.material, w);
           node.ridMat = node.material; node.ridMesh = node.mesh;
-          applyShadowFlags(node);
+          applyShadowFlags(node); applyGroups(node); relinkGroupChildren(node);
         }
       } else if (node.rid) { gpu.removeInstance(node.rid); node.rid = 0; }
     }
@@ -159,6 +159,15 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     let vis = true; for (let q = p; q; q = q.parent ? nodes.get(q.parent) : null) vis = vis && q.visible;
     return [p.world, vis];
   };
+  // visibility groups: node.groups = { words:Uint32Array, parent?:NodeId } → core instance mask (+ parent = that node's CORE instance).
+  // A parent without a core instance yet (created later / hidden) → applied when it gets one (relinkGroupChildren).
+    function applyGroups(node) {
+    if (!node.groups || !node.rid) return;
+    gpu.setInstanceGroups(node.rid, node.groups.words);
+    const p = node.groups.parent ? nodes.get(node.groups.parent) : null;
+    gpu.setInstanceGroupParent(node.rid, p?.rid ? p.rid : 0xffffffff);
+  }
+  function relinkGroupChildren(parentNode) { for (const n of nodes.values()) if (n.groups?.parent === parentNode.id) applyGroups(n); }
   function applyShadowFlags(node) {
   if (node.castShadow !== undefined) gpu.setInstanceCastShadow(node.rid, node.castShadow);
   const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
@@ -188,7 +197,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'visibility-groups', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -266,7 +275,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static, groups: flags.groups ? normalizeGroups(flags.groups) : undefined };
       nodes.set(node.id, node); link(node, flags.parent);
       const [pw, pv] = parentState(node); sync(node, pw, pv);
       return node.id;
@@ -278,6 +287,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
       if (patch.material !== undefined && node.kind === 'instance') node.material = patch.material;
       if (node.kind === 'instance') {
       if (patch.castShadow !== undefined && patch.castShadow !== node.castShadow) { node.castShadow = !!patch.castShadow; if (node.rid) gpu.setInstanceCastShadow(node.rid, node.castShadow); }
+      if (patch.groups !== undefined) { node.groups = patch.groups ? normalizeGroups(patch.groups) : { words: new Uint32Array(0) }; if (node.rid) { applyGroups(node); relinkGroupChildren(node); } }
       if (patch.static !== undefined && patch.static !== node.static) { node.static = !!patch.static; if (node.rid) gpu.setInstanceStatic(node.rid, node.static); }
       }
       // receiveShadow/renderOrder/euler: accepted, no-ops (core receivers = all opaque; no ordering)
@@ -298,6 +308,12 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
       gpu.setCamera(Float32Array.from(invert4(view)), yfov, znear, zfar);
     },
 
+    // visibility groups: ACTIVE set (bit indices and/or u32 words; union of everything given). null = culling off (default).
+    // An instance with groups is drawn iff its mask ∩ active ≠ ∅; no groups = always drawn. Main + shadow passes.
+    setActiveGroups(active) {
+      if (active == null) { gpu.clearActiveGroups(); return; }
+      gpu.setActiveGroups(normalizeGroups(active).words);
+    },
     setSun({ direction = [0, 1, 0], color = [1, 1, 1], intensity = 1 } = {}) {
       if (!sunId) sunId = next++;
       lights.set(sunId, { kind: 'sun', direction: [...direction], color: colorOf(color), intensity });

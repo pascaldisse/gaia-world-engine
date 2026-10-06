@@ -414,6 +414,32 @@ let core = RenderCore::new(&device, &queue, opts);
 pub fn set_instance_static(&mut self, id: u32, is_static: bool) {
 self.core.set_instance_static(id, is_static);
 }
+// ---- visibility groups (gaia-render groups.rs): u32 bitset words, word w bit b = group 32w+b ----
+/// Instance group mask (empty = no groups = always drawn).
+#[wasm_bindgen(js_name = setInstanceGroups)]
+pub fn set_instance_groups(&mut self, id: u32, words: &[u32]) {
+self.core.set_instance_groups(id, words);
+}
+/// Instance follows `parent` instance's effective mask (u32::MAX = detach).
+#[wasm_bindgen(js_name = setInstanceGroupParent)]
+pub fn set_instance_group_parent(&mut self, id: u32, parent: u32) {
+self.core.set_instance_group_parent(id, if parent == u32::MAX { None } else { Some(parent) });
+}
+/// ACTIVE group set (union is the caller's OR). Drawn iff instance mask ∩ active ≠ ∅; no groups = always drawn. Main + shadow passes.
+#[wasm_bindgen(js_name = setActiveGroups)]
+pub fn set_active_groups(&mut self, words: &[u32]) {
+self.core.set_active_groups(words);
+}
+/// Group culling OFF (default).
+#[wasm_bindgen(js_name = clearActiveGroups)]
+pub fn clear_active_groups(&mut self) {
+self.core.clear_active_groups();
+}
+/// Instances excluded by group culling at the last instance rebuild.
+#[wasm_bindgen(js_name = lastGroupHidden)]
+pub fn last_group_hidden(&self) -> u32 {
+self.core.last_group_hidden
+}
 #[wasm_bindgen(js_name = setInstanceCastShadow)]
 pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {
 self.core.set_instance_cast_shadow(id, cast);

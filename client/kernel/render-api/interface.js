@@ -19,8 +19,9 @@
 //   createNode(mat4, parent=0) → NodeId          (pure transform group)
 //   createInstance(MeshId, MaterialId, mat4, flags?) → NodeId
 //       flags = { parent:NodeId, castShadow, receiveShadow, visible, renderOrder, euler?:[x,y,z] (XYZ authoring rotation hint),
-//                 tags?:{[k]:string|number|boolean} (opaque metadata — picking/solid/sky) }
-//   updateNode(NodeId, { mat4?, visible?, castShadow?, receiveShadow?, renderOrder?, material?:MaterialId, euler? })
+//                 tags?:{[k]:string|number|boolean} (opaque metadata — picking/solid/sky),
+//                 groups?: { bits?:int[] | words?:Uint32Array, parent?:NodeId } (visibility groups; see setActiveGroups) }
+//   updateNode(NodeId, { mat4?, visible?, castShadow?, receiveShadow?, renderOrder?, material?:MaterialId, euler?, groups?:{bits|words,parent?}|null })
 //   removeNode(NodeId)                              (instances + groups; detaches + frees backend-owned resources)
 //   setCamera(view:mat4, proj:mat4)
 //   setSun({ direction:[x,y,z] (toward the light), color:[r,g,b], intensity, castShadow }) → LightId
@@ -44,7 +45,9 @@ export const RENDER_API_METHODS = Object.freeze([
 //   updateMesh(MeshId, arrays) · updateMaterial(MaterialId, params, textures) · createInstanced(MeshId, MaterialId, mat4s:Float32Array(16n), count, flags{...,matrix}) → NodeId
 //   updateInstances(NodeId, mat4s, count, matrixWorld) · createShaderMaterial(pkg from tsl-export.js: {vertex,fragment,bindGroups,attributes,…}) → MaterialId
 //   setShaderUniforms(MaterialId, [{key,value}]) — r4: changed live TSL uniform values (tsl-export pkg.live.update()); keys = package uniform `key`
-export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh']);
+//   setActiveGroups(active: int[] bit indices | {bits?:int[], words?:Uint32Array} | null) — visibility groups: instance drawn iff its group mask ∩ active ≠ ∅; no groups = always drawn;
+//     instance with groups.parent follows that node's mask; null = culling off (default). Applies to main AND shadow passes. Bit b of word w = group 32w+b (128+ groups ok).
+export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh', 'setActiveGroups']);
 export function assertRenderBackend(backend) {
   const missing = RENDER_API_METHODS.filter((m) => typeof backend?.[m] !== 'function');
   if (missing.length) throw new Error(`render backend missing: ${missing.join(', ')}`);
@@ -100,4 +103,17 @@ export function decomposeMat4(m) {
   const det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) + m[8] * (m[1] * m[6] - m[2] * m[5]);
   if (det < 0) sx = -sx;
   return { position: [m[12], m[13], m[14]], scale: [sx, sy, sz] };
+}
+
+// visibility groups helpers (plain data; shared by backends)
+export function bitsToWords(bits) {
+  let n = 0; for (const b of bits) { if (!Number.isInteger(b) || b < 0) throw new Error(`visibility group bit ${b}: want a non-negative integer`); n = Math.max(n, (b >>> 5) + 1); }
+  const w = new Uint32Array(n); for (const b of bits) w[b >>> 5] |= (1 << (b & 31)) >>> 0; return w;
+}
+// accepts: int[] (bit indices) | { bits?, words?, parent? } → { words:Uint32Array, parent?:NodeId }; bits and words are OR-ed
+export function normalizeGroups(g) {
+  const spec = Array.isArray(g) ? { bits: g } : g;
+  const a = spec.words ? Uint32Array.from(spec.words) : new Uint32Array(0), b = spec.bits ? bitsToWords(spec.bits) : new Uint32Array(0);
+  const w = new Uint32Array(Math.max(a.length, b.length)); for (let i = 0; i < w.length; i++) w[i] = ((a[i] ?? 0) | (b[i] ?? 0)) >>> 0;
+  return spec.parent ? { words: w, parent: spec.parent } : { words: w };
 }

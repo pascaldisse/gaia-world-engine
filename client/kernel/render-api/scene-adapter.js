@@ -21,7 +21,7 @@ const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 
 let epoch = 0, cameraSig = '';
 
 const eqArr = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
-function geometryArrays(g, start = 0, count = Infinity) {
+function geometryArrays(g, start = 0, count = Infinity, extra = null) {
 const pos = g.attributes?.position;
 if (!pos) return null;
 const flat = (attr, n) => {
@@ -35,6 +35,8 @@ const arrays = { positions: flat(pos, 3) };
 const nrm = flat(g.attributes.normal, 3), uvs = flat(g.attributes.uv, 2);
 if (nrm) arrays.normals = nrm;
 if (uvs) arrays.uvs = uvs;
+if (extra?.layerAttribute && g.attributes[extra.layerAttribute]) { const la = g.attributes[extra.layerAttribute]; const u1 = new Float32Array(la.count * 2); for (let i = 0; i < la.count; i++) u1[i * 2] = la.getX(i); arrays.uv1 = u1; }
+if (extra?.colorAttribute && g.attributes[extra.colorAttribute]) { const ca = g.attributes[extra.colorAttribute]; const c4 = new Float32Array(ca.count * 4); for (let i = 0; i < ca.count; i++) { c4[i * 4] = ca.getX(i); c4[i * 4 + 1] = ca.getY(i); c4[i * 4 + 2] = ca.getZ(i); c4[i * 4 + 3] = 1; } arrays.colors = c4; }
 if (g.index) {
 const a = g.index.array, s = start, n = Math.min(count, g.index.count - s);
 const whole = s === 0 && n === g.index.count;
@@ -57,20 +59,20 @@ for (let i = 0; i < 3; i++) { const a = at?.[GEO_ATTRS[i]]; if (sig[2 + i * 2] !
 return sig[8] === (g.index ? g.index.version : -1) && sig[9] === (g.index ? g.index.count : 0);
 }
 
-function ensureGeometry(rec, g, start, count) {
+function ensureGeometry(rec, g, start, count, extra = null) {
 const key = `${start}:${count}`;
 let e = geos.get(g);
 if (!e) { e = { parts: new Map(), users: new Set() }; geos.set(g, e); }
 let p = e.parts.get(key);
 if (!p) {
 const sig = geoSig(g, start, count);
-const arrays = geometryArrays(g, start, count);
+const arrays = geometryArrays(g, start, count, extra);
 if (!arrays) { stats.unsupported.add('geometry-without-position'); return null; }
 p = { id: backend.createMesh(arrays), sig, users: new Set() };
 e.parts.set(key, p); stats.uploadsGeometry++; stats.created++;
 } else if (!geoSame(g, start, count, p.sig)) {
 const sig = geoSig(g, start, count);
-const arrays = geometryArrays(g, start, count);
+const arrays = geometryArrays(g, start, count, extra);
 if (backend.updateMesh) { backend.updateMesh(p.id, arrays); p.sig = sig; stats.uploadsGeometry++; stats.updated++; }
 else { // degrade: new mesh, users re-created by caller (flag)
 stats.degraded.add('updateMesh-missing:recreate');
@@ -140,7 +142,7 @@ for (const grp of groups) {
 const m = mm[grp.materialIndex ?? 0];
 if (!m) continue;
 const start = grp.start + (dr.start ?? 0) * 0, count = grp.count === Infinity ? (dr.count ?? Infinity) : grp.count;
-const gp = ensureGeometry(rec, g, start, count);
+const gp = ensureGeometry(rec, g, start, count, m.userData?.gaiaRender);
 if (!gp) continue;
 const me = ensureMaterial(m);
 me.users.add(rec);

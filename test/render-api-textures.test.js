@@ -41,8 +41,8 @@ test('adapter: N meshes sharing a canvas-textured material → idle frames do 0 
 });
 
 async function fakeWgpu() {
-  const c = { tex: 0, destroyTex: 0, mat: 0, updMat: 0, destroyMat: 0 }; let id = 0;
-  const gpu = { hasTimestamps: () => false, createTexture: () => { c.tex++; return ++id; }, destroyTexture: () => { c.destroyTex++; }, createMaterial: () => { c.mat++; return ++id; }, updateMaterial: () => { c.updMat++; }, destroyMaterial: () => { c.destroyMat++; } };
+  const c = { tex: 0, destroyTex: 0, mat: 0, updMat: 0, destroyMat: 0, calls: [] }; let id = 0;
+  const gpu = { hasTimestamps: () => false, createTextureLinear: () => { c.calls.push(['linear']); return ++id; }, createTextureArray: (...a) => { c.calls.push(['array', a[2], a[4]]); return ++id; }, updateTextureLayer: (_i, l) => { c.calls.push(['layer', l]); }, setMaterialMaps: (...a) => { c.calls.push(['maps', ...a]); }, setMaterialFlags: (...a) => { c.calls.push(['flags', ...a]); }, setMeshUv1: () => {}, setMeshColors: () => {}, createTexture: () => { c.tex++; return ++id; }, destroyTexture: () => { c.destroyTex++; }, createMaterial: () => { c.mat++; return ++id; }, updateMaterial: () => { c.updMat++; }, destroyMaterial: () => { c.destroyMat++; } };
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   // Fake navigator ONLY while constructing; restore so later files in the same bun process (GLTFLoader reads navigator.userAgent) see the real one.
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -62,4 +62,20 @@ test('wgpu-backend: one GPU texture per key (refcounted), updateMaterial in plac
   backend.destroyMaterial(m1); assert.equal(c.destroyTex, 1, 'u:1 released at refcount 0');
   backend.destroyMaterial(m2); assert.equal(c.destroyTex, 2);
   assert.equal(backend.textureStats().live, 0);
+});
+
+test('wgpu-backend r6: array texture (layer updates only on version bump), linear flag, side + blend + maps reach the core', async () => {
+  const { c, backend } = await fakeWgpu();
+  const px = new Uint8Array(2 * 2 * 4 * 3); let dirty = [1];
+  const arr = (version) => ({ array: true, width: 2, height: 2, layers: 3, srgb: true, key: 'a:array', version, data: px, takeLayerUpdates: () => { const d = dirty; dirty = null; return d; } });
+  const lin = { width: 2, height: 2, srgb: false, key: 'n:1', data: new Uint8Array(16) };
+  const m = backend.createMaterial({ transparent: true, opacity: 0.5, backSide: true }, { array: arr(1), normalMap: lin });
+  assert.deepEqual(c.calls.find((x) => x[0] === 'array'), ['array', 3, true]);
+  assert.equal(c.calls.filter((x) => x[0] === 'linear').length, 1, 'normal map uploaded linear (colour space flag honored)');
+  const maps = c.calls.find((x) => x[0] === 'maps'); assert.equal(maps[9], 2, 'BackSide → side 2'); assert.ok(maps[2] > 0 && maps[3] > 0, 'array + normal ids');
+  assert.equal(c.calls.find((x) => x[0] === 'flags')[2], 1, 'transparent → alpha blend');
+  dirty = [2]; backend.updateMaterial(m, { transparent: true, opacity: 0.5, backSide: true }, { array: arr(2), normalMap: lin });
+  assert.deepEqual(c.calls.filter((x) => x[0] === 'layer'), [['layer', 2]], 'only the dirty layer re-uploaded, no new array');
+  assert.equal(c.calls.filter((x) => x[0] === 'array').length, 1);
+  assert.throws(() => backend.createMaterial({}, { map: { refused: 'compressed-texture (test)' } }), /refused/);
 });

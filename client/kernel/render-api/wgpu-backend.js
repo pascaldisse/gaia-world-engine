@@ -105,31 +105,58 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
 const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owned by that material
   const texByKey = new Map();    // texture descriptor key (uuid:version, material-map) → { id, refs } — one GPU texture shared by every material using it
   const texStats = { uploads: 0, hits: 0 };
+const flagged = new Map();   // MaterialId → had non-default render flags (so an edit back to opaque clears them)
   // textures[slot] = {width,height,data,key?}. With a `key` the GPU texture is shared + refcounted and `data` (lazy getter in material-map) is only
   // read on a MISS → an idle frame / a second material on the same image does 0 pixel reads and 0 uploads.
   function acquireTexture(t) {
-    if (t.key) { const c = texByKey.get(t.key); if (c) { c.refs++; texStats.hits++; return { id: c.id, key: t.key }; } }
-    const data = t.data;
-    if (!data || !(t.width > 0) || !(t.height > 0)) throw new Error('createMaterial: texture map needs { width, height, data }');
-    const id = gpu.createTexture(t.width, t.height, data instanceof Uint8Array ? data : new Uint8Array(data.buffer ?? data));
-    texStats.uploads++;
-    if (t.key) texByKey.set(t.key, { id, refs: 1 });
-    return { id, key: t.key ?? null };
-  }
-  function releaseTexture(h) {
-    if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
-    else gpu.destroyTexture(h.id);
-  }
-  function matArgs(params, textures) {
-    const [r, g, b] = colorOf(params.color);
-    const e = colorOf(params.emissive, [0, 0, 0]);
-    const k = params.emissiveIntensity ?? 1;
-    const owned = [];
-    let tex = 0;
-    if (textures?.map) { const h = acquireTexture(textures.map); owned.push(h); tex = h.id; }
-    return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, tex, params.alphaTest > 0 ? params.alphaTest : -1, Float32Array.of(e[0] * k, e[1] * k, e[2] * k)] };
-  }
-  let lightsDirty = false;
+if (t.refused) throw new Error(`createMaterial: texture refused — ${t.refused}`);
+if (t.key) {
+const c = texByKey.get(t.key);
+if (c) {
+c.refs++; texStats.hits++;
+if (t.array && t.version !== c.version) { // layered upload: only the layers three marked dirty (all when unknown)
+const dirty = t.takeLayerUpdates?.() ?? Array.from({ length: t.layers }, (_, i) => i), S = t.width * t.height * 4;
+for (const l of dirty) gpu.updateTextureLayer(c.id, l, t.data.subarray(l * S, (l + 1) * S));
+c.version = t.version; texStats.layerUploads = (texStats.layerUploads ?? 0) + dirty.length;
+}
+return { id: c.id, key: t.key };
+}
+}
+const data = t.data;
+if (!data || !(t.width > 0) || !(t.height > 0)) throw new Error('createMaterial: texture map needs { width, height, data }');
+const bytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer ?? data);
+let id;
+if (t.array) { id = gpu.createTextureArray(t.width, t.height, t.layers, bytes, t.srgb !== false); t.takeLayerUpdates?.(); }
+else id = t.srgb === false ? gpu.createTextureLinear(t.width, t.height, bytes) : gpu.createTexture(t.width, t.height, bytes); // colour space flag honored (three colorSpace)
+texStats.uploads++;
+if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version });
+return { id, key: t.key ?? null };
+}
+function releaseTexture(h) {
+if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
+else gpu.destroyTexture(h.id);
+}
+// side: three Side (FrontSide=cull back → 1, BackSide → 2, DoubleSide → 0 in the core encoding)
+function matArgs(params, textures) {
+const [r, g, b] = colorOf(params.color);
+const e = colorOf(params.emissive, [0, 0, 0]);
+const k = params.emissiveIntensity ?? 1;
+const owned = [], ids = {};
+for (const slot of ['map', 'array', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) {
+if (!textures?.[slot]) continue;
+const h = acquireTexture(textures[slot]); owned.push(h); ids[slot] = h.id;
+}
+// additive blending (three blending=2) / transparent / opacity<1 → core blend pass (sorted far→near, no depth write like three)
+const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
+const side = params.doubleSide ? 0 : params.backSide ? 2 : 1;
+return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, ids.map ?? 0, params.alphaTest > 0 ? params.alphaTest : -1, Float32Array.of(e[0] * k, e[1] * k, e[2] * k)],
+maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessMap ?? 0, ids.emissiveMap ?? 0, ids.aoMap ?? 0, params.normalScale ?? 1, side], flags: [blend, false /* unlit NOT forwarded: three Basic walls get their look from sources not mapped yet (node/lightmap) — unlit made them flat white, measured r6 */, params.depthWrite === false ? 0 : -1, -1, -1] };
+}
+function applyMat(id, m) {
+gpu.setMaterialMaps(id, ...m.maps);
+if (m.flags[0] || m.flags[1] || m.flags[2] >= 0) gpu.setMaterialFlags(id, ...m.flags); else if (m.hadFlags) gpu.setMaterialFlags(id, 0, false, -1, 0, -1);
+}
+let lightsDirty = false;
   let sunId = 0;
 
   const need = (map, id, what) => { const v = map.get(id); if (!v) throw new Error(`render-api(wgpu): unknown ${what} ${id}`); return v; };
@@ -188,7 +215,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -197,7 +224,10 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
       const positions = arrays.positions instanceof Float32Array ? arrays.positions : Float32Array.from(arrays.positions);
       const normals = arrays.normals ? Float32Array.from(arrays.normals) : computeNormals(positions, indices);
       const uvs = arrays.uvs ? Float32Array.from(arrays.uvs) : new Float32Array(n * 2);
-      return gpu.createMesh(positions, normals, uvs, indices);
+      const mid = gpu.createMesh(positions, normals, uvs, indices);
+      if (arrays.uv1) gpu.setMeshUv1(mid, arrays.uv1);
+      if (arrays.colors) gpu.setMeshColors(mid, arrays.colors);
+      return mid;
     },
     destroyMesh(id) { gpu.destroyMesh(id); },
     // ---- skinning (gaia-render skin.rs: one compute pre-pass for all skinned meshes) ----
@@ -218,16 +248,18 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
 
     // params = three-style; preset → degrades to pbr; opacity/doubleSide/fog/flatShading not in the core yet (drawn opaque, no cull).
     createMaterial(params = {}, textures = null) {
-      const { owned, args } = matArgs(params, textures);
+      const ma = matArgs(params, textures); const { owned, args } = ma;
       const id = gpu.createMaterial(...args);
+      applyMat(id, ma); flagged.set(id, !!(ma.flags[0] || ma.flags[1] || ma.flags[2] >= 0));
       if (owned.length) matTextures.set(id, owned);
       return id;
     },
     // in-place re-description (same MaterialId; users keep their handle). New texture handles are acquired BEFORE the old ones are released.
     updateMaterial(id, params = {}, textures = null) {
-      const { owned, args } = matArgs(params, textures);
+      const ma = matArgs(params, textures); const { owned, args } = ma;
       const old = matTextures.get(id) || [];
-      gpu.updateMaterial(id, ...args);
+      ma.hadFlags = flagged.get(id); flagged.set(id, !!(ma.flags[0] || ma.flags[1] || ma.flags[2] >= 0));
+      gpu.updateMaterial(id, ...args); applyMat(id, ma);
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
@@ -253,7 +285,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     // r4: changed live uniform values [{key,value}] (tsl-export pkg.live.update()) → core reflected uniform buffer.
     setShaderUniforms(id, changed) { if (changed.length) gpu.setThreeUniforms(id, JSON.stringify(changed)); },
     destroyMaterial(id) {
-      gpu.destroyMaterial(id);
+      gpu.destroyMaterial(id); flagged.delete(id);
       for (const h of matTextures.get(id) || []) releaseTexture(h);
       matTextures.delete(id);
     },

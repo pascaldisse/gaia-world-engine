@@ -1,3 +1,4 @@
+// FROZEN contract fixture (forward.wgsl as of r5: group(1) bindings 0..3). The built-in shader grew bindings 4..9 in r6-mat; this keeps testing the external-WGSL contract.
 // Forward PBR (metallic-roughness, GGX/Smith/Schlick) — sun + N point lights.
 // Uniform-only bindings (no storage buffers) so the same WGSL runs on Metal and WebGPU.
 const MAX_POINT_LIGHTS: u32 = 64u;
@@ -19,21 +20,13 @@ struct Material {
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
     flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure)
-    maps0: vec4<f32>,        // x has array base, y normal scale, z has normal map, w has roughness map
-    maps1: vec4<f32>,        // x has metalness map, y has emissive map, z has AO map, w side (0 double, 1 front only, 2 back only)
-    };
+};
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var base_samp: sampler;
 // Baked lightmap at TEXCOORD_1; material.emissive.w = overlay fac (0 = none).
 @group(1) @binding(3) var lightmap_tex: texture_2d<f32>;
-@group(1) @binding(4) var base_array: texture_2d_array<f32>; // layer = round(uv1.x)
-@group(1) @binding(5) var normal_tex: texture_2d<f32>;
-@group(1) @binding(6) var rough_tex: texture_2d<f32>;    // G channel (three roughnessMap)
-@group(1) @binding(7) var metal_tex: texture_2d<f32>;    // B channel (three metalnessMap)
-@group(1) @binding(8) var emissive_tex: texture_2d<f32>;
-@group(1) @binding(9) var ao_tex: texture_2d<f32>;       // R channel (three aoMap)
 // Sun cascaded shadow maps (shadow.rs). params.x = cascade count (0 = shadows off).
 struct Shadow {
 vp: array<mat4x4<f32>, 4>,
@@ -138,22 +131,15 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, metallic: f
 
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    // derivatives first (uniform control flow): cotangent frame for normal mapping (no tangent attribute)
-    let dp1 = dpdx(in.world); let dp2 = dpdy(in.world); let duv1 = dpdx(in.uv); let duv2 = dpdy(in.uv);
-    let side = material.maps1.w;
-    if ((side > 0.5 && side < 1.5 && !front) || (side > 1.5 && front)) { discard; }
     var base = material.base_color;
     if (material.params.w > 0.5) {
-    base = base * textureSample(base_tex, base_samp, in.uv);
-    }
-    if (material.maps0.x > 0.5) {
-    base = base * textureSample(base_array, base_samp, in.uv, i32(in.uv1.x + 0.5));
+        base = base * textureSample(base_tex, base_samp, in.uv);
     }
     // glTF COLOR_0: multiplies base colour (rgb + alpha); 1.0 when the mesh has none.
     base = base * in.color;
     // DS client rule (lightmap.mjs overlayNode): Blender OVERLAY, linear inputs.
     let fac = material.emissive.w;
-    if (fac > 0.0 && material.maps0.x < 0.5) {
+    if (fac > 0.0) {
         let l = textureSample(lightmap_tex, base_samp, in.uv1).rgb;
         let a = base.rgb;
         let tm = 1.0 - fac;
@@ -169,21 +155,9 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     }
     var n = normalize(in.normal);
     if (!front) { n = -n; }
-    if (material.maps0.z > 0.5) {
-    let tn = textureSample(normal_tex, base_samp, in.uv).xyz * 2.0 - 1.0;
-    let dp2perp = cross(dp2, n); let dp1perp = cross(n, dp1);
-    let t = dp2perp * duv1.x + dp1perp * duv2.x;
-    let b = dp2perp * duv1.y + dp1perp * duv2.y;
-    let inv = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-12));
-    n = normalize(t * inv * tn.x * material.maps0.y + b * inv * tn.y * material.maps0.y + n * tn.z);
-    }
     let v = normalize(frame.camera_pos.xyz - in.world);
-    var m0 = material.params.x;
-    var r0 = material.params.y;
-    if (material.maps0.w > 0.5) { r0 = r0 * textureSample(rough_tex, base_samp, in.uv).g; }
-    if (material.maps1.x > 0.5) { m0 = m0 * textureSample(metal_tex, base_samp, in.uv).b; }
-    let metallic = clamp(m0, 0.0, 1.0);
-    let rough = clamp(r0, 0.04, 1.0);
+    let metallic = clamp(material.params.x, 0.0, 1.0);
+    let rough = clamp(material.params.y, 0.04, 1.0);
     let sun_l = -frame.sun_dir.xyz;
 var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
 * sun_shadow(in.world, frame.camera_pos.xyz, n, max(dot(n, sun_l), 0.0));
@@ -201,11 +175,7 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     }
     // hemisphere ambient: lerp(ground, sky, 0.5 n.y + 0.5) x albedo (flat when sky == ground)
     let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));
-    var ao = 1.0;
-    if (material.maps1.z > 0.5) { ao = textureSample(ao_tex, base_samp, in.uv).r; }
-    var em = material.emissive.rgb;
-    if (material.maps1.y > 0.5) { em = em * textureSample(emissive_tex, base_samp, in.uv).rgb; }
-    color = color + hemi * base.rgb * ao + em;
+    color = color + hemi * base.rgb + material.emissive.rgb;
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).

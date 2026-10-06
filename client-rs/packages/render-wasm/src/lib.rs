@@ -4,7 +4,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use gaia_render::{
-    MaterialBinding, MaterialDesc, RenderCore, RenderOptions, ShaderMaterialDesc, ShadowOptions, UpscaleSize,
+    MaterialBinding, BlendKind, MaterialDesc, MaterialFlags, MaterialMaps, RenderCore, RenderOptions, ShaderMaterialDesc, ShadowOptions, UpscaleSize,
 };
 use js_sys::{Array, Float32Array, Promise, Reflect, Uint8Array};
 use std::collections::HashMap;
@@ -254,6 +254,41 @@ let core = RenderCore::new(&device, &queue, opts);
         let id = self.id("texture");
         self.core.create_texture_linear(&self.device, &self.queue, id, width, height, rgba).map_err(err)?;
         Ok(id)
+    }
+    /// Array texture: `layers` RGBA8 images (layer-major) + GPU mips per layer. srgb=false = linear sampling.
+    #[wasm_bindgen(js_name = createTextureArray)]
+    pub fn create_texture_array(&mut self, width: u32, height: u32, layers: u32, rgba: &[u8], srgb: bool) -> Result<u32, JsError> {
+        let id = self.id("texture");
+        self.core.create_texture_array(&self.device, &self.queue, id, width, height, layers, rgba, srgb).map_err(err)?;
+        Ok(id)
+    }
+    #[wasm_bindgen(js_name = updateTextureLayer)]
+    pub fn update_texture_layer(&mut self, id: u32, layer: u32, rgba: &[u8]) -> Result<(), JsError> {
+        self.core.update_texture_layer(&self.device, &self.queue, id, layer, rgba).map_err(err)
+    }
+    /// ids: 0 = none. side 0 double / 1 front only / 2 back only.
+    #[wasm_bindgen(js_name = setMaterialMaps)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_material_maps(&mut self, id: u32, array: u32, normal: u32, roughness: u32, metalness: u32, emissive: u32, ao: u32, normal_scale: f32, side: u32) {
+        let o = |v: u32| (v != 0).then_some(v);
+        self.core.set_material_maps(&self.device, id, MaterialMaps { array: o(array), normal: o(normal), roughness: o(roughness), metalness: o(metalness), emissive: o(emissive), ao: o(ao), normal_scale, side });
+    }
+    /// TEXCOORD_1 per vertex (2 floats/vertex). With an array material, uv1.x = array layer.
+    #[wasm_bindgen(js_name = setMeshUv1)]
+    pub fn set_mesh_uv1(&mut self, id: u32, uv1: &[f32]) -> Result<(), JsError> {
+        self.core.set_mesh_uv1(&self.device, id, uv1).map_err(err)
+    }
+    /// COLOR_0 per vertex (rgba, linear, 4 floats/vertex): multiplies base colour rgb + alpha.
+    #[wasm_bindgen(js_name = setMeshColors)]
+    pub fn set_mesh_colors(&mut self, id: u32, rgba: &[f32]) -> Result<(), JsError> {
+        self.core.set_mesh_colors(&self.device, id, rgba).map_err(err)
+    }
+    /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
+    #[wasm_bindgen(js_name = setMaterialFlags)]
+    pub fn set_material_flags(&mut self, id: u32, blend: u32, unlit: bool, depth_write: i32, render_order: i32, cast_shadow: i32) {
+        let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), _ => None };
+        self.core.set_material_blend(id, blend != 0);
+        self.core.set_material_flags(&self.device, id, MaterialFlags { blend: b, unlit, depth_write: (depth_write >= 0).then_some(depth_write != 0), render_order, cast_shadow: (cast_shadow >= 0).then_some(cast_shadow != 0) });
     }
     #[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {

@@ -248,6 +248,13 @@ let core = RenderCore::new(&device, &queue, opts);
             .map_err(err)?;
         Ok(id)
     }
+    /// r4 (lampas/r4-uniforms): RGBA8 sampled without sRGB decode (three colorSpace != srgb).
+    #[wasm_bindgen(js_name = createTextureLinear)]
+    pub fn create_texture_linear(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<u32, JsError> {
+        let id = self.id("texture");
+        self.core.create_texture_linear(&self.device, &self.queue, id, width, height, rgba).map_err(err)?;
+        Ok(id)
+    }
     #[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);
@@ -368,6 +375,11 @@ let core = RenderCore::new(&device, &queue, opts);
     #[wasm_bindgen(js_name = setThreeTime)]
     pub fn set_three_time(&mut self, seconds: f32) {
         self.core.set_three_time(seconds);
+    }
+    /// r4 (lampas/r4-uniforms): live three uniform values, JSON `[{key,value}]` from tsl-export `pkg.live.update()`.
+    #[wasm_bindgen(js_name = setThreeUniforms)]
+    pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<u32, JsValue> {
+        self.core.set_three_uniforms(material, json).map(|n| n as u32).map_err(|e| JsValue::from_str(&e))
     }
     #[wasm_bindgen(js_name = destroyMaterial)]
     pub fn destroy_material(&mut self, id: u32) {

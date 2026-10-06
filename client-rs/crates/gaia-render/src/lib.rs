@@ -814,6 +814,12 @@ impl RenderCore {
         Ok(())
     }
 
+    /// RGBA8 sampled as-is (no sRGB decode): three textures with colorSpace != srgb (r4, three_material::upload_linear).
+    pub fn create_texture_linear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+        if rgba.len() != (width * height * 4) as usize { return Err(format!("texture {id}: {} bytes != {width}x{height}x4", rgba.len())); }
+        self.textures.insert(id, three_material::upload_linear(device, queue, width, height, rgba));
+        Ok(())
+    }
     pub fn remove_texture(&mut self, id: u32) {
         self.textures.remove(&id);
     }
@@ -1011,6 +1017,11 @@ impl RenderCore {
         self.three.remove(id);
         self.three.mats.insert(id, m);
         Ok(())
+    }
+    /// Live three uniform values (tsl-export `pkg.live.update()` → `[{key,value}]`, changed only) → material's reflected
+    /// uniform members; packed into every instance buffer at the next render (r4, three_material.rs).
+    pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<usize, String> {
+        self.three.mats.get_mut(&material).ok_or_else(|| format!("set_three_uniforms: {material} is not a three material"))?.set_uniforms(json)
     }
     pub fn set_three_time(&mut self, seconds: f32) {
         self.three_time = seconds;

@@ -1,0 +1,21 @@
+<!doctype html><meta charset=utf-8><title>three r180 WebGPU r4 reference strip</title>
+<style>body{margin:0;background:#000}canvas{display:block;float:left}</style><script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r4 ground truth: one canvas per (case, frame); sprite material shared across its 3 frames (opacity set before each). bun run.mjs --page three-ref-r4.html --w 1280 --h 256
+import * as THREE from 'three/webgpu';
+import { CLEAR, SIZE, buildMaterial, makeScene } from '/three-materials.js';
+import { CASES, addLights, applyFrame } from '/three-r4.js';
+const R = window.__result = { done: false, log: [] };
+for (const c of CASES) {
+  try {
+    const m = await buildMaterial(c.base, THREE); const { scene, cam } = makeScene(THREE, m); if (c.lit) addLights(THREE, scene);
+    for (const f of c.frames) {
+      const r = new THREE.WebGPURenderer({ antialias: false }); r.setPixelRatio(1); r.setSize(SIZE, SIZE); await r.init(); document.body.appendChild(r.domElement);
+      r.setClearColor(new THREE.Color().setRGB(...CLEAR, THREE.LinearSRGBColorSpace), 1);
+      applyFrame(m, f); for (let i = 0; i < 3; i++) await r.renderAsync(scene, cam);
+      R.log.push(c.name + ' ' + JSON.stringify(f) + ' ok');
+    }
+  } catch (e) { R.log.push(c.name + ' EXC ' + (e.stack || e)); }
+}
+R.ok = true; R.done = true;
+</script>

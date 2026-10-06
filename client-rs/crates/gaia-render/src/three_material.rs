@@ -18,6 +18,8 @@ struct Member {
     cols: u32,
     rows: u32,
     semantic: Option<String>,
+    /// package `key` (tsl-export: uniform node uuid) → live updates via set_uniforms
+    key: Option<String>,
     value: Vec<f32>,
 }
 #[derive(Clone, Debug)]
@@ -86,7 +88,7 @@ fn stage_globals(src: &str, stage: wgpu::ShaderStages, out: &mut Vec<Slot>, labe
                             naga::TypeInner::Scalar(_) => (1, 1),
                             ref o => return Err(format!("{label}: uniform member {:?} type {o:?} unsupported", m.name)),
                         };
-                        members.push((m.name.clone().unwrap_or_default(), Member { offset: m.offset, cols, rows, semantic: None, value: vec![] }));
+                        members.push((m.name.clone().unwrap_or_default(), Member { offset: m.offset, cols, rows, semantic: None, key: None, value: vec![] }));
                     }
                 }
                 // names stashed in semantic slot temporarily: resolved against the package below
@@ -133,19 +135,14 @@ pub(crate) fn build(
     stage_globals(vs, wgpu::ShaderStages::VERTEX, &mut slots, "vertex")?;
     stage_globals(fs, wgpu::ShaderStages::FRAGMENT, &mut slots, "fragment")?;
     // package uniforms by (group, binding, member) → semantic + initial value
-    let mut pv: HashMap<(u32, u32, String), (Option<String>, Vec<f32>)> = HashMap::new();
+    let mut pv: HashMap<(u32, u32, String), (Option<String>, Option<String>, Vec<f32>)> = HashMap::new();
     for g in pkg["bindGroups"].as_array().into_iter().flatten() {
         let gi = g["group"].as_u64().unwrap_or(0) as u32;
         for b in g["bindings"].as_array().into_iter().flatten() {
             let bi = b["binding"].as_u64().unwrap_or(0) as u32;
             for u in b["uniforms"].as_array().into_iter().flatten() {
-                let v = match &u["value"] {
-                    serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
-                    serde_json::Value::Bool(b) => vec![*b as u8 as f32],
-                    serde_json::Value::Array(a) => a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect(),
-                    _ => vec![],
-                };
-                pv.insert((gi, bi, u["name"].as_str().unwrap_or("").to_string()), (u["semantic"].as_str().map(String::from), v));
+                let v = json_f32(&u["value"]);
+                pv.insert((gi, bi, u["name"].as_str().unwrap_or("").to_string()), (u["semantic"].as_str().map(String::from), u["key"].as_str().map(String::from), v));
             }
         }
     }
@@ -153,7 +150,8 @@ pub(crate) fn build(
         if let Kind::Uniform { members, .. } = &mut sl.kind {
             for m in members.iter_mut() {
                 let name = m.semantic.take().unwrap_or_default();
-                let (sem, val) = pv.remove(&(sl.group, sl.binding, name.clone())).unwrap_or((None, vec![]));
+                let (sem, key, val) = pv.remove(&(sl.group, sl.binding, name.clone())).unwrap_or((None, None, vec![]));
+                m.key = key;
                 // render-group members are named by three itself (cameraViewMatrix…); object members carry a package semantic
                 m.semantic = sem.or_else(|| name.starts_with("camera").then(|| name.clone()));
                 if m.semantic.is_none() && val.is_empty() {
@@ -242,6 +240,49 @@ pub(crate) fn build(
     Ok(ThreeMaterial { pipeline, layouts, slots, textures })
 }
 
+/// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
+/// Single mip level (core mipgen blit is sRGB-format only) → minified linear textures alias = NEXT.
+pub(crate) fn upload_linear(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, px: &[u8]) -> wgpu::TextureView {
+    device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
+        label: Some("three linear texture"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    }, wgpu::util::TextureDataOrder::LayerMajor, px).create_view(&Default::default())
+}
+fn json_f32(v: &serde_json::Value) -> Vec<f32> {
+    match v {
+        serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
+        serde_json::Value::Bool(b) => vec![*b as u8 as f32],
+        serde_json::Value::Array(a) => a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect(),
+        _ => vec![],
+    }
+}
+impl ThreeMaterial {
+    /// Live values (tsl-export `live.update()` output): JSON `[{key, value}]`. Writes every member carrying that key (a
+    /// uniform node can appear in both stages / several groups); the next prepare() packs it into the reflected buffer.
+    /// Unknown key = Err (loud), nothing partially applied.
+    pub(crate) fn set_uniforms(&mut self, json: &str) -> Result<usize, String> {
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("set_three_uniforms JSON: {e}"))?;
+        let items: Vec<(String, Vec<f32>)> = v.as_array().ok_or("set_three_uniforms: array expected")?.iter()
+            .map(|i| Ok((i["key"].as_str().ok_or("set_three_uniforms: item without key")?.to_string(), json_f32(&i["value"]))))
+            .collect::<Result<_, String>>()?;
+        let mut hits = vec![0usize; items.len()];
+        for sl in &mut self.slots {
+            if let Kind::Uniform { members, .. } = &mut sl.kind {
+                for m in members.iter_mut() {
+                    if let Some(k) = &m.key {
+                        if let Some(j) = items.iter().position(|(ik, _)| ik == k) { m.value = items[j].1.clone(); hits[j] += 1; }
+                    }
+                }
+            }
+        }
+        if let Some(j) = hits.iter().position(|h| *h == 0) { return Err(format!("set_three_uniforms: key {} not in package", items[j].0)); }
+        Ok(items.len())
+    }
+}
 fn pack(size: u32, members: &[Member], f: &ThreeFrame, model: Mat4) -> Vec<u8> {
     let mut out = vec![0f32; size as usize / 4];
     for m in members {

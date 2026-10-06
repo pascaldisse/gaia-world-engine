@@ -100,7 +100,7 @@ NOTE three side = WebGPURenderer + bloom post + engine shadow map + game's TSL; 
 ### Per object class (screens `.scratch/{three,wgpu,wgpu3}.png` in game worktree)
 - world tiles (static meshes): geometry+placement exact; **untextured grey** (map is ImageBitmap → `textureData` undefined); with texprep roads/asphalt textured, walls/buildings still grey (bp-texarr DataArrayTexture + TSL materials). fog/hemi/ambient missing → flat grey sun-lit look.
 - car: exact shape; paint blue only with texprep; no env reflections/glass transparency (glass drawn opaque dark).
-- sky: **absent** (bp-sky ShaderMaterial GLSL not convertible → grey clear colour; scene.background ignored).
+- sky: NOT exercised (needs `&bpSky=1`; neither screenshot has a dome — overpass view). Expected: bp-sky legacy-GLSL ShaderMaterial has no wgpu path (adapter 'NodeMaterial-without-exporter'/unsupported) → grey clear colour. UNVERIFIED.
 - shadows: cascaded sun shadows run on game scene (4 passes, 237 draws, static cache).
 - TSL NodeMaterials (paintlerp/terrain/road/water/fx): adapter falls back to PBR (`pbr-fallback`). With `wgpuTsl=1` the export succeeds but core aborts the frame: `three attribute nodeAttribute0 not provided by core meshes (position/normal/uv)` → 0 frames. 
 ### Missing renderer features (named, game-driven)

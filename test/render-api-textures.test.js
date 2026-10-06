@@ -44,8 +44,11 @@ async function fakeWgpu() {
   const c = { tex: 0, destroyTex: 0, mat: 0, updMat: 0, destroyMat: 0 }; let id = 0;
   const gpu = { hasTimestamps: () => false, createTexture: () => { c.tex++; return ++id; }, destroyTexture: () => { c.destroyTex++; }, createMaterial: () => { c.mat++; return ++id; }, updateMaterial: () => { c.updMat++; }, destroyMaterial: () => { c.destroyMat++; } };
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
+  // Fake navigator ONLY while constructing; restore so later files in the same bun process (GLTFLoader reads navigator.userAgent) see the real one.
+  const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   Object.defineProperty(globalThis, 'navigator', { value: { gpu: {} }, configurable: true });
-  return { c, backend: await createWgpuBackend({ canvas: {}, wasm }) };
+  try { return { c, backend: await createWgpuBackend({ canvas: {}, wasm }) }; }
+  finally { if (prev) Object.defineProperty(globalThis, 'navigator', prev); else delete globalThis.navigator; }
 }
 
 test('wgpu-backend: one GPU texture per key (refcounted), updateMaterial in place, release on destroy', async () => {

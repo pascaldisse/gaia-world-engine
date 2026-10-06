@@ -38,6 +38,10 @@ try {
   const spec = await (await fetch('/ext/sky/sky.json')).json();
   const sky = await createMxoSky({ THREE, scene, camera: cam, spec, baseUrl: new URL('/ext/sky/sky.json', location.href).href, dayOffset: Number(q.get('day') ?? 0) });
   sky.update(0); R.skyState = { layers: sky.state.layers.map((l) => [l.id, l.mesh, l.blend, l.texture, +l.alpha.toFixed(3)]), clear: sky.state.clear };
+  // isolation knobs: ?only=<layer idx> (hide the other sky layers) &nofog=1 &bare=1 (hide ground+wall)
+  if (q.has('nofog')) scene.fog = null;
+  if (q.has('bare')) { ground.visible = false; wall.visible = false; }
+  if (q.has('only')) { const dome = sky.root.children[0]; dome.children.forEach((m, i) => { m.visible = i === Number(q.get('only')); }); sky.root.children.slice(1).forEach((m) => { m.visible = false; }); }
   const cThree = mkCanvas(), cWgpu = mkCanvas();
   const renderer = new THREE.WebGPURenderer({ canvas: cThree, antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
   renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1;

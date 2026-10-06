@@ -63,7 +63,7 @@ roughness: kind === 'lambert' ? 1 : kind === 'basic' ? 1 : (m.roughness ?? 1), m
 emissive: rgb(m.emissive ?? { r: 0, g: 0, b: 0 }), emissiveIntensity: m.emissiveIntensity ?? 1,
 };
 // r8: Basic = no lighting (three MeshBasic*Material). NOT for a NodeMaterial with custom *Node slots: its look comes from those nodes (TSL package path); the plain-PBR fallback of such a material stays lit (r6: flat white walls).
-if (kind === 'basic' && !(m.isNodeMaterial && hasNodes(m))) { p.unlit = true; p.toneMapped = m.toneMapped !== false; }
+if (kind === 'basic' && !(m.isNodeMaterial && hasNodes(m))) { p.unlit = true; p.toneMapped = true; /* r8 MEASURED (r8-blend.html): three r180 WebGPURenderer with renderer.toneMapping set tone-maps EVERY canvas fragment, `material.toneMapped:false` white opaque reads 188 (= Reinhard(1) sRGB) not 255 → unlit stays tone-mapped in the core */ }
 if (kind === 'physical') for (const k of ['clearcoat', 'clearcoatRoughness', 'transmission', 'ior', 'thickness', 'sheen', 'iridescence']) if (m[k]) p[k] = m[k];
 if (m.userData?.preset) p.preset = m.userData.preset;
 if (m.blending === 2) p.blending = 'additive';

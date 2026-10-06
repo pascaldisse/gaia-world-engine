@@ -214,3 +214,70 @@ fn background_color_is_tone_mapped_like_three() {
     assert!(close(px, expect_rgb(c), 1), "bg: got {px:?} want {:?}", expect_rgb(c));
     assert!(close(px, [138, 158, 178], 3), "bg vs three-measured: {px:?}");
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// r8 sky: unlit (three MeshBasic) + blend + depthWrite + order flags (Eden sky domes). Unlit ignores sun/hemi; tone flag = exposure+Reinhard.
+fn unlit_scene(device: &wgpu::Device, queue: &wgpu::Queue, base: [f32; 4], flags: MaterialFlags, tone: bool) -> RenderCore {
+    let mut core = plane_scene(device, queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+    core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 5.0); // lights on: unlit must ignore them
+    core.set_hemisphere_irradiance([3.0; 3], [3.0; 3]);
+    core.create_material(device, 1, MaterialDesc { base_color: base, metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+    if flags.blend.is_some() {
+        core.set_material_blend(1, true);
+    }
+    core.set_material_flags(device, 1, flags);
+    core.set_material_unlit_tone_mapped(device, 1, tone);
+    core
+}
+
+#[test]
+fn unlit_ignores_lights_and_honours_tone_map_flag() {
+    let (device, queue) = device();
+    let f = MaterialFlags { unlit: true, ..Default::default() };
+    let mut raw = unlit_scene(&device, &queue, [0.5, 0.25, 0.1, 1.0], f, false);
+    let got = centre(&shoot(&device, &queue, &mut raw));
+    let want = [(srgb(0.5) * 255.0).round() as u8, (srgb(0.25) * 255.0).round() as u8, (srgb(0.1) * 255.0).round() as u8];
+    assert!(close(got, want, 1), "unlit raw: got {got:?} want {want:?}");
+    let mut tm = unlit_scene(&device, &queue, [0.5, 0.25, 0.1, 1.0], f, true);
+    let got = centre(&shoot(&device, &queue, &mut tm));
+    let want = expect_rgb([0.5, 0.25, 0.1]);
+    assert!(close(got, want, 1), "unlit tone-mapped: got {got:?} want {want:?}");
+}
+
+#[test]
+fn unlit_alpha_blend_over_background_blends_after_tone_map() {
+    // core blends the tone-mapped fragment over the (tone-mapped) clear in the linear sRGB target: out = a*T(src) + (1-a)*T(bg)
+    let (device, queue) = device();
+    let t = |e: f32| e / (1.0 + e);
+    let (a, src, bg) = (0.4f32, 0.8f32, 0.3f32);
+    let f = MaterialFlags { unlit: true, blend: Some(BlendKind::Alpha), depth_write: Some(false), ..Default::default() };
+    let mut core = unlit_scene(&device, &queue, [src, src, src, a], f, true);
+    core.set_background_color([bg; 3]);
+    let got = centre(&shoot(&device, &queue, &mut core));
+    let l = a * t(src) + (1.0 - a) * t(bg);
+    let want = [(srgb(l) * 255.0).round() as u8; 3];
+    assert!(close(got, want, 2), "unlit blend: got {got:?} want {want:?}");
+}
+
+#[test]
+fn render_order_draws_lower_first() {
+    // two coplanar unlit alpha-blended quads, depth_write off: the one with the HIGHER render_order lands on top (opaque a=1 hides the other)
+    let (device, queue) = device();
+    for (ro_red, want_red) in [(5, true), (-5, false)] {
+        let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+        core.create_material(&device, 1, MaterialDesc { base_color: [1.0, 0.0, 0.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        core.create_material(&device, 2, MaterialDesc { base_color: [0.0, 0.0, 1.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        let s = 4.0;
+        let pos = [-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s];
+        let n = [0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.];
+        core.create_mesh(&device, 2, &pos, &n, &[0.0; 8], &[0, 2, 1, 0, 3, 2]).unwrap();
+        core.create_instance(2, 2, 2, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        for (id, ro) in [(1u32, ro_red), (2u32, 0)] {
+            core.set_material_blend(id, true);
+            core.set_material_flags(&device, id, MaterialFlags { unlit: true, blend: Some(BlendKind::Alpha), depth_write: Some(false), render_order: ro, ..Default::default() });
+        }
+        let got = centre(&shoot(&device, &queue, &mut core));
+        let red = got[0] > 100 && got[2] < 50;
+        assert_eq!(red, want_red, "render_order red={ro_red}: got {got:?}");
+    }
+}

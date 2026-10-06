@@ -1,0 +1,33 @@
+<!doctype html><meta charset=utf-8><title>r8 blend space: three vs wgpu</title>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r8: which colour space does three's WebGPURenderer blend in (canvas), vs the core (linear, *Srgb target)? Unlit quads over scene.background, one column per variant; prints centre pixels.
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+const W = 640, H = 120;
+const R = window.__result = { done: false, log: [], rows: [] };
+const raf = () => new Promise(requestAnimationFrame);
+const mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.cssText = `position:absolute;left:-9000px`; document.body.appendChild(c); return c; };
+function snap(canvas) { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0); return x.getImageData(0, 0, W, H); }
+try {
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x7f8782);
+  const V = [ // [colour hex(srgb), opacity, blending, toneMapped]
+    [0xffffff, 0.2161, THREE.NormalBlending, false], [0xffffff, 0.5, THREE.NormalBlending, false], [0xffffff, 1, THREE.NormalBlending, false],
+    [0x000000, 0.5, THREE.NormalBlending, false], [0xff4020, 0.5, THREE.NormalBlending, false], [0xffffff, 0.5, THREE.AdditiveBlending, false], [0xffffff, 0.5, THREE.NormalBlending, true] ];
+  V.forEach(([c, o, b, tm], i) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 1.6), new THREE.MeshBasicMaterial({ color: c, opacity: o, transparent: true, depthWrite: false, blending: b, toneMapped: tm, side: THREE.DoubleSide })); m.position.set(-3 + i, 0, 0); scene.add(m); });
+  const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 50); cam.position.set(0, 0, 4.9); cam.updateMatrixWorld(true);
+  const renderer = new THREE.WebGPURenderer({ canvas: mkCanvas(), antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1; await renderer.init();
+  const cW = mkCanvas(); const backend = await createWgpuBackend({ canvas: cW, wasm, renderHeight: H }); const adapter = createSceneAdapter(backend, { three: THREE });
+  renderer.render(scene, cam); await raf(); await raf(); const a = snap(renderer.domElement);
+  adapter.sync(scene, cam); backend.renderFrame(0); await raf(); await raf(); const b = snap(cW);
+  const px = (img, x) => { const i = (60 * W + x) * 4; return [img.data[i], img.data[i + 1], img.data[i + 2]]; };
+  const xs = V.map((_, i) => Math.round(W / 2 + (-3 + i) * (W / (2 * Math.tan(25 * Math.PI / 180) * 4.9 * (W / H)) )));
+  R.bg = [px(a, 5), px(b, 5)];
+  V.forEach((v, i) => R.rows.push({ v: [v[0].toString(16), v[1], v[2], v[3]], x: xs[i], three: px(a, xs[i]), wgpu: px(b, xs[i]) }));
+  R.adapter = { unsupported: [...adapter.stats.unsupported], degraded: [...adapter.stats.degraded] };
+} catch (e) { R.log.push('EXC ' + (e.stack || e)); }
+R.done = true;
+</script>

@@ -54,6 +54,11 @@ fn close(a: [u8; 3], b: [u8; 3], tol: i32) -> bool {
 
 /// quad in the XZ plane at y=0 facing +Y (normal up), camera `eye` looking at origin
 fn plane_scene(device: &wgpu::Device, queue: &wgpu::Queue, metallic: f32, eye: glam::Vec3, normal_y: f32) -> RenderCore {
+    plane_scene_at(device, queue, metallic, eye, normal_y, glam::Vec3::ZERO)
+}
+
+/// same, quad centred at `at` (camera looks at it)
+fn plane_scene_at(device: &wgpu::Device, queue: &wgpu::Queue, metallic: f32, eye: glam::Vec3, normal_y: f32, at: glam::Vec3) -> RenderCore {
     let mut opts = RenderOptions::default();
     opts.render_height = 64;
     let mut core = RenderCore::new(device, queue, opts);
@@ -64,8 +69,8 @@ fn plane_scene(device: &wgpu::Device, queue: &wgpu::Queue, metallic: f32, eye: g
     let n = [0., normal_y, 0., 0., normal_y, 0., 0., normal_y, 0., 0., normal_y, 0.];
     let idx: [u32; 6] = if normal_y > 0.0 { [0, 2, 1, 0, 3, 2] } else { [0, 1, 2, 0, 2, 3] };
     core.create_mesh(device, 1, &pos, &n, &[0.0; 8], &idx).unwrap();
-    core.create_instance(1, 1, 1, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
-    core.set_camera(glam::Mat4::look_at_rh(eye, glam::Vec3::ZERO, glam::Vec3::Z).inverse().to_cols_array(), 40f32.to_radians(), 0.1, Some(100.0));
+    core.create_instance(1, 1, 1, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., at.x, at.y, at.z, 1.]);
+    core.set_camera(glam::Mat4::look_at_rh(eye, at, glam::Vec3::Z).inverse().to_cols_array(), 40f32.to_radians(), 0.1, Some(100.0));
     core
 }
 
@@ -107,4 +112,72 @@ fn clear_colour_is_scene_background() {
     let px = centre(&shoot(&device, &queue, &mut core));
     let want = [(srgb(0.2) * 255.0).round() as u8, (srgb(0.4) * 255.0).round() as u8, (srgb(0.6) * 255.0).round() as u8];
     assert!(close(px, want, 1), "clear: got {px:?} want {want:?}");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// r6 S3 probe GI. Synthetic atlases (res 4/4) with per-probe constant irradiance; expected values = gi-open-nodes.js math done by hand.
+const PI: f32 = std::f32::consts::PI;
+const IRR_RES: usize = 4;
+const DEP_RES: usize = 4;
+
+/// cascade 0: spacing 1, dims 4^3, base cell (-1,-2,-4) (window x[-1,2] y[-2,1] z[-4,-1]); cascade 1: spacing 4, dims 8^3, base (-4,-4,-4), baseIndex 64.
+fn gi_params(mode: f32, shift: f32) -> Vec<f32> {
+    let mut p = vec![2.0, 1.5, IRR_RES as f32, DEP_RES as f32, mode, 0.0, 0.0, 0.0];
+    p.extend([-1.0 + shift, -2.0, -4.0, 1.0, 4.0, 4.0, 4.0, 0.0]);
+    p.extend([-4.0 + shift, -4.0, -4.0, 4.0, 8.0, 8.0, 8.0, 64.0]);
+    p
+}
+const E_PROBES: usize = 64 + 512;
+/// probe `i` irradiance (e, e/2, e/4), e = pi * (0.05 + 0.03 i)
+fn e_of(i: usize) -> f32 { PI * (0.05 + 0.03 * i as f32) }
+fn atlases(disabled: &[usize]) -> (Vec<f32>, Vec<f32>) {
+    let mut irr = Vec::new();
+    let mut dep = Vec::new();
+    for p in 0..E_PROBES {
+        for _ in 0..IRR_RES * IRR_RES { let e = e_of(p); irr.extend([e, e * 0.5, e * 0.25, 0.0]); }
+        for _ in 0..DEP_RES * DEP_RES { if disabled.contains(&p) { dep.extend([-1.0, -1.0]); } else { dep.extend([100.0, 1.0e4]); } }
+    }
+    (irr, dep)
+}
+fn gi_pixel(params: Vec<f32>, disabled: &[usize], hemi_e: f32, at: glam::Vec3) -> [u8; 3] {
+    let (device, queue) = device();
+    let mut core = plane_scene_at(&device, &queue, 0.0, at + glam::Vec3::new(0.0, 6.0, 0.01), 1.0, at);
+    core.set_hemisphere_irradiance([hemi_e; 3], [hemi_e; 3]);
+    let (irr, dep) = atlases(disabled);
+    core.set_gi_probes(&device, &queue, &irr, &dep, &params).expect("set_gi_probes");
+    centre(&shoot(&device, &queue, &mut core))
+}
+// quad centre (0.5,-0.5,-2.5) = centre of cascade-0 cell (0,-1,-3): 4 probes above the surface (cells x{0,1} y0 z{-3,-2}) = slots 16,17,32,33, equal weight
+const AT: glam::Vec3 = glam::Vec3::new(0.5, -0.5, -2.5);
+fn avg(ids: &[usize]) -> [f32; 3] { let e = ids.iter().map(|&i| e_of(i)).sum::<f32>() / ids.len() as f32; [e, e * 0.5, e * 0.25] }
+fn lit(e: [f32; 3], albedo: f32) -> [u8; 3] { expect_rgb([e[0] / PI * albedo, e[1] / PI * albedo, e[2] / PI * albedo]) }
+
+#[test]
+fn gi_replace_inside_window_samples_toroidal_slots_trilinear() {
+    let got = gi_pixel(gi_params(1.0, 0.0), &[], PI, AT);
+    let want = lit(avg(&[16, 17, 32, 33]), 0.5);
+    assert!(close(got, want, 1), "GI replace: got {got:?} want {want:?}");
+}
+
+#[test]
+fn gi_disabled_probe_sentinel_is_skipped() {
+    let got = gi_pixel(gi_params(1.0, 0.0), &[17], PI, AT);
+    let want = lit(avg(&[16, 32, 33]), 0.5);
+    assert!(close(got, want, 1), "disabled probe 17: got {got:?} want {want:?}");
+}
+
+#[test]
+fn gi_outside_every_cascade_falls_back_to_hemisphere() {
+    // windows shifted 1000 cells away: coverage 0 -> net = hemi (E = pi -> 1/pi*pi*albedo .5 = 0.5)
+    let got = gi_pixel(gi_params(1.0, 1000.0), &[], PI, AT);
+    let want = expect_rgb([0.5; 3]);
+    assert!(close(got, want, 1), "outside windows: got {got:?} want {want:?}");
+}
+
+#[test]
+fn gi_add_mode_adds_to_hemisphere() {
+    let got = gi_pixel(gi_params(0.0, 0.0), &[], PI, AT);
+    let g = avg(&[16, 17, 32, 33]);
+    let want = expect_rgb([(1.0 + g[0] / PI) * 0.5, (1.0 + g[1] / PI) * 0.5, (1.0 + g[2] / PI) * 0.5]);
+    assert!(close(got, want, 1), "GI add: got {got:?} want {want:?}");
 }

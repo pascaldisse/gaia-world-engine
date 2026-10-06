@@ -470,6 +470,17 @@ o.into()
         self.core.set_hemisphere_irradiance([sky[0], sky[1], sky[2]], [ground[0], ground[1], ground[2]]);
         Ok(())
     }
+    /// r6 probe GI: host readback of three's GI atlases. irradiance = 4 f32/texel (vec3 storage padded to vec4), depth = 2 f32/texel (mean, mean^2),
+    /// params = [cascadeCount, blendCells, irradianceRes, depthRes, mode(0 add|1 replace), 0,0,0, then per cascade 8: baseCell.xyz, spacing, dims.xyz, baseIndex].
+    #[wasm_bindgen(js_name = setGiProbes)]
+    pub fn set_gi_probes(&mut self, irradiance: &[f32], depth: &[f32], params: &[f32]) -> Result<(), JsError> {
+        self.core.set_gi_probes(&self.device, &self.queue, irradiance, depth, params).map_err(err)
+    }
+    /// GI off.
+    #[wasm_bindgen(js_name = clearGiProbes)]
+    pub fn clear_gi_probes(&mut self) {
+        self.core.clear_gi_probes(&self.queue);
+    }
     /// frame clear colour (linear rgb + a) = three scene.background Color.
     #[wasm_bindgen(js_name = setClearColor)]
     pub fn set_clear_color(&mut self, rgba: &[f32]) -> Result<(), JsError> {

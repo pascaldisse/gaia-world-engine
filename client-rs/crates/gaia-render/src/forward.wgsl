@@ -21,6 +21,16 @@ struct Material {
     flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure)
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
+// ---- r6 probe GI (gi.rs): atlases read back from three's GI compute, sampled with the SAME math as client/kernel/gi/gi-open-nodes.js ----
+struct GiCascade { a: vec4<f32>, b: vec4<f32> };  // a = (baseCell.xyz window min cell, spacing) · b = (dims.xyz, baseIndex)
+struct Gi {
+info: vec4<f32>,         // x cascade count (0 = GI off), y blendCells, z irradianceRes, w depthRes
+tex: vec4<u32>,          // x irradiance tex width, y depth tex width, z mode (0 add · 1 replace)
+cas: array<GiCascade, 4>,
+};
+@group(0) @binding(1) var<uniform> gi: Gi;
+@group(0) @binding(2) var gi_irr: texture_2d<f32>;   // Rgba32Float, texel i = (i % W, i / W), rgb = irradiance E
+@group(0) @binding(3) var gi_depth: texture_2d<f32>; // Rg32Float, (mean dist, mean dist^2)
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var base_samp: sampler;
@@ -87,6 +97,119 @@ struct VsOut {
     @location(4) color: vec4<f32>,
 };
 
+// ---- gi-open-nodes.js ports (line refs = that file) ----
+const GI_COVERAGE_WEIGHT_EPS: f32 = 1e-6;   // gi-reference.js COVERAGE_WEIGHT_EPS
+const GI_COVERAGE_WEIGHT_FADE: f32 = 1e-3;  // gi-reference.js COVERAGE_WEIGHT_FADE
+fn gi_smooth01(t: f32) -> f32 { let c = clamp(t, 0.0, 1.0); return c * c * (3.0 - 2.0 * c); }   // :79
+fn gi_sign_not_zero(v: f32) -> f32 { return select(1.0, -1.0, v < 0.0); }                          // :198
+fn gi_encode_oct(dir: vec3<f32>) -> vec2<f32> {                                                     // encodeOctTSL :199-203
+let l1 = abs(dir.x) + abs(dir.y) + abs(dir.z);
+let inv = 1.0 / max(l1, 1e-8);
+let u0 = dir.x * inv;
+let v0 = dir.y * inv;
+let folded = dir.z < 0.0;
+return vec2<f32>(select(u0, (1.0 - abs(v0)) * gi_sign_not_zero(u0), folded), select(v0, (1.0 - abs(u0)) * gi_sign_not_zero(v0), folded));
+}
+fn gi_oct_texel(uv: vec2<f32>, res: i32) -> i32 {                                                    // octTexel :209-212
+let fr = f32(res);
+let tx = clamp(i32(floor((uv.x + 1.0) / 2.0 * fr)), 0, res - 1);
+let ty = clamp(i32(floor((uv.y + 1.0) / 2.0 * fr)), 0, res - 1);
+return tx + res * ty;
+}
+fn gi_irr_at(i: i32) -> vec3<f32> {
+let w = i32(gi.tex.x);
+return textureLoad(gi_irr, vec2<i32>(i % w, i / w), 0).rgb;
+}
+fn gi_depth_at(i: i32) -> vec2<f32> {
+let w = i32(gi.tex.y);
+return textureLoad(gi_depth, vec2<i32>(i % w, i / w), 0).rg;
+}
+fn gi_pos_mod(a: i32, n: i32) -> i32 { return ((a % n) + n) % n; }  // TSL uses CELL_BIAS = 0 mod pow2 dims; exact positive mod here
+// queryCascadeTSL :45-78 — one cascade, 8 corners, Chebyshev + backface + disabled-sentinel skip. returns (value.xyz, weightSum)
+fn gi_query_cascade(c: GiCascade, world: vec3<f32>, normal: vec3<f32>) -> vec4<f32> {
+let sp = c.a.w;
+let base_cell = c.a.xyz;
+let rel = world / sp - base_cell;
+let base = floor(rel);
+let fr = rel - base;
+let irr_res = i32(gi.info.z);
+let dep_res = i32(gi.info.w);
+let dx = i32(c.b.x);
+let dy = i32(c.b.y);
+let dz = i32(c.b.z);
+let nuv = gi_encode_oct(normal);
+var total = vec3<f32>(0.0);
+var wsum = 0.0;
+for (var o = 0; o < 8; o = o + 1) {
+let ox = o & 1;
+let oy = (o >> 1) & 1;
+let oz = (o >> 2) & 1;
+let cell_abs = base_cell + base + vec3<f32>(f32(ox), f32(oy), f32(oz));
+let wx = select(1.0 - fr.x, fr.x, ox == 1);
+let wy = select(1.0 - fr.y, fr.y, oy == 1);
+let wz = select(1.0 - fr.z, fr.z, oz == 1);
+let tril_w = wx * wy * wz;
+let corner_world = cell_abs * sp;
+let to_probe = corner_world - world;
+let test_dist = length(to_probe);
+let near_zero = test_dist < 1e-6;
+let backface = select(max(0.0, dot(normal, normalize(to_probe))), 1.0, near_zero);
+let slot = gi_pos_mod(i32(cell_abs.x), dx) + dx * (gi_pos_mod(i32(cell_abs.y), dy) + dy * gi_pos_mod(i32(cell_abs.z), dz));
+let p_idx = slot + i32(c.b.w);
+let irr = gi_irr_at(p_idx * irr_res * irr_res + gi_oct_texel(nuv, irr_res));
+let d_dir = select(normalize(world - corner_world), normal, near_zero);
+let md = gi_depth_at(p_idx * dep_res * dep_res + gi_oct_texel(gi_encode_oct(d_dir), dep_res));
+let variance = max(md.y - md.x * md.x, 1e-4);
+let d = test_dist - md.x;
+let cheb = select(clamp(variance / (variance + d * d), 0.0, 1.0), 1.0, test_dist <= md.x);
+let usable = md.x >= 0.0; // depth sentinel -1 = disabled / fresh probe
+let w = select(0.0, tril_w * backface * cheb, usable);
+total = total + irr * w;
+wsum = wsum + w;
+}
+return vec4<f32>(total / max(wsum, 1e-6), wsum);
+}
+// queryCascadesCoverageTSL :95-109 (+ containsAndBorder :80-90). returns (E.xyz, coverage)
+fn gi_query(world: vec3<f32>, normal: vec3<f32>) -> vec4<f32> {
+let n = i32(gi.info.x);
+let blend = gi.info.y;
+var qv: array<vec3<f32>, 4>;
+var qw: array<f32, 4>;
+var inside: array<bool, 4>;
+var border: array<f32, 4>;
+for (var k = 0; k < n; k = k + 1) {
+let c = gi.cas[k];
+let q = gi_query_cascade(c, world, normal);
+qv[k] = q.xyz;
+qw[k] = q.w;
+let rel = world / c.a.w - c.a.xyz;
+let ext = c.b.xyz - vec3<f32>(1.0);
+inside[k] = all(rel >= vec3<f32>(0.0)) && all(rel <= ext);
+let m = min(min(min(rel.x, ext.x - rel.x), min(rel.y, ext.y - rel.y)), min(rel.z, ext.z - rel.z));
+border[k] = max(0.0, m);
+}
+// usable(k) = inside && weightSum > EPS
+var result = vec3<f32>(0.0);
+let last = n - 1;
+if (inside[last] && qw[last] > GI_COVERAGE_WEIGHT_EPS) { result = qv[last]; }
+for (var k = n - 2; k >= 0; k = k - 1) {
+let u_k = inside[k] && qw[k] > GI_COVERAGE_WEIGHT_EPS;
+let u_k1 = inside[k + 1] && qw[k + 1] > GI_COVERAGE_WEIGHT_EPS;
+let w_fine = select(1.0, gi_smooth01(border[k] / blend), u_k1);
+if (u_k) { result = mix(result, qv[k], w_fine); }
+}
+var coverage = 0.0;
+for (var k = 0; k < n; k = k + 1) {
+let u_k = inside[k] && qw[k] > GI_COVERAGE_WEIGHT_EPS;
+var cv = 0.0;
+if (u_k) {
+cv = gi_smooth01(qw[k] / GI_COVERAGE_WEIGHT_FADE);
+if (k == last) { cv = cv * gi_smooth01(border[k] / blend); }
+}
+coverage = max(coverage, cv);
+}
+return vec4<f32>(result, coverage);
+}
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>,
            @location(3) m0: vec4<f32>, @location(4) m1: vec4<f32>, @location(5) m2: vec4<f32>, @location(6) m3: vec4<f32>,
@@ -175,7 +298,14 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     // hemisphere ambient: lerp(ground, sky, 0.5 n.y + 0.5) x albedo (flat when sky == ground)
     let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));
     // three PhysicalLightingModel.indirect: diffuseColor = albedo * (1 - metalness); hemi/ambient E/PI is pre-divided CPU-side.
-color = color + hemi * base.rgb * (1.0 - metallic) + material.emissive.rgb;
+var irr = hemi; // shader units = E / PI
+if (gi.info.x > 0.5) {
+let q = gi_query(in.world, n);
+let g = q.xyz / PI;
+// ambient 'replace' (gi-open-nodes.js :116-117 ambientReplaceTSL + the hemi light's own +hemi): net E = hemi + c*(gi - hemi) = mix(hemi, gi, c); 'add': hemi + gi
+irr = select(hemi + g, mix(hemi, g, q.w), gi.tex.z == 1u);
+}
+color = color + irr * base.rgb * (1.0 - metallic) + material.emissive.rgb;
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).

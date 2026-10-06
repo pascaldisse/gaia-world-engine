@@ -8,6 +8,8 @@ mod three_material;
 mod timing_async;
 pub use three_material::ThreeFrame;
 pub mod skin;
+mod gi;
+pub use gi::{GI_MAX_CASCADES, GI_PARAM_CASCADE, GI_PARAM_HEADER, GI_TEX_WIDTH};
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -533,6 +535,8 @@ pub struct RenderCore {
     white_colors: wgpu::Buffer,
     frame_buffer: wgpu::Buffer,
     frame_bind: wgpu::BindGroup,
+    /// r6 probe-GI atlases + params (group 0 bindings 1..3); count 0 = off.
+    gi: gi::GiProbes,
     meshes: HashMap<u32, GpuMesh>,
     textures: HashMap<u32, wgpu::TextureView>,
     materials: HashMap<u32, GpuMaterial>,
@@ -582,8 +586,9 @@ impl RenderCore {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, opts: RenderOptions) -> Self {
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gaia-render frame"),
-            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)],
+            entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT), gi::layout_entries()[0], gi::layout_entries()[1], gi::layout_entries()[2]],
         });
+        let gi_probes = gi::GiProbes::new(device);
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gaia-render material"),
             entries: &[
@@ -648,10 +653,7 @@ impl RenderCore {
         let frame_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("frame bind"),
             layout: &frame_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
+            entries: &frame_entries(&frame_buffer, &gi_probes),
         });
         let timing = device
             .features()
@@ -706,6 +708,7 @@ impl RenderCore {
             white_colors: device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("white vertex colours"), contents: &[0u8; 16], usage: wgpu::BufferUsages::VERTEX }),
             frame_buffer,
             frame_bind,
+            gi: gi_probes,
             meshes: HashMap::new(),
             material_lightmaps: HashMap::new(),
             instance_transforms: Vec::new(),
@@ -1223,6 +1226,18 @@ impl RenderCore {
         self.set_hemisphere_ambient([sky[0] * k, sky[1] * k, sky[2] * k], [ground[0] * k, ground[1] * k, ground[2] * k]);
     }
 
+    /// r6 probe GI: hand over the host-side readback of the three GI atlases (see gi.rs for layout). Re-binds only when texture sizes change.
+    pub fn set_gi_probes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, irradiance: &[f32], depth: &[f32], params: &[f32]) -> Result<(), String> {
+        if self.gi.upload(device, queue, irradiance, depth, params)? {
+            self.frame_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("frame bind"), layout: &self.frame_layout, entries: &frame_entries(&self.frame_buffer, &self.gi) });
+        }
+        Ok(())
+    }
+    /// GI off (cascade count 0): shader falls back to the plain hemisphere term.
+    pub fn clear_gi_probes(&mut self, queue: &wgpu::Queue) {
+        self.gi.clear(queue);
+    }
+
     /// Frame clear colour = three `scene.background` Color (linear working space; the *Srgb target encodes it, as three's output does).
     pub fn set_clear_color(&mut self, rgba: [f64; 4]) {
         self.opts.clear_color = rgba;
@@ -1728,6 +1743,15 @@ fn upload_rgba8(
         queue.submit(Some(encoder.finish()));
     }
     texture.create_view(&Default::default())
+}
+
+fn frame_entries<'a>(frame_buffer: &'a wgpu::Buffer, g: &'a gi::GiProbes) -> [wgpu::BindGroupEntry<'a>; 4] {
+    [
+        wgpu::BindGroupEntry { binding: 0, resource: frame_buffer.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 1, resource: g.uniform.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&g.irr_view) },
+        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&g.depth_view) },
+    ]
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {

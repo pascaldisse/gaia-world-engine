@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>render-wasm proof</title>
+<style>html,body{margin:0;background:#111;color:#ccc;font:12px monospace}canvas{display:block}#log{position:fixed;left:6px;top:4px;white-space:pre;text-shadow:0 0 3px #000}</style>
+<canvas id="c"></canvas><div id="log"></div>
+<script type="module">
+// ?w=1280&h=800 (canvas px) &rh=720 (internal render height) &frames=120 &glb=/asylum.glb
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { assertRenderBackend } from '/kernel/interface.js';
+import { loadGlbInto, perspectiveGL } from '/glb-loader.js';
+
+const q = new URLSearchParams(location.search);
+const num = (k, d) => (q.has(k) ? Number(q.get(k)) : d);
+const W = num('w', 1280), H = num('h', 800), RH = num('rh', 720), FRAMES = num('frames', 120);
+const canvas = document.getElementById('c'); canvas.width = W; canvas.height = H; canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+const logEl = document.getElementById('log'); const log = (s) => { logEl.textContent = s; console.log(s); };
+const result = { ok: false };
+window.__result = result;
+try {
+  const t0 = performance.now();
+  const backend = assertRenderBackend(await createWgpuBackend({ canvas, wasm, renderHeight: RH }));
+  result.backend = { name: backend.name, apiVersion: backend.apiVersion, capabilities: backend.capabilities };
+  result.init_ms = performance.now() - t0;
+  log('fetching glb…');
+  const t1 = performance.now();
+  const buf = await (await fetch(q.get('glb') || '/asylum.glb')).arrayBuffer();
+  result.glb_bytes = buf.byteLength; result.fetch_ms = performance.now() - t1;
+  const t2 = performance.now();
+  const scene = await loadGlbInto(backend, buf, { onProgress: log });
+  result.load_ms = performance.now() - t2; result.stats = scene.stats; result.bounds = scene.bounds;
+  result.instance_count = backend.gpu.instanceCount();
+
+  const aspect = W / H;
+  let world, yfov, znear, zfar;
+  if (scene.camera) ({ world, yfov, znear, zfar } = scene.camera);
+  else { // fit (same rule as gaia-render Camera::from_scene)
+    const { min, max } = scene.bounds, c = min.map((v, i) => (v + max[i]) / 2), h = min.map((v, i) => (max[i] - v) / 2);
+    const r = Math.hypot(...h) * 1; yfov = 1.05; znear = r * 0.002; zfar = r * 4;
+    const ax = h[0] >= h[2] ? 0 : 2, eye = [...c]; eye[ax] -= h[ax] * 0.6; eye[1] -= h[1] * 0.5; const tgt = [...c]; tgt[ax] += h[ax]; tgt[1] -= h[1] * 0.5;
+    const z = eye.map((v, i) => v - tgt[i]), zl = Math.hypot(...z); z.forEach((_, i) => (z[i] /= zl));
+    let x = [z[2], 0, -z[0]]; const xl = Math.hypot(...x); x = x.map((v) => v / xl);
+    const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+    world = [...x, 0, ...y, 0, ...z, 0, ...eye, 1];
+  }
+  result.camera = { yfov, znear, zfar, eye: [world[12], world[13], world[14]] };
+  // interface contract: setCamera(view, proj) — view = inverse(camera-to-world); backend inverts it back
+  const { invert4 } = await import('/kernel/wgpu-backend.js');
+  backend.setCamera(invert4(world), perspectiveGL(yfov, aspect, znear, zfar));
+
+  log('rendering…');
+  for (let i = 0; i < 5; i++) { backend.renderFrame(0); await new Promise(requestAnimationFrame); }
+  const ms = [];
+  for (let i = 0; i < FRAMES; i++) { const m = await backend.renderFrameTimed(); if (m >= 0) ms.push(m); await new Promise(requestAnimationFrame); }
+  ms.sort((a, b) => a - b);
+  const pick = (p) => ms[Math.min(ms.length - 1, Math.floor(ms.length * p))];
+  result.submit_to_done_ms = ms.length ? { n: ms.length, min: ms[0], median: pick(0.5), p95: pick(0.95), max: ms[ms.length - 1] } : null;
+  result.draw_calls = backend.gpu.drawCalls();
+  result.sizes = Array.from(backend.gpu.sizes()); // [outW,outH,intW,intH]
+  backend.renderFrame(0);
+  log(`asylum · ${result.stats.instances} instances · ${result.draw_calls} draws · internal ${result.sizes[2]}x${result.sizes[3]} → ${result.sizes[0]}x${result.sizes[1]} · submit→done median ${result.submit_to_done_ms?.median.toFixed(2)} ms`);
+  result.ok = true;
+} catch (e) {
+  result.error = String(e?.stack || e); log('ERROR ' + result.error);
+}
+result.done = true;
+</script>

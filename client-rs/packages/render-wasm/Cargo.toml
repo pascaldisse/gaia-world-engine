@@ -1,0 +1,19 @@
+[package]
+name = "render-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "gaia-render in the browser: wasm-bindgen + WebGPU canvas surface (data-only API, typed arrays in / integer handles out)"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Whole crate is wasm32-only; on native targets it compiles to an empty lib so
+# `cargo check --workspace` stays green.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gaia-render = { path = "../../crates/gaia-render" }
+wgpu = "30.0.0"
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "console", "Window", "Performance"] }

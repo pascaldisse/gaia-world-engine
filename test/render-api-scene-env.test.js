@@ -70,3 +70,12 @@ test('backend without the new methods: fog/environment loudly unsupported', () =
   scene.fog = new THREE.Fog(0xffffff, 1, 10); scene.environment = cube(4, () => 255); ad.sync(scene);
   assert.ok(ad.stats.unsupported.has('fog') && ad.stats.unsupported.has('environment'));
 });
+
+// r6-scene-2: legacy GLSL ShaderMaterial → not drawn + loud degraded flag (three WebGPURenderer rejects it too)
+import { materialToParams as __mtp } from '../client/kernel/render-api/material-map.js';
+import { test as __t, expect as __e } from 'bun:test';
+__t('ShaderMaterial is invisible + degraded, not a PBR sphere', () => {
+  const r = __mtp({ isShaderMaterial: true, side: 1, opacity: 1, version: 0, uuid: 'x' });
+  __e(r.params.visible).toBe(false);
+  __e(r.degraded).toContain('ShaderMaterial-GLSL-unsupported');
+});

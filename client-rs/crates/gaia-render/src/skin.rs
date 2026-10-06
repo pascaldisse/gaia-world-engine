@@ -348,6 +348,7 @@ impl RenderCore {
                     center: m.center,
 lo: m.lo, // bind-pose until `update_skin_bounds` (same frame) replaces it with the posed world bound
                     hi: m.hi,
+                    attrs: Default::default(),
                     vertices: dst.clone(),
                     uv1: uv1.clone(),
                     vertex_count: m.material_free_verts.len() as u32,

@@ -315,6 +315,11 @@ impl Upscaler for BilinearBlit {
     }
 }
 
+fn texture_array_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    let mut e = texture_entry(binding);
+    e.ty = wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2Array, multisampled: false };
+    e
+}
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -362,6 +367,10 @@ struct MaterialUniform {
     params: [f32; 4],
     emissive: [f32; 4],
     flags: [f32; 4],
+    /// x has_array, y normal_scale, z has_normal, w has_roughness_map
+    maps0: [f32; 4],
+    /// x has_metalness_map, y has_emissive_map, z has_ao_map, w side (0 double, 1 front only, 2 back only)
+    maps1: [f32; 4],
 }
 
 /// Blend equation of a built-in material (glTF has only alpha; scene-export `materialFlags` writes the others).
@@ -467,6 +476,28 @@ pub struct GpuTimings {
     pub span_ms: f64,
 }
 
+/// Optional extra maps of a built-in material (texture ids; 0/None = absent). `array` = D2Array base colour, layer read from
+/// TEXCOORD_1.x per vertex (lightmap and array are mutually exclusive). `side`: 0 double sided (default), 1 front only (cull back), 2 back only.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MaterialMaps {
+    pub array: Option<u32>,
+    pub normal: Option<u32>,
+    pub roughness: Option<u32>,
+    pub metalness: Option<u32>,
+    pub emissive: Option<u32>,
+    pub ao: Option<u32>,
+    pub normal_scale: f32,
+    pub side: u32,
+}
+pub struct ArrayTex {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    layers: u32,
+    levels: u32,
+    srgb: bool,
+}
 /// Data-only resource API (mirrors the JS render-api lane: meshes/materials/
 /// instances/camera/lights as plain arrays). Ids are caller-owned u32s.
 #[derive(Clone, Debug)]
@@ -492,6 +523,8 @@ struct GpuMesh {
     vertex_count: u32,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// r6-tsl: extra named vertex attributes (TSL attribute(), uv1/colour/custom) → (buffer, f32 item size). Fed to three materials only.
+    attrs: HashMap<String, (wgpu::Buffer, u32)>,
 }
 
 struct GpuMaterial {
@@ -592,6 +625,15 @@ pub struct RenderCore {
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
     mipgen: BilinearBlit,
+    /// mip chain generator for linear (Rgba8Unorm) textures: normal/roughness/metalness/AO maps.
+    mipgen_linear: BilinearBlit,
+    /// array textures (D2Array views) by id; ids here are NOT in `textures`.
+    array_textures: HashMap<u32, ArrayTex>,
+    /// r6-tsl-2: host buffers behind TSL storage bindings (shared across materials).
+    storage_buffers: HashMap<u32, three_material::StorageBuf>,
+    white_array: wgpu::TextureView,
+    /// per-material extra maps/side (set_material_maps), rebinds the material.
+    material_maps: HashMap<u32, MaterialMaps>,
     shadow: shadow::ShadowSystem,
     shadow_receiver_layout: wgpu::BindGroupLayout,
     /// World-space shadow casters, rebuilt with the instance batches.
@@ -604,6 +646,10 @@ pub struct RenderCore {
     three: three_material::ThreeMaterials,
     /// value fed to TSL `time` (seconds); host-advanced via `set_three_time`.
     three_time: f32,
+    /// r6-tsl: per-instance vertex attributes (TSL instancedBufferAttribute, expanded InstancedMesh rows): instance id → key → (buffer, item size).
+    inst_attrs: HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>,
+    /// r6-tsl: three draws skipped last frame (material needs an attribute the mesh/instance lacks) — loud counter, never silent.
+    pub three_skipped: u32,
     /// GPU skinning (src/skin.rs): skinned meshes + joint palettes, one compute pass/frame.
     skin: skin::SkinSystem,
     /// Per-instance visibility groups (only instances that were given groups/parent are present).
@@ -636,6 +682,12 @@ impl RenderCore {
                     count: None,
                 },
                 texture_entry(3),
+                texture_array_entry(4),
+                texture_entry(5),
+                texture_entry(6),
+                texture_entry(7),
+                texture_entry(8),
+                texture_entry(9),
             ],
         });
         let shadow_receiver_layout = shadow::receiver_layout(device);
@@ -668,6 +720,11 @@ impl RenderCore {
             ..Default::default()
         });
         let mipgen = BilinearBlit::new(device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mipgen_linear = BilinearBlit::new(device, wgpu::TextureFormat::Rgba8Unorm);
+        let white_array = {
+            let t = device.create_texture_with_data(queue, &wgpu::TextureDescriptor { label: Some("white array"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] }, wgpu::util::TextureDataOrder::LayerMajor, &[255, 255, 255, 255]);
+            t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() })
+        };
         let white = upload_rgba8(device, queue, None, 1, 1, &[255; 4]);
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
         frame.ambient = [opts.ambient[0], opts.ambient[1], opts.ambient[2], opts.exposure];
@@ -723,6 +780,11 @@ impl RenderCore {
             },
             upscaler: Box::new(BilinearBlit::new(device, opts.output_format)),
             mipgen,
+            mipgen_linear,
+            array_textures: HashMap::new(),
+            storage_buffers: HashMap::new(),
+            white_array,
+            material_maps: HashMap::new(),
             shadow,
             shadow_receiver_layout,
             casters: Vec::new(),
@@ -765,6 +827,8 @@ impl RenderCore {
             groups: HashMap::new(),
             active_groups: None,
             last_group_hidden: 0,
+            inst_attrs: HashMap::new(),
+            three_skipped: 0,
         }
     }
 
@@ -834,6 +898,7 @@ impl RenderCore {
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             vertex_count: vertices.len() as u32,
+        attrs: HashMap::new(),
         };
         self.static_gen += 1;
         self.meshes.insert(id, mesh);
@@ -876,6 +941,25 @@ impl RenderCore {
         Ok(())
     }
 
+    /// r6-tsl: extra named per-vertex attribute (f32 x item_size, one per vertex) for TSL materials: uv1, colour, any geometry attribute, node attribute buffers.
+    pub fn set_mesh_attribute(&mut self, device: &wgpu::Device, id: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), String> {
+        let m = self.meshes.get_mut(&id).ok_or_else(|| format!("set_mesh_attribute: no mesh {id}"))?;
+        if !(1..=4).contains(&item_size) || data.len() != m.vertex_count as usize * item_size as usize {
+            return Err(format!("mesh {id} attribute `{name}`: {} floats != {item_size} x {} vertices", data.len(), m.vertex_count));
+        }
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("mesh attribute"), contents: nonempty(bytemuck::cast_slice(data)), usage: wgpu::BufferUsages::VERTEX });
+        m.attrs.insert(name.to_string(), (buf, item_size));
+        Ok(())
+    }
+    /// r6-tsl: per-INSTANCE attribute value (one element, bound with step-mode Instance) for a TSL material on this instance.
+    pub fn set_instance_attribute(&mut self, device: &wgpu::Device, inst: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), String> {
+        if !(1..=4).contains(&item_size) || data.len() != item_size as usize {
+            return Err(format!("instance {inst} attribute `{name}`: {} floats != item size {item_size}", data.len()));
+        }
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instance attribute"), contents: bytemuck::cast_slice(data), usage: wgpu::BufferUsages::VERTEX });
+        self.inst_attrs.entry(inst).or_default().insert(name.to_string(), (buf, item_size));
+        Ok(())
+    }
     /// Baked lightmap for a built-in material: texture sampled at TEXCOORD_1, combined
     /// as Blender OVERLAY(albedo, lightmap, fac) before lighting (DS client rule,
     /// nari-world-companion ds-world/lightmap.mjs). Rebinds the material if it exists.
@@ -923,32 +1007,62 @@ impl RenderCore {
         }
         self.textures
             .insert(id, upload_rgba8(device, queue, Some(&self.mipgen), width, height, rgba));
-        // materials referencing it must rebind
-        let ids: Vec<u32> = self
-            .materials
-            .iter()
-            .filter(|(k, m)| {
-                m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id))
-                    || self.material_lightmaps.get(k).is_some_and(|l| l.0 == id)
-            })
-            .map(|(k, _)| *k)
-            .collect();
-        for mid in ids {
-            if let Some(desc) = self.materials[&mid].desc.clone() {
-                self.create_material(device, mid, desc);
-            }
-        }
+        self.rebind_users_of(device, id);
         Ok(())
     }
 
     /// RGBA8 sampled as-is (no sRGB decode): three textures with colorSpace != srgb (r4, three_material::upload_linear).
+    /// RGBA8 sampled as-is (no sRGB decode; three colorSpace != srgb: normal/roughness/metalness/AO maps). Full mip chain (GPU blit).
     pub fn create_texture_linear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
         if rgba.len() != (width * height * 4) as usize { return Err(format!("texture {id}: {} bytes != {width}x{height}x4", rgba.len())); }
-        self.textures.insert(id, three_material::upload_linear(device, queue, width, height, rgba));
+        self.textures.insert(id, upload_rgba8_fmt(device, queue, Some(&self.mipgen_linear), width, height, rgba, false));
+        self.rebind_users_of(device, id);
         Ok(())
+    }
+    fn rebind_users_of(&mut self, device: &wgpu::Device, id: u32) {
+        let ids: Vec<u32> = self.materials.iter().filter(|(k, m)| {
+            m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id))
+                || self.material_lightmaps.get(k).is_some_and(|l| l.0 == id)
+                || self.material_maps.get(k).is_some_and(|mm| [mm.array, mm.normal, mm.roughness, mm.metalness, mm.emissive, mm.ao].contains(&Some(id)))
+        }).map(|(k, _)| *k).collect();
+        for mid in ids { if let Some(desc) = self.materials[&mid].desc.clone() { self.create_material(device, mid, desc); } }
+    }
+    /// 2D-array texture (all layers RGBA8, level 0 = `rgba` layer-major) + GPU-generated mips per layer. Sampled via MaterialMaps.array.
+    pub fn create_texture_array(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, width: u32, height: u32, layers: u32, rgba: &[u8], srgb: bool) -> Result<(), String> {
+        if layers == 0 || rgba.len() != (width * height * 4 * layers) as usize { return Err(format!("texture array {id}: {} bytes != {width}x{height}x4x{layers}", rgba.len())); }
+        let levels = 32 - width.max(height).max(1).leading_zeros();
+        let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
+        let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("texture array"), size: wgpu::Extent3d { width, height, depth_or_array_layers: layers }, mip_level_count: levels, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        self.array_textures.insert(id, ArrayTex { texture, view, width, height, layers, levels, srgb });
+        for l in 0..layers { let o = (l * width * height * 4) as usize; self.update_texture_layer(device, queue, id, l, &rgba[o..o + (width * height * 4) as usize])?; }
+        self.rebind_users_of(device, id);
+        Ok(())
+    }
+    /// Re-upload one layer (+ its mip chain). Bind groups stay valid (same texture).
+    pub fn update_texture_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, layer: u32, rgba: &[u8]) -> Result<(), String> {
+        let a = self.array_textures.get(&id).ok_or_else(|| format!("update_texture_layer: no array texture {id}"))?;
+        if layer >= a.layers || rgba.len() != (a.width * a.height * 4) as usize { return Err(format!("texture array {id}: layer {layer}/{} or {} bytes != {}x{}x4", a.layers, rgba.len(), a.width, a.height)); }
+        queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &a.texture, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: 0, z: layer }, aspect: wgpu::TextureAspect::All }, rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * a.width), rows_per_image: Some(a.height) }, wgpu::Extent3d { width: a.width, height: a.height, depth_or_array_layers: 1 });
+        if a.levels > 1 {
+            let blit = if a.srgb { &self.mipgen } else { &self.mipgen_linear };
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("array mipgen") });
+            let lv = |l: u32| a.texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: l, mip_level_count: Some(1), base_array_layer: layer, array_layer_count: Some(1), ..Default::default() });
+            for l in 1..a.levels { blit.encode_view(device, &mut enc, &lv(l - 1), &lv(l)); }
+            queue.submit(Some(enc.finish()));
+        }
+        Ok(())
+    }
+    /// Extra maps + side for a built-in material (rebinds it if it exists). Default MaterialMaps = none, side 0.
+    pub fn set_material_maps(&mut self, device: &wgpu::Device, id: u32, maps: MaterialMaps) {
+        self.material_maps.insert(id, maps);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) { self.create_material(device, id, desc); }
+        self.static_gen += 1;
     }
     pub fn remove_texture(&mut self, id: u32) {
         self.textures.remove(&id);
+        self.array_textures.remove(&id);
     }
 
     // ---- materials (create == update) ----
@@ -957,6 +1071,9 @@ impl RenderCore {
             Some(v) => (v, 1.0),
             None => (&self.white, 0.0),
         };
+        let mm = self.material_maps.get(&id).copied().unwrap_or_default();
+        let tv = |t: Option<u32>| t.and_then(|t| self.textures.get(&t));
+        let arr = mm.array.and_then(|t| self.array_textures.get(&t)).map(|a| &a.view);
         // emissive.w > 0 = lightmap present (overlay fac); white + 0 otherwise.
         let (lm_view, lm_fac) = match self
             .material_lightmaps
@@ -976,6 +1093,8 @@ impl RenderCore {
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
             flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            maps0: [arr.is_some() as u32 as f32, if mm.normal_scale == 0.0 { 1.0 } else { mm.normal_scale }, tv(mm.normal).is_some() as u32 as f32, tv(mm.roughness).is_some() as u32 as f32],
+            maps1: [tv(mm.metalness).is_some() as u32 as f32, tv(mm.emissive).is_some() as u32 as f32, tv(mm.ao).is_some() as u32 as f32, mm.side as f32],
         };
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
@@ -1002,6 +1121,12 @@ impl RenderCore {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(lm_view),
                 },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(arr.unwrap_or(&self.white_array)) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(tv(mm.normal).unwrap_or(&self.white)) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(tv(mm.roughness).unwrap_or(&self.white)) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(tv(mm.metalness).unwrap_or(&self.white)) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(tv(mm.emissive).unwrap_or(&self.white)) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(tv(mm.ao).unwrap_or(&self.white)) },
             ],
         });
         self.static_gen += 1;
@@ -1140,7 +1265,7 @@ impl RenderCore {
         package_json: &str,
         textures: HashMap<String, u32>,
     ) -> Result<(), String> {
-        let m = three_material::build(device, package_json, textures, INTERNAL_FORMAT, DEPTH_FORMAT)?;
+        let m = three_material::build(device, package_json, textures, HashMap::new(), INTERNAL_FORMAT, DEPTH_FORMAT)?;
         self.materials.remove(&id);
         self.three.remove(id);
         self.three.mats.insert(id, m);
@@ -1150,6 +1275,34 @@ impl RenderCore {
     /// uniform members; packed into every instance buffer at the next render (r4, three_material.rs).
     pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<usize, String> {
         self.three.mats.get_mut(&material).ok_or_else(|| format!("set_three_uniforms: {material} is not a three material"))?.set_uniforms(json)
+    }
+        /// r6-tsl-2: storage buffer behind TSL `storage()`/buffer nodes. Raw bytes (any element type), padded to 16 B (min 16).
+    pub fn create_storage_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, bytes: &[u8]) {
+        let size = (bytes.len() as u64).max(16).next_multiple_of(16);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("three storage"), size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let mut padded = bytes.to_vec();
+        padded.resize(size as usize, 0);
+        queue.write_buffer(&buffer, 0, &padded);
+        self.storage_buffers.insert(id, three_material::StorageBuf { buffer, size });
+        self.three.invalidate_bind_groups();
+    }
+    /// Same id, new bytes (the three attribute's version moved): in-place write when the size is unchanged, else recreate (+ bind groups rebuilt).
+    pub fn update_storage_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, bytes: &[u8]) -> Result<(), String> {
+        let size = (bytes.len() as u64).max(16).next_multiple_of(16);
+        let cur = self.storage_buffers.get(&id).ok_or_else(|| format!("update_storage_buffer: no storage buffer {id}"))?;
+        if cur.size != size { self.create_storage_buffer(device, queue, id, bytes); return Ok(()); }
+        let mut padded = bytes.to_vec();
+        padded.resize(size as usize, 0);
+        queue.write_buffer(&cur.buffer, 0, &padded);
+        Ok(())
+    }
+    pub fn destroy_storage_buffer(&mut self, id: u32) {
+        self.storage_buffers.remove(&id);
+    }
+    /// Point a three material's storage binding ("group.binding" of the package) at a host storage buffer.
+    pub fn bind_three_storage(&mut self, material: u32, key: &str, id: u32) -> Result<(), String> {
+        if !self.storage_buffers.contains_key(&id) { return Err(format!("bind_three_storage: no storage buffer {id}")); }
+        self.three.bind_storage(material, key, id)
     }
     pub fn set_three_time(&mut self, seconds: f32) {
         self.three_time = seconds;
@@ -1220,6 +1373,7 @@ impl RenderCore {
     }
 
     pub fn remove_instance(&mut self, id: u32) {
+        self.inst_attrs.remove(&id);
         if self.instances.remove(&id).is_some_and(|i| i.is_static) {
             self.static_gen += 1;
         }
@@ -1633,7 +1787,7 @@ impl RenderCore {
                 None => Mat4::perspective_infinite_rh(self.camera.yfov, aspect, self.camera.znear),
             };
             let frame = ThreeFrame { view: self.camera.world.inverse(), proj, camera_world: self.camera.world, near: self.camera.znear, far, time: self.three_time };
-            self.three.prepare(device, queue, &three_list, &frame, &self.textures, &self.white, &self.sampler);
+            self.three.prepare(device, queue, &three_list, &frame, &three_material::Resources { tex: &self.textures, arrays: &self.array_textures, storage: &self.storage_buffers, white: &self.white, white_array: &self.white_array, sampler: &self.sampler });
         }
         let t = self.targets.as_ref().expect("targets");
         let c = self.opts.clear_color;
@@ -1725,9 +1879,9 @@ impl RenderCore {
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
-                let meshes = &self.meshes;
-                let mesh_of = |m: u32| meshes.get(&m).map(|g| (g.vertices.slice(..), g.indices.slice(..), g.index_count));
-                draws += self.three.draw(&mut pass, &three_list, &mesh_of, &inst_mesh);
+                let (n, skipped) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs);
+                draws += n;
+                self.three_skipped = skipped;
             }
             self.last_draw_calls = draws;
         }
@@ -1884,13 +2038,17 @@ fn nonempty(bytes: &[u8]) -> &[u8] {
     if bytes.is_empty() { &[0u8; 16] } else { bytes }
 }
 
-fn upload_rgba8(
+fn upload_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, mipgen: Option<&BilinearBlit>, width: u32, height: u32, pixels: &[u8]) -> wgpu::TextureView {
+    upload_rgba8_fmt(device, queue, mipgen, width, height, pixels, true)
+}
+fn upload_rgba8_fmt(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     mipgen: Option<&BilinearBlit>,
     width: u32,
     height: u32,
     pixels: &[u8],
+    srgb: bool,
 ) -> wgpu::TextureView {
     let size = wgpu::Extent3d {
         width,
@@ -1908,7 +2066,7 @@ fn upload_rgba8(
         mip_level_count: levels,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm },
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_DST
             | if levels > 1 { wgpu::TextureUsages::RENDER_ATTACHMENT } else { wgpu::TextureUsages::empty() },

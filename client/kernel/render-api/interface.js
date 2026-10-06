@@ -47,7 +47,7 @@ export const RENDER_API_METHODS = Object.freeze([
 //   setShaderUniforms(MaterialId, [{key,value}]) — r4: changed live TSL uniform values (tsl-export pkg.live.update()); keys = package uniform `key`
 //   setActiveGroups(active: int[] bit indices | {bits?:int[], words?:Uint32Array} | null) — visibility groups: instance drawn iff its group mask ∩ active ≠ ∅; no groups = always drawn;
 //     instance with groups.parent follows that node's mask; null = culling off (default). Applies to main AND shadow passes. Bit b of word w = group 32w+b (128+ groups ok).
-export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh', 'setAmbient', 'setBackground', 'setGiProbes', 'setBackgroundTexture', 'setFog', 'setEnvironment', 'setActiveGroups']);
+export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'updateShaderBuffers', 'setMeshAttribute', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh', 'setAmbient', 'setBackground', 'setGiProbes', 'setBackgroundTexture', 'setFog', 'setEnvironment', 'setActiveGroups']);
 export function assertRenderBackend(backend) {
   const missing = RENDER_API_METHODS.filter((m) => typeof backend?.[m] !== 'function');
   if (missing.length) throw new Error(`render backend missing: ${missing.join(', ')}`);

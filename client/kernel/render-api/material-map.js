@@ -1,4 +1,5 @@
 // render-api/material-map.js — three Material → render-api material description. NO three import (duck-typed).
+import { arrayMirror } from './gpu-mirror.js';
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
@@ -53,6 +54,22 @@ function textureData(t) {
   texCache.set(t, { version: t.version, image: im, desc });
   return desc;
 }
+// r6-tsl-2: DataArrayTexture (image {data,width,height,depth}) -> array descriptor {array,layers,key,version,data,takeLayerUpdates}; generic three type, no game contract.
+// Compressed arrays are REFUSED loudly (BC/ASTC upload not implemented). Layer updates = three's own texture.layerUpdates set (null = all layers).
+export function arrayTextureData(t) {
+  const im = t?.image;
+  if (t && !im?.data && (t.isDataArrayTexture || t.isArrayTexture)) { // data-less page uploaded straight to three's GPU: read the queue.writeTexture mirror (gpu-mirror.js)
+    const m = arrayMirror(t); if (!m) return null;
+    return { array: true, width: m.w, height: m.h, layers: m.layers, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:array`, version: `${t.version}:${m.version}`, data: m.data, fresh: () => arrayTextureData(t),
+      takeLayerUpdates() { const d = [...m.dirty]; m.dirty.clear(); return d; } };
+  }
+  if (!im?.data || !(im.width > 0 && im.height > 0 && im.depth > 0)) return null;
+  if (t.isCompressedArrayTexture || t.isCompressedTexture) return { array: true, refused: 'compressed texture array (BC/ASTC upload not implemented)' };
+  if (!isBytes(im.data) || im.data.length !== im.width * im.height * 4 * im.depth) return { array: true, refused: `array texture data is not rgba8 (${im.data.constructor?.name} len ${im.data.length} vs ${im.width}x${im.height}x4x${im.depth})` };
+  return { array: true, width: im.width, height: im.height, layers: im.depth, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:array`, version: t.version, data: new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.length),
+    takeLayerUpdates() { const s = t.layerUpdates; const d = s && s.size ? [...s] : null; t.clearLayerUpdates?.(); return d; } };
+}
+export { textureData };
 export function pbrParams(m) {
 const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
 const p = {
@@ -89,8 +106,13 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
   if (m.isNodeMaterial && customNode(m)) {
     if (!exportNodeMaterial) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
     let c = nodeCache.get(m);
-    if (!c || c.version !== m.version) { c = { version: m.version, package: exportNodeMaterial(m, { ...tslOptions }) }; nodeCache.set(m, c); }
-    return { kind: 'wgsl', package: c.package, fallbackParams: params, sig };
+    if (!c || c.version !== m.version) {
+  // r6: an export failure is a LOUD per-material refusal (adapter counts + logs it, material drops to PBR) — never a thrown frame
+  try { c = { version: m.version, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, error: String(e?.message ?? e) }; }
+  nodeCache.set(m, c);
+}
+if (c.error) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
+return { kind: 'wgsl', package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
   }
   return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
 }

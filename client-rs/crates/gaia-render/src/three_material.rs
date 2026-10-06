@@ -26,6 +26,8 @@ struct Member {
 enum Kind {
     Uniform { size: u32, members: Vec<Member> },
     Texture { dim: wgpu::TextureViewDimension, sample: wgpu::TextureSampleType },
+    /// r6-tsl-2: storage buffer (TSL storage()/buffer nodes); data = host storage buffer id, `storage` map key "group.binding".
+    Storage { read_only: bool },
     Sampler,
 }
 #[derive(Clone, Debug)]
@@ -50,6 +52,19 @@ pub(crate) struct ThreeMaterial {
     layouts: Vec<wgpu::BindGroupLayout>,
     slots: Vec<Slot>,
     textures: HashMap<String, u32>,
+/// r6-tsl-2: storage buffers by "group.binding" -> host storage buffer id.
+storage: HashMap<String, u32>,
+/// r6-tsl: non-core vertex attributes, one vertex-buffer slot each (after the core Vertex slot, if any).
+extra: Vec<AttrSpec>,
+core_slot: Option<u32>,
+}
+/// One TSL vertex attribute that the core's interleaved Vertex does not carry.
+struct AttrSpec {
+/// data key: geometry attribute name, or `node:<uuid>` for node-held BufferAttributes (tsl-export).
+key: String,
+slot: u32,
+items: u32,
+instanced: bool,
 }
 /// Per (instance) GPU state: one buffer per uniform slot + bind groups.
 struct InstanceGpu {
@@ -98,9 +113,10 @@ fn stage_globals(src: &str, stage: wgpu::ShaderStages, out: &mut Vec<Slot>, labe
                 }
             }
             (_, naga::TypeInner::Image { dim, class, arrayed, .. }) => {
-                if *arrayed { return Err(format!("{label}: arrayed texture unsupported")); }
+                if *arrayed && !matches!(dim, naga::ImageDimension::D2) { return Err(format!("{label}: arrayed {dim:?} texture unsupported (2D arrays only)")); }
                 let dim = match dim {
-                    naga::ImageDimension::D2 => wgpu::TextureViewDimension::D2,
+naga::ImageDimension::D2 if *arrayed => wgpu::TextureViewDimension::D2Array,
+naga::ImageDimension::D2 => wgpu::TextureViewDimension::D2,
                     naga::ImageDimension::Cube => wgpu::TextureViewDimension::Cube,
                     naga::ImageDimension::D3 => wgpu::TextureViewDimension::D3,
                     naga::ImageDimension::D1 => wgpu::TextureViewDimension::D1,
@@ -113,6 +129,7 @@ fn stage_globals(src: &str, stage: wgpu::ShaderStages, out: &mut Vec<Slot>, labe
                 Kind::Texture { dim, sample }
             }
             (_, naga::TypeInner::Sampler { comparison: false }) => Kind::Sampler,
+(naga::AddressSpace::Storage { access }, _) => Kind::Storage { read_only: !access.contains(naga::StorageAccess::STORE) },
             (sp, o) => return Err(format!("{label}: binding {}.{} {sp:?} {o:?} unsupported (storage/comparison: NEXT)", rb.group, rb.binding)),
         };
         out.push(Slot { group: rb.group, binding: rb.binding, name: gv.name.clone().unwrap_or_default(), vis: stage, kind });
@@ -125,7 +142,8 @@ pub(crate) fn build(
     device: &wgpu::Device,
     pkg_json: &str,
     textures: HashMap<String, u32>,
-    color_format: wgpu::TextureFormat,
+storage: HashMap<String, u32>,
+color_format: wgpu::TextureFormat,
     depth_format: wgpu::TextureFormat,
 ) -> Result<ThreeMaterial, String> {
     let pkg: serde_json::Value = serde_json::from_str(pkg_json).map_err(|e| format!("three package JSON: {e}"))?;
@@ -175,27 +193,60 @@ pub(crate) fn build(
                         Kind::Uniform { .. } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                         Kind::Texture { dim, sample } => wgpu::BindingType::Texture { sample_type: *sample, view_dimension: *dim, multisampled: false },
                         Kind::Sampler => wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    },
+Kind::Storage { read_only } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: *read_only }, has_dynamic_offset: false, min_binding_size: None },
+},
                     count: None,
                 })
                 .collect();
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("three group"), entries: &entries })
         })
         .collect();
-    // attributes: builder location by NAME → offset in core Vertex (pos 0, normal 12, uv 24; stride 32)
-    let mut attrs = Vec::new();
-    for a in pkg["attributes"].as_array().into_iter().flatten() {
-        let name = a["name"].as_str().unwrap_or("");
-        let loc = a["location"].as_u64().ok_or("attribute without location")? as u32;
-        let (offset, format) = match name {
-            "position" => (0, wgpu::VertexFormat::Float32x3),
-            "normal" => (12, wgpu::VertexFormat::Float32x3),
-            "uv" => (24, wgpu::VertexFormat::Float32x2),
-            o => return Err(format!("three attribute `{o}` not provided by core meshes (position/normal/uv)")),
-        };
-        attrs.push(wgpu::VertexAttribute { format, offset, shader_location: loc });
-    }
-    let side = pkg["material"]["side"].as_u64().unwrap_or(0);
+            // attributes: core Vertex (pos 0, normal 12, uv 24; stride 32) for position/normal/uv GEOMETRY attributes; every other attribute
+        // (uv1, color, custom, node-held buffer attributes, instanced) = its own vertex slot, f32 x items, fed by set_mesh_attribute / set_instance_attribute.
+        let mut core_attrs = Vec::new();
+        let mut extra: Vec<AttrSpec> = Vec::new();
+        let mut extra_attrs: Vec<wgpu::VertexAttribute> = Vec::new();
+        for a in pkg["attributes"].as_array().into_iter().flatten() {
+            let name = a["name"].as_str().unwrap_or("");
+            let loc = a["location"].as_u64().ok_or("attribute without location")? as u32;
+            let node_sourced = a["source"].as_str() == Some("node");
+            let instanced = a["instanced"].as_bool().unwrap_or(false);
+            let ty = a["type"].as_str().unwrap_or("");
+            let (items, format) = match ty {
+                "float" => (1, wgpu::VertexFormat::Float32),
+                "vec2" => (2, wgpu::VertexFormat::Float32x2),
+                "vec3" => (3, wgpu::VertexFormat::Float32x3),
+                "vec4" => (4, wgpu::VertexFormat::Float32x4),
+                o => return Err(format!("attribute `{name}` type `{o}` unsupported (float/vec2/vec3/vec4 only)")),
+            };
+            let core = if node_sourced || instanced { None } else { match name { "position" => Some((0, 3)), "normal" => Some((12, 3)), "uv" => Some((24, 2)), _ => None } };
+            if let Some((off, n)) = core {
+                if n != items { return Err(format!("attribute `{name}`: shader wants {ty}, core provides {n} floats")); }
+                core_attrs.push(wgpu::VertexAttribute { format, offset: off, shader_location: loc });
+                continue;
+            }
+            let key = a["key"].as_str().map(String::from).unwrap_or_else(|| name.to_string());
+            extra.push(AttrSpec { key, slot: 0, items, instanced });
+            extra_attrs.push(wgpu::VertexAttribute { format, offset: 0, shader_location: loc });
+        }
+        let core_slot = (!core_attrs.is_empty()).then_some(0u32);
+        for (i, e) in extra.iter_mut().enumerate() {
+            e.slot = i as u32 + core_slot.map_or(0, |_| 1);
+        }
+        let extra_attr_arrays: Vec<[wgpu::VertexAttribute; 1]> = extra_attrs.iter().map(|a| [*a]).collect();
+        let mut vbufs: Vec<wgpu::VertexBufferLayout> = Vec::new();
+        if core_slot.is_some() {
+            vbufs.push(wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &core_attrs });
+        }
+        for (e, arr) in extra.iter().zip(&extra_attr_arrays) {
+            vbufs.push(wgpu::VertexBufferLayout { array_stride: e.items as u64 * 4, step_mode: if e.instanced { wgpu::VertexStepMode::Instance } else { wgpu::VertexStepMode::Vertex }, attributes: arr });
+        }
+        let vbufs_opt: Vec<Option<wgpu::VertexBufferLayout>> = vbufs.into_iter().map(Some).collect();
+        // WebGPU limit: maxVertexBuffers (default 8) — loud refusal beats a pipeline-creation validation abort.
+        if vbufs_opt.len() > 8 {
+            return Err(format!("material needs {} vertex buffers (> 8)", vbufs_opt.len()));
+        }
+let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     let transparent = pkg["material"]["transparent"].as_bool().unwrap_or(false);
     let vm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three vertex"), source: wgpu::ShaderSource::Wgsl(vs.into()) });
     let fm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three fragment"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
@@ -208,7 +259,7 @@ pub(crate) fn build(
             module: &vm,
             entry_point: Some(pkg["vertexEntry"].as_str().unwrap_or("main")),
             compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })],
+            buffers: &vbufs_opt,
         },
         fragment: Some(wgpu::FragmentState {
             module: &fm,
@@ -237,21 +288,11 @@ pub(crate) fn build(
         multiview_mask: None,
         cache: None,
     });
-    Ok(ThreeMaterial { pipeline, layouts, slots, textures })
+    Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot })
 }
 
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
 /// Single mip level (core mipgen blit is sRGB-format only) → minified linear textures alias = NEXT.
-pub(crate) fn upload_linear(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, px: &[u8]) -> wgpu::TextureView {
-    device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
-        label: Some("three linear texture"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    }, wgpu::util::TextureDataOrder::LayerMajor, px).create_view(&Default::default())
-}
 fn json_f32(v: &serde_json::Value) -> Vec<f32> {
     match v {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
@@ -317,11 +358,37 @@ fn pack(size: u32, members: &[Member], f: &ThreeFrame, model: Mat4) -> Vec<u8> {
     bytemuck::cast_slice(&out).to_vec()
 }
 
+/// Host buffer behind a TSL storage binding (shared by every material referencing the same data).
+pub(crate) struct StorageBuf {
+pub(crate) buffer: wgpu::Buffer,
+pub(crate) size: u64,
+}
+/// GPU resources `prepare` resolves a package's bindings against.
+pub(crate) struct Resources<'a> {
+pub(crate) tex: &'a HashMap<u32, wgpu::TextureView>,
+pub(crate) arrays: &'a HashMap<u32, super::ArrayTex>,
+pub(crate) storage: &'a HashMap<u32, StorageBuf>,
+pub(crate) white: &'a wgpu::TextureView,
+pub(crate) white_array: &'a wgpu::TextureView,
+pub(crate) sampler: &'a wgpu::Sampler,
+}
 impl ThreeMaterials {
-    pub(crate) fn is_three(&self, material: u32) -> bool {
+pub(crate) fn is_three(&self, material: u32) -> bool {
         self.mats.contains_key(&material)
     }
-    pub(crate) fn remove(&mut self, material: u32) {
+    /// Drop every instance's cached bind groups (a storage buffer was recreated at a new size): rebuilt in the next prepare().
+pub(crate) fn invalidate_bind_groups(&mut self) {
+self.inst.clear();
+}
+pub(crate) fn bind_storage(&mut self, material: u32, key: &str, id: u32) -> Result<(), String> {
+let m = self.mats.get_mut(&material).ok_or_else(|| format!("bind_three_storage: {material} is not a three material"))?;
+let (g, b) = key.split_once('.').and_then(|(g, b)| Some((g.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).ok_or_else(|| format!("bind_three_storage: key `{key}` is not group.binding"))?;
+if !m.slots.iter().any(|s| s.group == g && s.binding == b && matches!(s.kind, Kind::Storage { .. })) { return Err(format!("bind_three_storage: {key} is not a storage binding of material {material}")); }
+m.storage.insert(key.to_string(), id);
+self.inst.retain(|_, i| i.material != material);
+Ok(())
+}
+pub(crate) fn remove(&mut self, material: u32) {
         self.mats.remove(&material);
         self.inst.retain(|_, g| g.material != material);
     }
@@ -332,14 +399,15 @@ impl ThreeMaterials {
         queue: &wgpu::Queue,
         instances: &[(u32, u32, [f32; 16])],
         frame: &ThreeFrame,
-        tex: &HashMap<u32, wgpu::TextureView>,
-        white: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) {
+        res: &Resources,
+) {
+let Resources { tex, arrays, storage, white, white_array, sampler } = *res;
         for &(iid, mat_id, xf) in instances {
             let Some(mat) = self.mats.get(&mat_id) else { continue };
             let model = Mat4::from_cols_array(&xf);
-            if self.inst.get(&iid).is_none_or(|g| g.material != mat_id) {
+if self.inst.get(&iid).is_none_or(|g| g.material != mat_id) {
+// a storage slot whose host buffer does not exist yet: no instance GPU state (draw counts it skipped), retried next frame
+if mat.slots.iter().any(|s| matches!(s.kind, Kind::Storage { .. }) && !mat.storage.get(&format!("{}.{}", s.group, s.binding)).is_some_and(|id| storage.contains_key(id))) { self.inst.remove(&iid); continue; }
                 let mut buffers = Vec::new();
                 for (k, s) in mat.slots.iter().enumerate() {
                     if let Kind::Uniform { size, members } = &s.kind {
@@ -364,9 +432,12 @@ impl ThreeMaterials {
                                 binding: s.binding,
                                 resource: match &s.kind {
                                     Kind::Uniform { .. } => buffers.iter().find(|(i, _)| *i == k).expect("buffer").1.as_entire_binding(),
-                                    Kind::Texture { .. } => wgpu::BindingResource::TextureView(
-                                        mat.textures.get(&s.name).and_then(|id| tex.get(id)).unwrap_or(white),
-                                    ),
+                                    Kind::Texture { dim, .. } => wgpu::BindingResource::TextureView(if *dim == wgpu::TextureViewDimension::D2Array {
+mat.textures.get(&s.name).and_then(|id| arrays.get(id)).map(|a| &a.view).unwrap_or(white_array)
+} else {
+mat.textures.get(&s.name).and_then(|id| tex.get(id)).unwrap_or(white)
+}),
+Kind::Storage { .. } => storage[&mat.storage[&format!("{}.{}", s.group, s.binding)]].buffer.as_entire_binding(),
                                     Kind::Sampler => wgpu::BindingResource::Sampler(sampler),
                                 },
                             })
@@ -385,21 +456,35 @@ impl ThreeMaterials {
             }
         }
     }
-    /// Inside the forward pass: one draw per three instance (per-object uniforms).
-    pub(crate) fn draw<'a>(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], mesh_of: &dyn Fn(u32) -> Option<(wgpu::BufferSlice<'a>, wgpu::BufferSlice<'a>, u32)>, inst_mesh: &HashMap<u32, u32>) -> u32 {
-        let mut n = 0;
+        /// Inside the forward pass: one draw per three instance (per-object uniforms). Returns (draws, skipped): an instance is SKIPPED
+    /// (counted, surfaced by the host) when its material needs a vertex attribute the mesh/instance does not provide — never drawn with garbage.
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>) -> (u32, u32) {
+        let (mut n, mut skipped) = (0, 0);
         for &(iid, mat_id, _) in instances {
-            let (Some(mat), Some(g)) = (self.mats.get(&mat_id), self.inst.get(&iid)) else { continue };
-            let Some((vb, ib, count)) = inst_mesh.get(&iid).and_then(|m| mesh_of(*m)) else { continue };
+            let Some(mat) = self.mats.get(&mat_id) else { continue };
+let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
+            let Some(gm) = inst_mesh.get(&iid).and_then(|m| meshes.get(m)) else { continue };
+            let ia = inst_attrs.get(&iid);
+            let mut bound: Vec<(u32, &wgpu::Buffer)> = Vec::new();
+            let mut missing = false;
+            for e in &mat.extra {
+                let found = if e.instanced { ia.and_then(|m| m.get(&e.key)) } else { gm.attrs.get(&e.key) };
+                match found {
+                    Some((b, items)) if *items == e.items => bound.push((e.slot, b)),
+                    _ => { missing = true; break; }
+                }
+            }
+            if missing { skipped += 1; continue; }
             pass.set_pipeline(&mat.pipeline);
             for (i, bg) in g.groups.iter().enumerate() {
                 pass.set_bind_group(i as u32, bg, &[]);
             }
-            pass.set_vertex_buffer(0, vb);
-            pass.set_index_buffer(ib, wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..count, 0, 0..1);
+            if let Some(cs) = mat.core_slot { pass.set_vertex_buffer(cs, gm.vertices.slice(..)); }
+            for (slot, b) in &bound { pass.set_vertex_buffer(*slot, b.slice(..)); }
+            pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..gm.index_count, 0, 0..1);
             n += 1;
         }
-        n
+        (n, skipped)
     }
 }

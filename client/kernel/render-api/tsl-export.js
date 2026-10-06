@@ -7,15 +7,16 @@
 const STAGES = { 1: 'vertex', 2: 'fragment', 4: 'compute' };
 const stageOf = (v) => STAGES[v] ?? ([v & 1 ? 'vertex' : null, v & 2 ? 'fragment' : null].filter(Boolean).join('|') || 'none');
 
-const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture ? (b.isSampledCubeTexture ? 'texture-cube' : b.isSampledTexture3D ? 'texture-3d' : b.isStorageTexture ? 'storage-texture' : 'texture-2d') : b.isSampler ? 'sampler' : b.isStorageBuffer ? 'storage-buffer' : 'unknown');
+const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture ? (b.isSampledCubeTexture ? 'texture-cube' : b.isSampledTexture3D ? 'texture-3d' : b.isStorageTexture ? 'storage-texture' : (b.texture?.isArrayTexture || b.texture?.isDataArrayTexture || b.texture?.isCompressedArrayTexture) ? 'texture-2d-array' : 'texture-2d') : b.isSampler ? 'sampler' : b.isStorageBuffer ? 'storage-buffer' : 'unknown');
 
 // builder → data package. `THREE` = three/webgpu namespace; `WGSLNodeBuilder` is not exported publicly, so we reach it
 // through three's own backend factory (WebGPUBackend.prototype.createNodeBuilder) without constructing a device.
-export function exportNodeMaterial(material, { THREE, object = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null } = {}) {
+export function exportNodeMaterial(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null } = {}) {
 if (!material?.isNodeMaterial) throw new Error('exportNodeMaterial: material.isNodeMaterial required');
 const Ctor = wgslBuilderCtor ?? headlessRenderer(THREE)._ctor;
 const r = renderer ?? headlessRenderer(THREE);
-const obj = object ?? new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+// `object` = the real mesh (its geometry attributes decide which TSL attribute() nodes resolve); `geometry` = same without the object (InstancedMesh/Skinned: instancing is expanded by the adapter, never exported).
+const obj = object ?? new THREE.Mesh(geometry ?? new THREE.BoxGeometry(1, 1, 1), material);
 obj.updateMatrixWorld?.();
 const cam = camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000);
 const sc = scene ?? new THREE.Scene();
@@ -34,6 +35,7 @@ const lightUuids = new Map();
 for (const n of b.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightUuids.set(v.uuid, n.light.uuid);
 const liveUniforms = [];
   const semantics = builtinSemantics(THREE);
+const bufferSources = {}; // r6-tsl-2: "group.binding" -> live three BufferAttribute behind a storage binding (non-enumerable on the package)
 const groups = b.getBindings().map((g) => ({
 group: g.index, name: g.name,
 bindings: g.bindings.map((bd, i) => {
@@ -49,13 +51,14 @@ out.uniforms = bd.uniforms.map((u) => {
   return { name: u.name, semantic, key, source, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) };
 });
 } else if (bd.texture) { out.textureUuid = bd.texture.uuid; out.colorSpace = bd.texture.colorSpace ?? null; }
+else if (bd.isStorageBuffer && bd.attribute) { out.access = bd.access ?? null; out.byteLength = bd.attribute.array?.byteLength ?? 0; out.itemSize = bd.attribute.itemSize; bufferSources[`${g.index}.${i}`] = bd.attribute; }
 return out;
 }),
 }));
 const pkg = {
 vertex: b.vertexShader, fragment: b.fragmentShader,
 bindGroups: groups,
-attributes: b.getAttributesArray().map((a, i) => ({ name: a.name, type: a.type, location: i })),
+attributes: b.getAttributesArray().map((a, i) => attributeInfo(a, i)),
 varyings: (b.varyings ?? []).map((v) => ({ name: v.name, type: v.type })),
 vertexEntry: 'main', fragmentEntry: 'main',
 material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite },
@@ -64,6 +67,11 @@ material: { name: material.name, type: material.type, transparent: !!material.tr
 const textureSources = {};
 for (const g of b.getBindings()) for (const bd of g.bindings) if (bd.texture) textureSources[bd.texture.uuid] = bd.texture;
 Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
+Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: false });
+// r6: node-held BufferAttributes (instancedBufferAttribute()/bufferAttribute() nodes → nodeAttributeN): key `node:<uuid>` → live three BufferAttribute (non-enumerable).
+const attributeSources = {};
+for (const a of b.getAttributesArray()) if (a.node?.attribute) attributeSources[`node:${a.node.uuid}`] = a.node.attribute;
+Object.defineProperty(pkg, 'attributeSources', { value: attributeSources, enumerable: false });
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over builder.updateNodes — reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
 const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r;
@@ -89,6 +97,12 @@ Object.defineProperty(pkg, 'live', { enumerable: false, value: {
 return pkg;
 }
 
+// r6: where a TSL vertex attribute's data comes from. geometry = geometry.getAttribute(name); node = a BufferAttributeNode's own attribute (instanced → per-instance row).
+function attributeInfo(a, location) {
+  const at = a.node?.attribute;
+  if (!at) return { name: a.name, type: a.type, location, source: 'geometry', instanced: false, key: a.name };
+  return { name: a.name, type: a.type, location, source: 'node', instanced: !!(at.isInstancedBufferAttribute || at.data?.isInstancedInterleavedBuffer), key: `node:${a.node.uuid}`, itemSize: at.itemSize };
+}
 // three source of a uniform: material/object property (reference) · TSL uniform() node · light uniform.
 function sourceOf(node, refs, lightUuids) {
   if (!node) return null;

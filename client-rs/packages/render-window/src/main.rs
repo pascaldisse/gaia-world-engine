@@ -1044,9 +1044,10 @@ impl Renderer {
         {
             let internal = core.internal_size().unwrap_or(output);
             eprintln!(
-                "[gpu-ms] frame={} skin={:.3} scene={:.3} upscale={:.3} total={:.3} cpu_encode={:.3} draws={} internal={}x{} output={}x{} skinned_verts={} joints={}",
+                "[gpu-ms] frame={} skin={:.3} shadow={:.3} scene={:.3} upscale={:.3} total={:.3} cpu_encode={:.3} draws={} internal={}x{} output={}x{} skinned_verts={} joints={}",
                 self.frame_index,
                 core.read_skin_ms_blocking(&self.device).unwrap_or(f64::NAN),
+                t.shadow_ms,
                 t.scene_ms,
                 t.upscale_ms,
                 t.total_ms,

@@ -151,7 +151,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -163,6 +163,20 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       return gpu.createMesh(positions, normals, uvs, indices);
     },
     destroyMesh(id) { gpu.destroyMesh(id); },
+    // ---- skinning (gaia-render skin.rs: one compute pre-pass for all skinned meshes) ----
+    // ibm = jointCount col-major mat4s; updateSkin = joint WORLD matrices; skinned instances use identity mat4.
+    createSkin(inverseBind, jointCount) { return gpu.createSkin(jointCount, Float32Array.from(inverseBind)); },
+    updateSkin(id, jointMatrices) { gpu.setSkinPose(id, jointMatrices instanceof Float32Array ? jointMatrices : Float32Array.from(jointMatrices)); },
+    destroySkin(id) { gpu.destroySkin(id); },
+    createSkinnedMesh(arrays, skin) {
+      const n = validateMeshArrays(arrays);
+      const indices = arrays.indices instanceof Uint32Array ? arrays.indices : Uint32Array.from(arrays.indices || Array.from({ length: n }, (_, i) => i));
+      const positions = Float32Array.from(arrays.positions);
+      const normals = arrays.normals ? Float32Array.from(arrays.normals) : computeNormals(positions, indices);
+      const uvs = arrays.uvs ? Float32Array.from(arrays.uvs) : new Float32Array(n * 2);
+      return gpu.createSkinnedMesh(skin, positions, normals, uvs, Uint32Array.from(arrays.joints), Float32Array.from(arrays.weights), indices);
+    },
+    destroySkinnedMesh(id) { gpu.destroySkinnedMesh(id); },
 
     // params = three-style; preset → degrades to pbr; opacity/doubleSide/fog/flatShading not in the core yet (drawn opaque, no cull).
     createMaterial(params = {}, textures = null) {

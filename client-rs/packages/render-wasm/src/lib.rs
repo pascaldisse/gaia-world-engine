@@ -172,6 +172,45 @@ impl GaiaRender {
         self.core.remove_mesh(id);
     }
 
+    // ---- skinning (gaia-render skin.rs) ----
+    #[wasm_bindgen(js_name = createSkin)]
+    pub fn create_skin(&mut self, joint_count: u32, inverse_bind: &[f32]) -> Result<u32, JsError> {
+        let id = self.id("skin");
+        self.core.create_skin(id, joint_count, inverse_bind).map_err(err)?;
+        Ok(id)
+    }
+    #[wasm_bindgen(js_name = setSkinPose)]
+    pub fn set_skin_pose(&mut self, id: u32, joint_matrices: &[f32]) -> Result<(), JsError> {
+        self.core.set_skin_pose(id, joint_matrices).map_err(err)
+    }
+    #[wasm_bindgen(js_name = destroySkin)]
+    pub fn destroy_skin(&mut self, id: u32) {
+        self.core.remove_skin(id);
+    }
+    /// Skinned mesh shares the mesh id space (draw via createInstance with identity mat4).
+    #[wasm_bindgen(js_name = createSkinnedMesh)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_skinned_mesh(
+        &mut self,
+        skin: u32,
+        positions: &[f32],
+        normals: &[f32],
+        uvs: &[f32],
+        joints: &[u32],
+        weights: &[f32],
+        indices: &[u32],
+    ) -> Result<u32, JsError> {
+        let id = self.id("mesh");
+        self.core
+            .create_skinned_mesh(id, skin, positions, normals, uvs, joints, weights, indices)
+            .map_err(err)?;
+        Ok(id)
+    }
+    #[wasm_bindgen(js_name = destroySkinnedMesh)]
+    pub fn destroy_skinned_mesh(&mut self, id: u32) {
+        self.core.remove_skinned_mesh(id);
+    }
+
     // ---- textures (RGBA8) ----
     #[wasm_bindgen(js_name = createTexture)]
     pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<u32, JsError> {

@@ -7,6 +7,7 @@ pub mod shadow;
 mod three_material;
 mod timing_async;
 pub use three_material::ThreeFrame;
+pub mod skin;
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -529,6 +530,8 @@ pub struct RenderCore {
     three: three_material::ThreeMaterials,
     /// value fed to TSL `time` (seconds); host-advanced via `set_three_time`.
     three_time: f32,
+    /// GPU skinning (src/skin.rs): skinned meshes + joint palettes, one compute pass/frame.
+    skin: skin::SkinSystem,
 }
 
 impl RenderCore {
@@ -639,6 +642,7 @@ impl RenderCore {
             casters: Vec::new(),
             static_gen: 0,
             shadow_timed: false,
+            skin: Default::default(),
             blend_pipeline,
             blend_materials: Default::default(),
             opts,
@@ -1251,6 +1255,7 @@ impl RenderCore {
         output_size: UpscaleSize,
     ) {
         self.ensure_targets(device, output_size);
+        self.encode_skinning(device, queue, encoder);
         if self.instances_dirty {
             self.rebuild_instances(device);
         }
@@ -1673,6 +1678,9 @@ pub fn load_scene_into(
         })
         .collect();
     core.set_point_lights(&packed);
+    if let Some(sk) = &scene.skins {
+        sk.load_into(core)?;
+    }
     Ok(())
 }
 

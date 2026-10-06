@@ -26,6 +26,8 @@ struct Member {
 enum Kind {
     Uniform { size: u32, members: Vec<Member> },
     Texture { dim: wgpu::TextureViewDimension, sample: wgpu::TextureSampleType },
+    /// r6-tsl-2: storage buffer (TSL storage()/buffer nodes); data = host storage buffer id, `storage` map key "group.binding".
+    Storage { read_only: bool },
     Sampler,
 }
 #[derive(Clone, Debug)]
@@ -50,6 +52,8 @@ pub(crate) struct ThreeMaterial {
     layouts: Vec<wgpu::BindGroupLayout>,
     slots: Vec<Slot>,
     textures: HashMap<String, u32>,
+/// r6-tsl-2: storage buffers by "group.binding" -> host storage buffer id.
+storage: HashMap<String, u32>,
 /// r6-tsl: non-core vertex attributes, one vertex-buffer slot each (after the core Vertex slot, if any).
 extra: Vec<AttrSpec>,
 core_slot: Option<u32>,
@@ -109,9 +113,10 @@ fn stage_globals(src: &str, stage: wgpu::ShaderStages, out: &mut Vec<Slot>, labe
                 }
             }
             (_, naga::TypeInner::Image { dim, class, arrayed, .. }) => {
-                if *arrayed { return Err(format!("{label}: arrayed texture unsupported")); }
+                if *arrayed && !matches!(dim, naga::ImageDimension::D2) { return Err(format!("{label}: arrayed {dim:?} texture unsupported (2D arrays only)")); }
                 let dim = match dim {
-                    naga::ImageDimension::D2 => wgpu::TextureViewDimension::D2,
+naga::ImageDimension::D2 if *arrayed => wgpu::TextureViewDimension::D2Array,
+naga::ImageDimension::D2 => wgpu::TextureViewDimension::D2,
                     naga::ImageDimension::Cube => wgpu::TextureViewDimension::Cube,
                     naga::ImageDimension::D3 => wgpu::TextureViewDimension::D3,
                     naga::ImageDimension::D1 => wgpu::TextureViewDimension::D1,
@@ -124,6 +129,7 @@ fn stage_globals(src: &str, stage: wgpu::ShaderStages, out: &mut Vec<Slot>, labe
                 Kind::Texture { dim, sample }
             }
             (_, naga::TypeInner::Sampler { comparison: false }) => Kind::Sampler,
+(naga::AddressSpace::Storage { access }, _) => Kind::Storage { read_only: !access.contains(naga::StorageAccess::STORE) },
             (sp, o) => return Err(format!("{label}: binding {}.{} {sp:?} {o:?} unsupported (storage/comparison: NEXT)", rb.group, rb.binding)),
         };
         out.push(Slot { group: rb.group, binding: rb.binding, name: gv.name.clone().unwrap_or_default(), vis: stage, kind });
@@ -136,7 +142,8 @@ pub(crate) fn build(
     device: &wgpu::Device,
     pkg_json: &str,
     textures: HashMap<String, u32>,
-    color_format: wgpu::TextureFormat,
+storage: HashMap<String, u32>,
+color_format: wgpu::TextureFormat,
     depth_format: wgpu::TextureFormat,
 ) -> Result<ThreeMaterial, String> {
     let pkg: serde_json::Value = serde_json::from_str(pkg_json).map_err(|e| format!("three package JSON: {e}"))?;
@@ -186,7 +193,8 @@ pub(crate) fn build(
                         Kind::Uniform { .. } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                         Kind::Texture { dim, sample } => wgpu::BindingType::Texture { sample_type: *sample, view_dimension: *dim, multisampled: false },
                         Kind::Sampler => wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    },
+Kind::Storage { read_only } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: *read_only }, has_dynamic_offset: false, min_binding_size: None },
+},
                     count: None,
                 })
                 .collect();
@@ -280,7 +288,7 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
         multiview_mask: None,
         cache: None,
     });
-    Ok(ThreeMaterial { pipeline, layouts, slots, textures, extra, core_slot })
+    Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot })
 }
 
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
@@ -350,11 +358,37 @@ fn pack(size: u32, members: &[Member], f: &ThreeFrame, model: Mat4) -> Vec<u8> {
     bytemuck::cast_slice(&out).to_vec()
 }
 
+/// Host buffer behind a TSL storage binding (shared by every material referencing the same data).
+pub(crate) struct StorageBuf {
+pub(crate) buffer: wgpu::Buffer,
+pub(crate) size: u64,
+}
+/// GPU resources `prepare` resolves a package's bindings against.
+pub(crate) struct Resources<'a> {
+pub(crate) tex: &'a HashMap<u32, wgpu::TextureView>,
+pub(crate) arrays: &'a HashMap<u32, super::ArrayTex>,
+pub(crate) storage: &'a HashMap<u32, StorageBuf>,
+pub(crate) white: &'a wgpu::TextureView,
+pub(crate) white_array: &'a wgpu::TextureView,
+pub(crate) sampler: &'a wgpu::Sampler,
+}
 impl ThreeMaterials {
-    pub(crate) fn is_three(&self, material: u32) -> bool {
+pub(crate) fn is_three(&self, material: u32) -> bool {
         self.mats.contains_key(&material)
     }
-    pub(crate) fn remove(&mut self, material: u32) {
+    /// Drop every instance's cached bind groups (a storage buffer was recreated at a new size): rebuilt in the next prepare().
+pub(crate) fn invalidate_bind_groups(&mut self) {
+self.inst.clear();
+}
+pub(crate) fn bind_storage(&mut self, material: u32, key: &str, id: u32) -> Result<(), String> {
+let m = self.mats.get_mut(&material).ok_or_else(|| format!("bind_three_storage: {material} is not a three material"))?;
+let (g, b) = key.split_once('.').and_then(|(g, b)| Some((g.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).ok_or_else(|| format!("bind_three_storage: key `{key}` is not group.binding"))?;
+if !m.slots.iter().any(|s| s.group == g && s.binding == b && matches!(s.kind, Kind::Storage { .. })) { return Err(format!("bind_three_storage: {key} is not a storage binding of material {material}")); }
+m.storage.insert(key.to_string(), id);
+self.inst.retain(|_, i| i.material != material);
+Ok(())
+}
+pub(crate) fn remove(&mut self, material: u32) {
         self.mats.remove(&material);
         self.inst.retain(|_, g| g.material != material);
     }
@@ -365,14 +399,15 @@ impl ThreeMaterials {
         queue: &wgpu::Queue,
         instances: &[(u32, u32, [f32; 16])],
         frame: &ThreeFrame,
-        tex: &HashMap<u32, wgpu::TextureView>,
-        white: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-    ) {
+        res: &Resources,
+) {
+let Resources { tex, arrays, storage, white, white_array, sampler } = *res;
         for &(iid, mat_id, xf) in instances {
             let Some(mat) = self.mats.get(&mat_id) else { continue };
             let model = Mat4::from_cols_array(&xf);
-            if self.inst.get(&iid).is_none_or(|g| g.material != mat_id) {
+if self.inst.get(&iid).is_none_or(|g| g.material != mat_id) {
+// a storage slot whose host buffer does not exist yet: no instance GPU state (draw counts it skipped), retried next frame
+if mat.slots.iter().any(|s| matches!(s.kind, Kind::Storage { .. }) && !mat.storage.get(&format!("{}.{}", s.group, s.binding)).is_some_and(|id| storage.contains_key(id))) { self.inst.remove(&iid); continue; }
                 let mut buffers = Vec::new();
                 for (k, s) in mat.slots.iter().enumerate() {
                     if let Kind::Uniform { size, members } = &s.kind {
@@ -397,9 +432,12 @@ impl ThreeMaterials {
                                 binding: s.binding,
                                 resource: match &s.kind {
                                     Kind::Uniform { .. } => buffers.iter().find(|(i, _)| *i == k).expect("buffer").1.as_entire_binding(),
-                                    Kind::Texture { .. } => wgpu::BindingResource::TextureView(
-                                        mat.textures.get(&s.name).and_then(|id| tex.get(id)).unwrap_or(white),
-                                    ),
+                                    Kind::Texture { dim, .. } => wgpu::BindingResource::TextureView(if *dim == wgpu::TextureViewDimension::D2Array {
+mat.textures.get(&s.name).and_then(|id| arrays.get(id)).map(|a| &a.view).unwrap_or(white_array)
+} else {
+mat.textures.get(&s.name).and_then(|id| tex.get(id)).unwrap_or(white)
+}),
+Kind::Storage { .. } => storage[&mat.storage[&format!("{}.{}", s.group, s.binding)]].buffer.as_entire_binding(),
                                     Kind::Sampler => wgpu::BindingResource::Sampler(sampler),
                                 },
                             })
@@ -423,7 +461,8 @@ impl ThreeMaterials {
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>) -> (u32, u32) {
         let (mut n, mut skipped) = (0, 0);
         for &(iid, mat_id, _) in instances {
-            let (Some(mat), Some(g)) = (self.mats.get(&mat_id), self.inst.get(&iid)) else { continue };
+            let Some(mat) = self.mats.get(&mat_id) else { continue };
+let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
             let Some(gm) = inst_mesh.get(&iid).and_then(|m| meshes.get(m)) else { continue };
             let ia = inst_attrs.get(&iid);
             let mut bound: Vec<(u32, &wgpu::Buffer)> = Vec::new();

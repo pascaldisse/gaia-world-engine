@@ -53,6 +53,17 @@ function textureData(t) {
   texCache.set(t, { version: t.version, image: im, desc });
   return desc;
 }
+// r6-tsl-2: DataArrayTexture (image {data,width,height,depth}) -> array descriptor {array,layers,key,version,data,takeLayerUpdates}; generic three type, no game contract.
+// Compressed arrays are REFUSED loudly (BC/ASTC upload not implemented). Layer updates = three's own texture.layerUpdates set (null = all layers).
+export function arrayTextureData(t) {
+  const im = t?.image;
+  if (!im?.data || !(im.width > 0 && im.height > 0 && im.depth > 0)) return null;
+  if (t.isCompressedArrayTexture || t.isCompressedTexture) return { array: true, refused: 'compressed texture array (BC/ASTC upload not implemented)' };
+  if (!isBytes(im.data) || im.data.length !== im.width * im.height * 4 * im.depth) return { array: true, refused: `array texture data is not rgba8 (${im.data.constructor?.name} len ${im.data.length} vs ${im.width}x${im.height}x4x${im.depth})` };
+  return { array: true, width: im.width, height: im.height, layers: im.depth, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:array`, version: t.version, data: new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.length),
+    takeLayerUpdates() { const s = t.layerUpdates; const d = s && s.size ? [...s] : null; t.clearLayerUpdates?.(); return d; } };
+}
+export { textureData };
 export function pbrParams(m) {
 const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
 const p = {

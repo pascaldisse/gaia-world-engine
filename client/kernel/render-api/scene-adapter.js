@@ -135,8 +135,10 @@ return p;
 let frameScene = null, frameCamera = null;
 function syncLiveUniforms() {
   for (const [, e] of mats) {
-    const live = e.conv?.kind === 'wgsl' && !e.fellBack && e.epoch === epoch ? e.conv.package?.live : null;
-    if (!live) continue;
+    const wg = e.conv?.kind === 'wgsl' && !e.fellBack && e.epoch === epoch;
+if (wg && backend.updateShaderBuffers) { const n = backend.updateShaderBuffers(e.id); if (n) stats.bufferWrites = (stats.bufferWrites ?? 0) + n; } // r6-tsl-2: storage buffers follow BufferAttribute.version
+const live = wg ? e.conv.package?.live : null;
+if (!live) continue;
     const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined });
     if (!changed.length) continue;
     if (backend.setShaderUniforms) { backend.setShaderUniforms(e.id, changed); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; }

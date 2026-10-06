@@ -596,6 +596,8 @@ pub struct RenderCore {
     mipgen_linear: BilinearBlit,
     /// array textures (D2Array views) by id; ids here are NOT in `textures`.
     array_textures: HashMap<u32, ArrayTex>,
+    /// r6-tsl-2: host buffers behind TSL storage bindings (shared across materials).
+    storage_buffers: HashMap<u32, three_material::StorageBuf>,
     white_array: wgpu::TextureView,
     /// per-material extra maps/side (set_material_maps), rebinds the material.
     material_maps: HashMap<u32, MaterialMaps>,
@@ -743,6 +745,7 @@ impl RenderCore {
             mipgen,
             mipgen_linear,
             array_textures: HashMap::new(),
+            storage_buffers: HashMap::new(),
             white_array,
             material_maps: HashMap::new(),
             shadow,
@@ -1218,7 +1221,7 @@ impl RenderCore {
         package_json: &str,
         textures: HashMap<String, u32>,
     ) -> Result<(), String> {
-        let m = three_material::build(device, package_json, textures, INTERNAL_FORMAT, DEPTH_FORMAT)?;
+        let m = three_material::build(device, package_json, textures, HashMap::new(), INTERNAL_FORMAT, DEPTH_FORMAT)?;
         self.materials.remove(&id);
         self.three.remove(id);
         self.three.mats.insert(id, m);
@@ -1228,6 +1231,34 @@ impl RenderCore {
     /// uniform members; packed into every instance buffer at the next render (r4, three_material.rs).
     pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<usize, String> {
         self.three.mats.get_mut(&material).ok_or_else(|| format!("set_three_uniforms: {material} is not a three material"))?.set_uniforms(json)
+    }
+        /// r6-tsl-2: storage buffer behind TSL `storage()`/buffer nodes. Raw bytes (any element type), padded to 16 B (min 16).
+    pub fn create_storage_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, bytes: &[u8]) {
+        let size = (bytes.len() as u64).max(16).next_multiple_of(16);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("three storage"), size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let mut padded = bytes.to_vec();
+        padded.resize(size as usize, 0);
+        queue.write_buffer(&buffer, 0, &padded);
+        self.storage_buffers.insert(id, three_material::StorageBuf { buffer, size });
+        self.three.invalidate_bind_groups();
+    }
+    /// Same id, new bytes (the three attribute's version moved): in-place write when the size is unchanged, else recreate (+ bind groups rebuilt).
+    pub fn update_storage_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, bytes: &[u8]) -> Result<(), String> {
+        let size = (bytes.len() as u64).max(16).next_multiple_of(16);
+        let cur = self.storage_buffers.get(&id).ok_or_else(|| format!("update_storage_buffer: no storage buffer {id}"))?;
+        if cur.size != size { self.create_storage_buffer(device, queue, id, bytes); return Ok(()); }
+        let mut padded = bytes.to_vec();
+        padded.resize(size as usize, 0);
+        queue.write_buffer(&cur.buffer, 0, &padded);
+        Ok(())
+    }
+    pub fn destroy_storage_buffer(&mut self, id: u32) {
+        self.storage_buffers.remove(&id);
+    }
+    /// Point a three material's storage binding ("group.binding" of the package) at a host storage buffer.
+    pub fn bind_three_storage(&mut self, material: u32, key: &str, id: u32) -> Result<(), String> {
+        if !self.storage_buffers.contains_key(&id) { return Err(format!("bind_three_storage: no storage buffer {id}")); }
+        self.three.bind_storage(material, key, id)
     }
     pub fn set_three_time(&mut self, seconds: f32) {
         self.three_time = seconds;
@@ -1529,7 +1560,7 @@ impl RenderCore {
                 None => Mat4::perspective_infinite_rh(self.camera.yfov, aspect, self.camera.znear),
             };
             let frame = ThreeFrame { view: self.camera.world.inverse(), proj, camera_world: self.camera.world, near: self.camera.znear, far, time: self.three_time };
-            self.three.prepare(device, queue, &three_list, &frame, &self.textures, &self.white, &self.sampler);
+            self.three.prepare(device, queue, &three_list, &frame, &three_material::Resources { tex: &self.textures, arrays: &self.array_textures, storage: &self.storage_buffers, white: &self.white, white_array: &self.white_array, sampler: &self.sampler });
         }
         let t = self.targets.as_ref().expect("targets");
         let c = self.opts.clear_color;

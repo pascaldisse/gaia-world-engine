@@ -9,6 +9,7 @@
 // the core only knows flat world-space instances, so node hierarchy (parent × local) + visibility are resolved in JS and
 // pushed down as world mat4s. Capabilities are the honest subset gaia-render has TODAY (see NOTES in crates/gaia-render).
 import { RENDER_API_VERSION, validateMeshArrays, isMat4, IDENTITY_MAT4 } from './interface.js';
+import { textureData, arrayTextureData } from './material-map.js';
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 // '#rrggbb' | 0xrrggbb are authoring (sRGB) colors → linear (three ColorManagement); [r,g,b] arrays are taken as linear.
@@ -132,6 +133,19 @@ texStats.uploads++;
 if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version });
 return { id, key: t.key ?? null };
 }
+// r6-tsl-2: storage buffers shared per three BufferAttribute (refcounted); host bytes = the attribute's typed array as-is.
+const storByAttr = new Map(); // BufferAttribute -> { id, refs, version }
+const matStorage = new Map(); // MaterialId -> [{key, attr, h}]
+const storStats = { creates: 0, hits: 0, updates: 0 };
+const bytesOf = (a) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+function acquireStorage(attr) {
+const c = storByAttr.get(attr);
+if (c) { c.refs++; storStats.hits++; return c; }
+const h = { id: gpu.createStorageBuffer(bytesOf(attr.array)), refs: 1, version: attr.version, attr };
+storByAttr.set(attr, h); storStats.creates++;
+return h;
+}
+function releaseStorage(h) { if (--h.refs <= 0) { gpu.destroyStorageBuffer(h.id); storByAttr.delete(h.attr); } }
 function releaseTexture(h) {
 if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
 else gpu.destroyTexture(h.id);
@@ -216,7 +230,7 @@ if (node.instAttrs) for (const [k, v] of Object.entries(node.instAttrs)) gpu.set
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'shader-vertex-attributes', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -268,23 +282,51 @@ threeSkipped() { return gpu.threeSkipped(); },
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
-    textureStats() { return { ...texStats, live: texByKey.size }; },
+    textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size } }; },
     // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the
     // package's non-enumerable textureSources (uuid → three Texture); a texture binding without readable pixels = loud Error.
     createShaderMaterial(pkg) {
       if (!pkg?.vertex || !pkg?.fragment || !Array.isArray(pkg.bindGroups)) throw new Error('createShaderMaterial: tsl-export package required');
-      const names = [], ids = [], owned = [];
+      const names = [], ids = [], owned = [], stor = [];
+      const fail = (msg) => { for (const h of owned) releaseTexture(h); for (const s of stor) releaseStorage(s.h); throw new Error(msg); };
       for (const g of pkg.bindGroups) for (const b of g.bindings) {
-        if (!String(b.kind).startsWith('texture')) continue;
+        const kind = String(b.kind);
+        if (kind === 'storage-buffer') {
+          const attr = pkg.bufferSources?.[`${g.group}.${b.binding}`];
+          if (!attr?.array?.buffer) fail(`createShaderMaterial: storage binding '${b.name}' (${g.group}.${b.binding}) has no readable buffer data`);
+          stor.push({ key: `${g.group}.${b.binding}`, attr, h: acquireStorage(attr) });
+          continue;
+        }
+        if (!kind.startsWith('texture')) continue;
         const t = pkg.textureSources?.[b.textureUuid];
-        const px = t && texturePixels(t);
-        if (!px) throw new Error(`createShaderMaterial: texture binding '${b.name}' (uuid ${b.textureUuid}) has no readable pixels`);
-        // three samples non-sRGB textures (DataTexture default NoColorSpace) without decode → linear upload (r4)
-        const id = t.colorSpace === 'srgb' ? gpu.createTexture(px.width, px.height, px.data) : gpu.createTextureLinear(px.width, px.height, px.data); owned.push({ id, key: null }); names.push(b.name); ids.push(id);
+        let h;
+        if (kind === 'texture-2d-array') {
+          const d = t && arrayTextureData(t);
+          if (!d || d.refused) fail(`createShaderMaterial: texture array '${b.name}' (uuid ${b.textureUuid}) ${d?.refused ?? 'has no readable layer data'}`);
+          h = acquireTexture(d);
+        } else if (kind === 'texture-2d') {
+          // r5 adapter texture cache: ONE CPU read per (texture, version), GPU texture shared + refcounted across materials. three samples non-sRGB textures without decode (r4) → linear upload.
+          const d = t && textureData(t);
+          if (!d) fail(`createShaderMaterial: texture binding '${b.name}' (uuid ${b.textureUuid}) has no readable pixels`);
+          h = acquireTexture(d);
+        } else fail(`createShaderMaterial: texture binding '${b.name}' kind ${kind} unsupported`);
+        owned.push(h); names.push(b.name); ids.push(h.id);
       }
-      const id = gpu.createThreeMaterial(JSON.stringify(pkg), names, Uint32Array.from(ids));
+      let id;
+      try { id = gpu.createThreeMaterial(JSON.stringify(pkg), names, Uint32Array.from(ids)); } catch (e) { fail(String(e?.message ?? e)); }
+      for (const s of stor) gpu.bindThreeStorage(id, s.key, s.h.id);
       if (owned.length) matTextures.set(id, owned);
+      if (stor.length) matStorage.set(id, stor);
       return id;
+    },
+    // r6-tsl-2: storage-buffer data follows three's BufferAttribute.version (re-uploaded only when it moved).
+    updateShaderBuffers(id) {
+      const stor = matStorage.get(id);
+      if (!stor) return 0;
+      let n = 0;
+      for (const s of stor) if (s.h.version !== s.attr.version) { gpu.updateStorageBuffer(s.h.id, bytesOf(s.attr.array)); s.h.version = s.attr.version; n++; }
+      storStats.updates += n;
+      return n;
     },
     setShaderTime(seconds) { gpu.setThreeTime(seconds); },
     // r4: changed live uniform values [{key,value}] (tsl-export pkg.live.update()) → core reflected uniform buffer.
@@ -293,9 +335,10 @@ threeSkipped() { return gpu.threeSkipped(); },
       gpu.destroyMaterial(id); flagged.delete(id);
       for (const h of matTextures.get(id) || []) releaseTexture(h);
       matTextures.delete(id);
-    },
-
-    createNode(mat4, parent = 0) {
+for (const s of matStorage.get(id) || []) releaseStorage(s.h);
+matStorage.delete(id);
+},
+createNode(mat4, parent = 0) {
       const node = { id: next++, kind: 'group', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null, visible: true };
       nodes.set(node.id, node); link(node, parent);
       const [pw, pv] = parentState(node); sync(node, pw, pv);

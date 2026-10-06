@@ -7,7 +7,7 @@
 const STAGES = { 1: 'vertex', 2: 'fragment', 4: 'compute' };
 const stageOf = (v) => STAGES[v] ?? ([v & 1 ? 'vertex' : null, v & 2 ? 'fragment' : null].filter(Boolean).join('|') || 'none');
 
-const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture ? (b.isSampledCubeTexture ? 'texture-cube' : b.isSampledTexture3D ? 'texture-3d' : b.isStorageTexture ? 'storage-texture' : 'texture-2d') : b.isSampler ? 'sampler' : b.isStorageBuffer ? 'storage-buffer' : 'unknown');
+const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture ? (b.isSampledCubeTexture ? 'texture-cube' : b.isSampledTexture3D ? 'texture-3d' : b.isStorageTexture ? 'storage-texture' : (b.texture?.isArrayTexture || b.texture?.isDataArrayTexture || b.texture?.isCompressedArrayTexture) ? 'texture-2d-array' : 'texture-2d') : b.isSampler ? 'sampler' : b.isStorageBuffer ? 'storage-buffer' : 'unknown');
 
 // builder → data package. `THREE` = three/webgpu namespace; `WGSLNodeBuilder` is not exported publicly, so we reach it
 // through three's own backend factory (WebGPUBackend.prototype.createNodeBuilder) without constructing a device.
@@ -35,6 +35,7 @@ const lightUuids = new Map();
 for (const n of b.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightUuids.set(v.uuid, n.light.uuid);
 const liveUniforms = [];
   const semantics = builtinSemantics(THREE);
+const bufferSources = {}; // r6-tsl-2: "group.binding" -> live three BufferAttribute behind a storage binding (non-enumerable on the package)
 const groups = b.getBindings().map((g) => ({
 group: g.index, name: g.name,
 bindings: g.bindings.map((bd, i) => {
@@ -50,6 +51,7 @@ out.uniforms = bd.uniforms.map((u) => {
   return { name: u.name, semantic, key, source, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) };
 });
 } else if (bd.texture) { out.textureUuid = bd.texture.uuid; out.colorSpace = bd.texture.colorSpace ?? null; }
+else if (bd.isStorageBuffer && bd.attribute) { out.access = bd.access ?? null; out.byteLength = bd.attribute.array?.byteLength ?? 0; out.itemSize = bd.attribute.itemSize; bufferSources[`${g.index}.${i}`] = bd.attribute; }
 return out;
 }),
 }));
@@ -65,6 +67,7 @@ material: { name: material.name, type: material.type, transparent: !!material.tr
 const textureSources = {};
 for (const g of b.getBindings()) for (const bd of g.bindings) if (bd.texture) textureSources[bd.texture.uuid] = bd.texture;
 Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
+Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: false });
 // r6: node-held BufferAttributes (instancedBufferAttribute()/bufferAttribute() nodes → nodeAttributeN): key `node:<uuid>` → live three BufferAttribute (non-enumerable).
 const attributeSources = {};
 for (const a of b.getAttributesArray()) if (a.node?.attribute) attributeSources[`node:${a.node.uuid}`] = a.node.attribute;

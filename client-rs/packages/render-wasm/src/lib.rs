@@ -406,6 +406,26 @@ let core = RenderCore::new(&device, &queue, opts);
         self.core.create_three_material(&self.device, id, &package_json, tex).map_err(err)?;
         Ok(id)
     }
+        /// r6-tsl-2: storage buffer for TSL storage()/buffer nodes (raw bytes, any element type) -> id.
+    #[wasm_bindgen(js_name = createStorageBuffer)]
+    pub fn create_storage_buffer(&mut self, bytes: &[u8]) -> u32 {
+        let id = self.id("storage");
+        self.core.create_storage_buffer(&self.device, &self.queue, id, bytes);
+        id
+    }
+    #[wasm_bindgen(js_name = updateStorageBuffer)]
+    pub fn update_storage_buffer(&mut self, id: u32, bytes: &[u8]) -> Result<(), JsError> {
+        self.core.update_storage_buffer(&self.device, &self.queue, id, bytes).map_err(err)
+    }
+    #[wasm_bindgen(js_name = destroyStorageBuffer)]
+    pub fn destroy_storage_buffer(&mut self, id: u32) {
+        self.core.destroy_storage_buffer(id);
+    }
+    /// Point a three material's storage binding ("group.binding" key) at a storage buffer id.
+    #[wasm_bindgen(js_name = bindThreeStorage)]
+    pub fn bind_three_storage(&mut self, material: u32, key: &str, id: u32) -> Result<(), JsError> {
+        self.core.bind_three_storage(material, key, id).map_err(err)
+    }
     /// seconds fed to three `time` semantic uniforms.
     #[wasm_bindgen(js_name = setThreeTime)]
     pub fn set_three_time(&mut self, seconds: f32) {

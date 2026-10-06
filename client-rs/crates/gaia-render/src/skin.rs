@@ -28,16 +28,17 @@ struct SkinnedSrc {
     material_free_verts: Vec<[f32; SRC_STRIDE]>,
     indices: Vec<u32>,
     center: [f32; 3],
-    /// Bind-pose AABB (shadow caster culling input; padded at upload, see `SKIN_BOUNDS_PAD`).
+    /// Bind-pose AABB (initial GpuMesh bounds only; replaced per pose by `update_skin_bounds`).
     lo: [f32; 3],
     hi: [f32; 3],
+    /// Per influencing joint (weight > 0): AABB of the bind positions of the vertices it moves.
+    /// World bound per pose = union of palette[j] x these boxes (conservative: a skinned vertex is a
+    /// convex combination of palette[j].v, and v lies in each of its joints' boxes).
+    joint_bounds: Vec<(u32, [f32; 3], [f32; 3])>,
 }
 
-/// Bind-pose AABB padding for skinned shadow-caster culling: animation moves vertices outside the bind
-/// pose, so bounds grow by this fraction of the extent plus `SKIN_BOUNDS_PAD_M` metres (approximation, not
-/// a per-frame bound).
-const SKIN_BOUNDS_PAD: f32 = 0.5;
-const SKIN_BOUNDS_PAD_M: f32 = 1.0;
+/// Float-noise margin added to the per-pose skinned world bounds (metres).
+const SKIN_BOUNDS_EPS_M: f32 = 0.05;
 
 struct GpuSkin {
     pipeline: wgpu::ComputePipeline,
@@ -56,6 +57,8 @@ pub(crate) struct SkinSystem {
     pose_dirty: bool,
     gpu: Option<GpuSkin>,
     pub(crate) joint_total: u32,
+    /// World bounds of skinned meshes changed since `refresh_skinned_casters` last ran.
+    pub(crate) bounds_dirty: bool,
 }
 
 impl RenderCore {
@@ -113,12 +116,20 @@ impl RenderCore {
             return Err(format!("skinned mesh {id}: index {bad} >= {n}"));
         }
         let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        let mut jb: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
         let verts = (0..n)
             .map(|i| {
                 let p = Vec3::new(positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]);
                 lo = lo.min(p);
                 hi = hi.max(p);
                 let j = &joints[4 * i..4 * i + 4];
+                for k in 0..4 {
+                    if weights[4 * i + k] > 0.0 {
+                        let e = jb.entry(j[k]).or_insert((p, p));
+                        e.0 = e.0.min(p);
+                        e.1 = e.1.max(p);
+                    }
+                }
                 let mut v = [0f32; SRC_STRIDE];
                 v[0..3].copy_from_slice(&positions[3 * i..3 * i + 3]);
                 v[3..6].copy_from_slice(&normals[3 * i..3 * i + 3]);
@@ -129,8 +140,10 @@ impl RenderCore {
                 v
             })
             .collect();
+        let mut joint_bounds: Vec<(u32, [f32; 3], [f32; 3])> = jb.into_iter().map(|(j, (a, b))| (j, a.to_array(), b.to_array())).collect();
+        joint_bounds.sort_unstable_by_key(|e| e.0);
         let center = if n == 0 { [0.0; 3] } else { ((lo + hi) * 0.5).to_array() };
-        self.skin.meshes.insert(id, SkinnedSrc { skin, material_free_verts: verts, indices: indices.to_vec(), center, lo: if n == 0 { [0.0; 3] } else { lo.to_array() }, hi: if n == 0 { [0.0; 3] } else { hi.to_array() } });
+        self.skin.meshes.insert(id, SkinnedSrc { skin, material_free_verts: verts, indices: indices.to_vec(), center, lo: if n == 0 { [0.0; 3] } else { lo.to_array() },hi: if n == 0 { [0.0; 3] } else { hi.to_array() }, joint_bounds });
         self.skin.structure_dirty = true;
         Ok(())
     }
@@ -158,6 +171,9 @@ impl RenderCore {
         }
         if self.skin.structure_dirty {
             self.rebuild_skinning(device);
+        }
+        if self.skin.pose_dirty {
+            self.update_skin_bounds();
         }
         let sys = &mut self.skin;
         let g = sys.gpu.as_ref().expect("gpu skin");
@@ -193,6 +209,63 @@ impl RenderCore {
         }
     }
 
+/// Per-pose WORLD AABB of every skinned mesh -> its GpuMesh lo/hi (shadow-caster culling input).
+    /// The bind-pose AABB is NOT a world bound: skinned positions live in the skin's bind space and the
+    /// palette (pose x IBM) carries them to world (Asylum: bind AABBs sit at the origin, characters at
+    /// y~187 -> every dynamic caster was culled by the cascade xy test = 0 skinned casters).
+    fn update_skin_bounds(&mut self) {
+        let sys = &mut self.skin;
+        for (id, m) in &sys.meshes {
+            let Some(skin) = sys.skins.get(&m.skin) else { continue };
+            let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for (j, a, b) in &m.joint_bounds {
+                let j = *j as usize;
+                if j >= skin.pose.len() {
+                    continue;
+                }
+                let pal = skin.pose[j] * skin.inverse_bind[j];
+                let (a, b) = (Vec3::from_array(*a), Vec3::from_array(*b));
+                for i in 0..8 {
+                    let c = Vec3::new(if i & 1 == 0 { a.x } else { b.x }, if i & 2 == 0 { a.y } else { b.y }, if i & 4 == 0 { a.z } else { b.z });
+                    let w = pal.transform_point3(c);
+                    lo = lo.min(w);
+                    hi = hi.max(w);
+                }
+            }
+            if lo.x > hi.x {
+                continue; // no weighted joints -> keep previous bound
+            }
+            let pad = Vec3::splat(SKIN_BOUNDS_EPS_M);
+            if let Some(g) = self.meshes.get_mut(id) {
+                g.lo = (lo - pad).to_array();
+                g.hi = (hi + pad).to_array();
+            }
+        }
+        sys.bounds_dirty = true;
+    }
+    /// Re-derive world AABBs of skinned casters in place after a bounds change (no instance rebuild).
+    pub(crate) fn refresh_skinned_casters(&mut self) {
+        if !self.skin.bounds_dirty {
+            return;
+        }
+        self.skin.bounds_dirty = false;
+        for c in self.casters.iter_mut() {
+            if !self.skin.meshes.contains_key(&c.mesh) {
+                continue;
+            }
+            let Some(m) = self.meshes.get(&c.mesh) else { continue };
+            let (lo, hi) = (Vec3::from_array(m.lo), Vec3::from_array(m.hi));
+            let t = Mat4::from_cols_array(&c.transform);
+            let (mut wlo, mut whi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for i in 0..8 {
+                let p = t.transform_point3(Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }));
+                wlo = wlo.min(p);
+                whi = whi.max(p);
+            }
+            c.lo = wlo;
+            c.hi = whi;
+        }
+    }
     fn rebuild_skinning(&mut self, device: &wgpu::Device) {
         let sys = &mut self.skin;
         sys.structure_dirty = false;
@@ -269,14 +342,8 @@ impl RenderCore {
                 id,
                 GpuMesh {
                     center: m.center,
-                    lo: {
-                        let (lo, hi) = (glam::Vec3::from_array(m.lo), glam::Vec3::from_array(m.hi));
-                        (lo - (hi - lo) * SKIN_BOUNDS_PAD - glam::Vec3::splat(SKIN_BOUNDS_PAD_M)).to_array()
-                    },
-                    hi: {
-                        let (lo, hi) = (glam::Vec3::from_array(m.lo), glam::Vec3::from_array(m.hi));
-                        (hi + (hi - lo) * SKIN_BOUNDS_PAD + glam::Vec3::splat(SKIN_BOUNDS_PAD_M)).to_array()
-                    },
+lo: m.lo, // bind-pose until `update_skin_bounds` (same frame) replaces it with the posed world bound
+                    hi: m.hi,
                     vertices: dst.clone(),
                     uv1: uv1.clone(),
                     vertex_count: m.material_free_verts.len() as u32,

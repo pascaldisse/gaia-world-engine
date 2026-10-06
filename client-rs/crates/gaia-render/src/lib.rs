@@ -1326,6 +1326,7 @@ impl RenderCore {
         if self.instances_dirty {
             self.rebuild_instances(device);
         }
+        self.refresh_skinned_casters();
         let t = self.targets.as_ref().expect("targets");
         let aspect = t.internal.width as f32 / t.internal.height as f32;
         self.frame.view_proj = self.camera.view_proj(aspect).to_cols_array_2d();

@@ -2,7 +2,7 @@
 //! env: GAIA_GLB, GAIA_CAMERA=x,y,z,yaw,pitch (deg; default = glb camera), GAIA_SHADOWS=0|1,
 //! GAIA_SHADOW_CACHE=0|1, GAIA_SHADOW_DYNAMIC_PCT (0..100 of instances forced dynamic),
 //! GAIA_SUN=dx,dy,dz[,intensity], GAIA_SUN_SWEEP=deg/frame (moves the sun every frame),
-//! GAIA_FRAMES (60), GAIA_OUT (ppm path), GAIA_HEIGHT (720), GAIA_RES, GAIA_CASCADES, GAIA_MAXDIST.
+//! GAIA_SKIN_CAST=0 (skinned instances do not cast), GAIA_ANIM_TIME=<s> (re-pose clip), GAIA_CAM_LOOK=ex,ey,ez,tx,ty,tz, GAIA_FRAMES (60), GAIA_OUT (ppm path), GAIA_HEIGHT (720), GAIA_RES, GAIA_CASCADES, GAIA_MAXDIST.
 use gaia_render::*;
 use glam::{Mat4, Vec3};
 
@@ -45,7 +45,12 @@ fn main() {
         for i in lo..=hi.min(scene.draws.len() as u32 - 1) { core.remove_instance(i); if hi - lo < 8 { let d = &scene.draws[i as usize]; eprintln!("draw {i}: material {} verts {}", d.material, d.vertex_count); } }
         eprintln!("hid draws {lo}..={hi} of {}", scene.draws.len());
     }
-    let pct: u32 = env("GAIA_SHADOW_DYNAMIC_PCT", 0);
+    if env::<u32>("GAIA_SKIN_CAST", 1) == 0 {
+// A/B proof: skinned characters (ids >= SKIN_ID_BASE) stop casting
+let n = scene.skins.as_ref().map_or(0, |s| s.prims.len() as u32);
+for k in 0..n { core.set_instance_cast_shadow(skin::SKIN_ID_BASE + k, false); }
+}
+let pct: u32 = env("GAIA_SHADOW_DYNAMIC_PCT", 0);
     if pct > 0 {
         for i in 0..scene.draws.len() as u32 {
             if (i * 100 / scene.draws.len() as u32) % 100 < pct && i % (100 / pct.max(1)).max(1) == 0 {
@@ -59,7 +64,15 @@ fn main() {
         if v.len() > 3 { sun.2 = v[3]; }
     }
     core.set_sun(sun.0.to_array(), sun.1.to_array(), sun.2);
-    if let Some(c) = floats("GAIA_CAMERA") {
+    if let (Some(sk), Some(t)) = (&scene.skins, std::env::var("GAIA_ANIM_TIME").ok().and_then(|v| v.parse::<f32>().ok())) {
+sk.pose_at(&mut core, t).expect("pose_at"); // load_scene_into poses at t=0; GAIA_ANIM_TIME=<s> re-poses
+}
+if let Some(v) = floats("GAIA_CAM_LOOK") {
+// ex,ey,ez,tx,ty,tz (same as render-window)
+let view = Mat4::look_at_rh(Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5]), Vec3::Y);
+core.set_camera(view.inverse().to_cols_array(), 60f32.to_radians(), 0.1, None);
+}
+if let Some(c) = floats("GAIA_CAMERA") {
         let m = Mat4::from_translation(Vec3::new(c[0], c[1], c[2])) * Mat4::from_rotation_y(c[3].to_radians()) * Mat4::from_rotation_x(c[4].to_radians());
         core.set_camera(m.to_cols_array(), 60f32.to_radians(), 0.1, None);
     }

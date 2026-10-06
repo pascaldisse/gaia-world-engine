@@ -24,7 +24,7 @@ b.scene = sc; b.material = material; b.camera = cam; b.context.material = materi
 // (b) real lights: three's own LightsNode over the scene's Directional/Point lights (shadows not exported) → lit node materials shade.
 // Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
 const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
-b.lightsNode = lights.length ? r.lighting.createNode(lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
+b.lightsNode = lights.length ? sharedLightsNode(r, sc, lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
 b.build();
 // uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
 const refs = new Map();
@@ -75,21 +75,47 @@ defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes: [...b.updateNod
 Object.defineProperty(pkg, 'tpl', { enumerable: false, value: { updateNodes: [...b.updateNodes], updateBeforeNodes: [...b.updateBeforeNodes], liveUniforms } });
 return pkg;
 }
+// r10-4 shared frame-scope update session (per renderer) + shared LightsNode per (renderer, scene, light set).
+const sharedFrames = new WeakMap();
+function shared(r, THREE, token, time) {
+let s = sharedFrames.get(r);
+if (!s) { const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r; sharedFrames.set(r, (s = { frame, token: undefined, done: new Set(), T: THREE.NodeUpdateType })); }
+if (s.token !== token) { s.token = token; s.frame.update(); s.frame.renderId++; s.done.clear(); structCache.frames++; }
+if (time != null) s.frame.time = time;
+return s;
+}
+const lightsCache = new WeakMap(); // scene -> { sig, node }
+function sharedLightsNode(r, sc, lights) {
+if (!structCache.share) return r.lighting.createNode(lights);
+const sig = lights.map((l) => l.uuid).join(',');
+const c = lightsCache.get(sc);
+if (c && c.sig === sig && c.r === r) { structCache.lightsReused++; return c.node; }
+const node = r.lighting.createNode(lights); lightsCache.set(sc, { sig, node, r }); structCache.lightsBuilt++; return node;
+}
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
 function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null, pre = [] }) {
-const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r;
+const own = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); own.renderer = r; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
 const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial.has(key) ? initial.get(key) : toPlain(get())])); // initial = the package's own shipped values (rebound builder-singleton uniforms carry a stale value until the first update) // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
 keys: liveUniforms.map((x) => x.key),
 get version() { return version; },
-update({ object = obj, camera = cam, scene = sc, time } = {}) {
-frame.update(); if (time != null) frame.time = time;
-frame.renderId++; frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
+update({ object = obj, camera = cam, scene = sc, time, frameToken } = {}) {
+// r10-4: share=on -> ONE NodeFrame per renderer; frame-scope work (time, renderId, camera/viewport/light RENDER|FRAME nodes) runs once per frameToken, not once per material. share=off -> legacy per-package frame (A/B flag: structCache.share / URL wgpuShare=0).
+const sh = structCache.share && frameToken != null ? shared(r, THREE, frameToken, time) : null;
+const frame = sh ? sh.frame : own;
+if (!sh) { frame.update(); if (time != null) frame.time = time; frame.renderId++; }
+frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
 for (const f of pre) f();
+if (sh) {
+const done = sh.done, T = sh.T;
+for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
+for (const n of updateNodes) { if (done.has(n)) { structCache.updSkipped++; continue; } frame.updateNode(n); const ty = n.getUpdateType(); if ((ty === NUT.FRAME || ty === NUT.RENDER) && n.updateReference(frame) === n) { const m = frame.updateMap.get(n); if (m && (ty === NUT.FRAME ? m.frameMap : m.renderMap).get(n) === (ty === NUT.FRAME ? frame.frameId : frame.renderId)) done.add(n); } }
+} else {
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
 for (const n of updateNodes) frame.updateNode(n);
+}
 const changed = [];
 for (const { key, get } of liveUniforms) {
 const raw = get();
@@ -170,7 +196,7 @@ function builtinSemantics(THREE) {
 // Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
 // cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export const structCache = { map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map() };
+export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map() };
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
 const fnIds = new WeakMap(); let fnN = 0;
 const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };

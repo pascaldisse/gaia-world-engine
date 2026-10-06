@@ -20,6 +20,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' } } });
+  structCache.share = params.get('wgpuShare') !== '0'; // r10-4 A/B flag (also togglable live: __wgpu.tslCache.share)
   const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE, cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0' });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;

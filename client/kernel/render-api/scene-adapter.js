@@ -148,7 +148,7 @@ if (wg && backend.updateShaderBuffers) { const tb = now(); const n = backend.upd
 const live = wg ? e.conv.package?.live : null;
 if (!live) continue;
     const tl = now(); sub.liveMats++;
-    const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined });
+    const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined, frameToken: epoch });
     sub.liveUpdate += now() - tl;
     if (!changed.length) continue;
     const ts = now();

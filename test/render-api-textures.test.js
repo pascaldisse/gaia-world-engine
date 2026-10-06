@@ -42,7 +42,7 @@ test('adapter: N meshes sharing a canvas-textured material → idle frames do 0 
 
 async function fakeWgpu() {
   const c = { tex: 0, destroyTex: 0, mat: 0, updMat: 0, destroyMat: 0 }; let id = 0;
-  const gpu = { hasTimestamps: () => false, createTexture: () => { c.tex++; return ++id; }, destroyTexture: () => { c.destroyTex++; }, createMaterial: () => { c.mat++; return ++id; }, updateMaterial: () => { c.updMat++; }, destroyMaterial: () => { c.destroyMat++; } };
+  const gpu = { hasTimestamps: () => false, createTexture: () => { c.tex++; return ++id; }, destroyTexture: () => { c.destroyTex++; }, createMaterial: (...a) => { c.mat++; c.lastArgs = a; return ++id; }, updateMaterial: (...a) => { c.updMat++; c.lastArgs = a; }, destroyMaterial: () => { c.destroyMat++; } };
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   // Fake navigator ONLY while constructing; restore so later files in the same bun process (GLTFLoader reads navigator.userAgent) see the real one.
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -62,4 +62,32 @@ test('wgpu-backend: one GPU texture per key (refcounted), updateMaterial in plac
   backend.destroyMaterial(m1); assert.equal(c.destroyTex, 1, 'u:1 released at refcount 0');
   backend.destroyMaterial(m2); assert.equal(c.destroyTex, 2);
   assert.equal(backend.textureStats().live, 0);
+});
+
+// r7: three emissiveMap === map -> emissive x base texel (4th emissive float = flag); distinct emissiveMap -> flat + adapter degraded
+test('r7 emissiveMap===map -> wgpu createMaterial emissive[3]=1; flat otherwise; distinct -> degraded emissiveMap-distinct', async () => {
+  const { c, backend } = await fakeWgpu();
+  const emissive = new THREE.Color(0.4, 0.2, 0.1);
+  const t = dataTex(), other = dataTex();
+  const same = new THREE.MeshStandardMaterial({ map: t, emissive, emissiveMap: t });
+  const pSame = materialToParams(same);
+  assert.equal(pSame.textures.emissiveMap.key, pSame.textures.map.key, 'same Texture object -> same descriptor key');
+  assert.equal(pSame.degraded, undefined);
+  backend.createMaterial(pSame.params, pSame.textures);
+  assert.equal(c.tex, 1, 'one GPU texture for map + emissiveMap');
+  assert.equal(c.lastArgs[5].length, 4); assert.equal(c.lastArgs[5][3], 1);
+  assert.ok(Math.abs(c.lastArgs[5][0] - 0.4) < 1e-5);
+  // no emissiveMap -> 3 floats, flat
+  const plain = materialToParams(new THREE.MeshStandardMaterial({ map: t, emissive }));
+  backend.createMaterial(plain.params, plain.textures); assert.equal(c.lastArgs[5].length, 3);
+  // distinct emissiveMap: flat emissive, no crash, degraded flagged through the adapter
+  const dm = new THREE.MeshStandardMaterial({ map: t, emissive, emissiveMap: other });
+  const pd = materialToParams(dm); assert.equal(pd.degraded, 'emissiveMap-distinct');
+  backend.createMaterial(pd.params, pd.textures); assert.equal(c.lastArgs[5].length, 3);
+  const scene = new THREE.Scene(); scene.add(new THREE.Mesh(tri(), dm));
+  const ad = createSceneAdapter(createMockBackend()); ad.sync(scene);
+  assert.ok(ad.stats.degraded.has('emissiveMap-distinct'));
+  const sc2 = new THREE.Scene(); sc2.add(new THREE.Mesh(tri(), same));
+  const ad2 = createSceneAdapter(createMockBackend()); ad2.sync(sc2);
+  assert.ok(!ad2.stats.degraded.has('emissiveMap-distinct'));
 });

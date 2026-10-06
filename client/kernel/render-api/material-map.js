@@ -90,7 +90,8 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
     if (!c || c.version !== m.version) { c = { version: m.version, package: exportNodeMaterial(m, { ...tslOptions }) }; nodeCache.set(m, c); }
     return { kind: 'wgsl', package: c.package, fallbackParams: params, sig };
   }
-  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
+  const emDistinct = textures.emissiveMap && textures.emissiveMap.key !== textures.map?.key ? 'emissiveMap-distinct' : undefined; // wgpu binds emissiveMap only when === map (r7)
+  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : emDistinct };
 }
 // a *NodeMaterial with no custom *Node slot set renders exactly like its non-node twin → plain PBR is faithful
 function hasNodes(m) {

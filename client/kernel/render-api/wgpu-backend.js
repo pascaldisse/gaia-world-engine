@@ -127,7 +127,9 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     const owned = [];
     let tex = 0;
     if (textures?.map) { const h = acquireTexture(textures.map); owned.push(h); tex = h.id; }
-    return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, tex, params.alphaTest > 0 ? params.alphaTest : -1, Float32Array.of(e[0] * k, e[1] * k, e[2] * k)] };
+    // r7: three emissiveMap === map (same descriptor key) → emissive x base texel in the shader (4th float = flag). A DISTINCT emissiveMap is not bound (flat emissive; adapter flags degraded 'emissiveMap-distinct').
+    const emBase = !!(textures?.emissiveMap?.key && textures.emissiveMap.key === textures.map?.key);
+    return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, tex, params.alphaTest > 0 ? params.alphaTest : -1, emBase ? Float32Array.of(e[0] * k, e[1] * k, e[2] * k, 1) : Float32Array.of(e[0] * k, e[1] * k, e[2] * k)] };
   }
   let lightsDirty = false;
   let sunId = 0;

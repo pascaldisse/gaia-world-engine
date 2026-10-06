@@ -10,6 +10,8 @@ import { loadModel } from './model.js';
 import { mountGltf, releaseGltf } from './gltf.js';
 import { mountHumanoid, releaseHumanoid, tickHumanoidLod, patchHumanoidClip, humanoidSig } from './humanoid.js';
 import { tickHumanoidClips } from './humanoid-clip.js';
+import { createBackend } from './render-api/three-backend.js';
+import { composeMat4 } from './render-api/interface.js';
 
 // nebula-cull scratch (see cullFadedClouds)
 const _cullPos = new THREE.Vector3();
@@ -62,8 +64,11 @@ const _probeGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);
 // Reconciles world store documents into three.js objects. Each entity gets a
 // Group; components map onto children/properties of that group.
 export class View {
-  constructor({ scene, store, audio, effects, environment, camera, renderer }) {
+  constructor({ scene, store, audio, effects, environment, camera, renderer, render, renderBackend }) {
     this.scene = scene;
+    // render-api: static level geometry goes through this backend (docs/RENDER-API.md). Engine config picks it
+    // (`renderBackend`, default 'three'); callers may inject a ready instance.
+    this.render = render ?? createBackend(renderBackend ?? 'three', { scene, camera, renderer });
     this.store = store;
     this.audio = audio;
     this.effects = effects;
@@ -513,6 +518,10 @@ export class View {
     for (const child of [...group.children]) {
       if (child.userData.kind === 'mesh-part') {
         if (child.userData.vrm) liveVrms.delete(child.userData.vrm);
+        if (child.userData.renderNodeId) {
+          this.render.removeNode(child.userData.renderNodeId); // render-api instance: detach + free own resources
+          continue;
+        }
         disposeObject(child);
         group.remove(child);
       }
@@ -597,36 +606,42 @@ export class View {
         .catch((err) => console.warn('[gaia] model load failed', spec.src, err));
       if (!recipe.parts) return; // pure-model recipe: no primitive parts to build
     }
-    for (const part of partsOf(recipe)) {
-      const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
+    const parts = partsOf(recipe);
+    const groupNode = parts.length ? this.render.adoptNode(group) : 0;
+    for (const part of parts) {
+      // static part → render-api: geometry + material handles (cache-shared), one instance under the entity group.
       // preset parts (water, flame, glow, hologram) are visual, not walkable
       // by default — but an explicit solid wins either way: architectural
       // presets (a stone tube's cave floor) can opt in with solid: true
-      mesh.userData.solid = part.solid !== undefined ? !!part.solid : !part.preset;
+      const tags = { solid: part.solid !== undefined ? !!part.solid : !part.preset };
       // sky-as-geometry sheets — the editor's skybox toggle hides these
-      if (SKY_PRESETS.has(part.preset)) mesh.userData.sky = true;
-      // invisible parts still collide — walkway/box colliders
-      if (part.visible === false) mesh.visible = false;
-      mesh.position.set(...(part.position ?? [0, 0, 0]));
-      mesh.rotation.set(...(part.rotation ?? [0, 0, 0]));
-      if (part.scale) {
-        if (Array.isArray(part.scale)) mesh.scale.set(...part.scale);
-        else mesh.scale.setScalar(part.scale);
-      }
-      mesh.castShadow = part.castShadow ?? true;
-      mesh.receiveShadow = true;
+      if (SKY_PRESETS.has(part.preset)) tags.sky = true;
+      tags.kind = 'mesh-part';
+      const nodeId = this.render.createInstance(
+        this.render.createMeshFromRecipe(part),
+        this.render.createMaterial(part),
+        composeMat4({ position: part.position, rotation: part.rotation, scale: part.scale || 1 }), // falsy scale = unscaled (the old `if (part.scale)` guard)
+        {
+          parent: groupNode,
+          euler: part.rotation ?? [0, 0, 0],
+          // invisible parts still collide — walkway/box colliders
+          visible: part.visible !== false,
+          castShadow: part.castShadow ?? true,
+          receiveShadow: true,
+          renderOrder: part.renderOrder,
+          tags,
+        },
+      );
+      const mesh = this.render.nativeNode(nodeId); // nebula cull list still holds three meshes (next round)
       // renderOrder: transparent parts that SHARE a centre (nested nebula
       // shells) have no distance to sort by, so three's back-to-front order
       // between them is arbitrary — and a dust-lane shell drawn BEFORE the
       // glow it is supposed to occlude gets washed out by the additive pass.
       // Authors state the stack explicitly instead.
-      if (part.renderOrder !== undefined) mesh.renderOrder = part.renderOrder;
       // nebula quads with a near-fade join the cull list (see cullFadedClouds)
       if (part.preset === 'nebula' && Array.isArray(part.near) && part.near[1] > part.near[0]) {
         (this.nebulaQuads ??= []).push({ mesh, near0: part.near[0] });
       }
-      mesh.userData.kind = 'mesh-part';
-      group.add(mesh);
     }
   }
 
@@ -789,6 +804,10 @@ export class View {
     this.releaseSlot(id);
     this.particleSystems.delete(id);
     unregisterTerrain(group);
+    const renderIds = [];
+    group.traverse((n) => { if (n !== group && n.userData?.renderNodeId) renderIds.push(n.userData.renderNodeId); });
+    for (const rid of renderIds) this.render.removeNode(rid);
+    if (group.userData.renderNodeId) this.render.removeNode(group.userData.renderNodeId); // adopted: handle only
     disposeObject(group);
     this.scene.remove(group);
     this.groups.delete(id);

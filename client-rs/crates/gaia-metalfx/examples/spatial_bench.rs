@@ -9,7 +9,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() {
-    use gaia_metalfx::{ScalerConfig, SpatialUpscaler, TemporalUpscaler, Upscaler};
+    use gaia_metalfx::{ScalerConfig, SpatialUpscaler, TemporalUpscaler};
 
     fn parse(s: &str) -> (u32, u32) {
         let (w, h) = s.split_once('x').expect("WxH");
@@ -115,7 +115,7 @@ fn main() {
     // Warm-up + timed runs (each its own command buffer, GPUStart/EndTime).
     let mut ms = Vec::with_capacity(iters);
     for k in 0..iters + 3 {
-        up.upscale(&queue, &input, &output).unwrap_or_else(|e| panic!("{e}"));
+        up.upscale(&input, &output).unwrap_or_else(|e| panic!("{e}"));
         let t = up.last_timing().unwrap().wait_ms();
         if k >= 3 { ms.push(t); }
     }

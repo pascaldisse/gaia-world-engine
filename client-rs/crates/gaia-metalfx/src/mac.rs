@@ -13,18 +13,6 @@ use objc2_metal_fx::{
 };
 use wgpu::hal::api::Metal;
 
-/// LOCAL copy of the `gaia-render` `Upscaler` trait shape (that lane is not
-/// merged yet). Queue-based variant: MetalFX encodes into its own command
-/// buffer on the wgpu queue (see crate docs). Swap for `gaia_render::Upscaler`
-/// once merged.
-pub trait Upscaler {
-    fn upscale(
-        &mut self,
-        queue: &wgpu::Queue,
-        input: &wgpu::Texture,
-        output: &wgpu::Texture,
-    ) -> Result<(), MetalFxError>;
-}
 
 #[derive(Debug)]
 pub enum MetalFxError {
@@ -190,8 +178,9 @@ impl SpatialUpscaler {
     }
 }
 
-impl Upscaler for SpatialUpscaler {
-    fn upscale(&mut self, _queue: &wgpu::Queue, input: &wgpu::Texture, output: &wgpu::Texture) -> Result<(), MetalFxError> {
+impl SpatialUpscaler {
+    /// Commit the upscale in its own MTLCommandBuffer; `input` must be submitted already.
+    pub fn upscale(&mut self, input: &wgpu::Texture, output: &wgpu::Texture) -> Result<(), MetalFxError> {
         let i = raw_texture(input, "input")?;
         let o = raw_texture(output, "output")?;
         check_tex(&i, "input", self.color_usage, self.cfg.input_size)?;
@@ -333,4 +322,81 @@ pub fn mark_output_initialized(device: &wgpu::Device, queue: &wgpu::Queue, outpu
         ..Default::default()
     }));
     queue.submit([enc.finish()]);
+}
+
+// ------------------------------------------------- gaia-render integration
+/// `gaia_render::Upscaler` (Queue mode) backed by `MTLFXSpatialScaler`.
+/// Scaler is rebuilt on every `resize` (MetalFX sizes are fixed at creation).
+pub struct MetalFxSpatial {
+    queue: wgpu::Queue,
+    output_format: wgpu::TextureFormat,
+    scaler: Option<SpatialUpscaler>,
+    error: Option<String>,
+    initialized_output: Option<wgpu::Texture>,
+}
+// Metal objects (MTLFXSpatialScaler, MTLCommandQueue/Buffer) are thread-safe to
+// hand between threads; the renderer uses this from exactly one render thread.
+unsafe impl Send for MetalFxSpatial {}
+impl MetalFxSpatial {
+    /// Loud Err when the device is not Metal or MetalFX spatial is unsupported.
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, output_format: wgpu::TextureFormat) -> Result<Self, MetalFxError> {
+        if !SpatialUpscaler::is_supported(device)? {
+            return Err(MetalFxError::Unsupported("MTLFXSpatialScaler"));
+        }
+        // MetalFX spatial rejects every sRGB format (format_probe) → raw UNORM storage;
+        // the caller's output texture must be created in this format (sRGB view allowed).
+        let output_format = output_format.remove_srgb_suffix();
+        mtl_format(output_format)?;
+        Ok(Self { queue: queue.clone(), output_format, scaler: None, error: None, initialized_output: None })
+    }
+}
+impl gaia_render::Upscaler for MetalFxSpatial {
+    fn name(&self) -> &str {
+        "metalfx-spatial"
+    }
+    fn submit_mode(&self) -> gaia_render::UpscaleSubmit {
+        gaia_render::UpscaleSubmit::Queue
+    }
+    fn output_usage(&self) -> wgpu::TextureUsages {
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+    }
+    fn resize(&mut self, device: &wgpu::Device, input: gaia_render::UpscaleSize, output: gaia_render::UpscaleSize) {
+        let cfg = ScalerConfig {
+            input_size: (input.width, input.height),
+            output_size: (output.width, output.height),
+            color_format: gaia_render::INTERNAL_STORAGE_FORMAT,
+            output_format: self.output_format,
+        };
+        match SpatialUpscaler::new(device, &self.queue, cfg) {
+            Ok(s) => {
+                self.scaler = Some(s);
+                self.error = None;
+            }
+            Err(e) => {
+                self.scaler = None;
+                self.error = Some(e.to_string());
+            }
+        }
+        self.initialized_output = None;
+    }
+    fn upscale(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: gaia_render::UpscaleInput<'_>,
+        output: &wgpu::Texture,
+    ) -> Result<(), gaia_render::UpscaleError> {
+        if let Some(e) = &self.error {
+            return Err(gaia_render::UpscaleError(e.clone()));
+        }
+        let scaler = self.scaler.as_mut().ok_or_else(|| gaia_render::UpscaleError("metalfx-spatial: upscale before resize".into()))?;
+        if self.initialized_output.as_ref() != Some(output) {
+            mark_output_initialized(device, queue, output); // §TRAP: wgpu lazy zero-init
+            self.initialized_output = Some(output.clone());
+        }
+        scaler.upscale(input.color, output).map_err(|e| gaia_render::UpscaleError(e.to_string()))
+    }
+    fn last_gpu_ms_blocking(&self) -> Option<f64> {
+        self.scaler.as_ref()?.last_timing().map(|t| t.wait_ms())
+    }
 }

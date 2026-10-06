@@ -13,6 +13,10 @@ pub const MAX_POINT_LIGHTS: usize = 64;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Internal color target: sRGB-encoded LDR after tonemap (filterable everywhere).
 pub const INTERNAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Storage format of the internal color texture: UNORM with an sRGB VIEW (`INTERNAL_FORMAT`)
+/// → passes write sRGB-encoded bytes; Queue upscalers (MetalFX: no sRGB formats at all,
+/// measured 10-06 "mixed sRGB inputs and outputs is not supported") read the raw texture.
+pub const INTERNAL_STORAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FORWARD_WGSL: &str = include_str!("forward.wgsl");
 const BLIT_WGSL: &str = include_str!("blit.wgsl");
 
@@ -61,19 +65,65 @@ impl Default for RenderOptions {
 /// Hook for the final scale-to-window pass. Default = `BilinearBlit`;
 /// `gaia-metalfx` implements this to plug MetalFX in.
 /// `WasmNotSend`: Send on native (render thread), no bound on wasm32.
+///
+/// Two submission models, one trait (`submit_mode` picks):
+/// - `Encoder` (default, e.g. `BilinearBlit`): `encode` records into the frame's
+///   open encoder. Works with `render` and `render_frame`.
+/// - `Queue` (e.g. MetalFX): the scaler commits its OWN command buffer on the queue,
+///   so the input must already be SUBMITTED → only `render_frame` drives it; it calls
+///   `upscale` after submitting the forward pass. Errors are returned, never swallowed.
 pub trait Upscaler: wgpu::WasmNotSend {
     /// Called whenever internal or output size changes.
     fn resize(&mut self, device: &wgpu::Device, input: UpscaleSize, output: UpscaleSize);
-    /// Encode input (internal color, depth) → output view.
+    /// Encode input (internal color, depth) → output view. Required for `Encoder` mode.
     fn encode(
         &mut self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        input: UpscaleInput<'_>,
-        output: &wgpu::TextureView,
-        timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
-    );
+        _device: &wgpu::Device,
+        _encoder: &mut wgpu::CommandEncoder,
+        _input: UpscaleInput<'_>,
+        _output: &wgpu::TextureView,
+        _timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
+        panic!("Upscaler '{}' is queue-submitted: drive it with RenderCore::render_frame", self.name());
+    }
+    fn name(&self) -> &str {
+        "upscaler"
+    }
+    fn submit_mode(&self) -> UpscaleSubmit {
+        UpscaleSubmit::Encoder
+    }
+    /// Extra usages the OUTPUT texture must carry (MetalFX: TEXTURE_BINDING).
+    fn output_usage(&self) -> wgpu::TextureUsages {
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+    }
+    /// `Queue` mode: input is submitted; commit the upscale on `queue` → `output`.
+    fn upscale(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _input: UpscaleInput<'_>,
+        _output: &wgpu::Texture,
+    ) -> Result<(), UpscaleError> {
+        Err(UpscaleError(format!("Upscaler '{}' has no queue path", self.name())))
+    }
+    /// `Queue` mode GPU time of the last `upscale` (blocks until it completes).
+    fn last_gpu_ms_blocking(&self) -> Option<f64> {
+        None
+    }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpscaleSubmit {
+    Encoder,
+    Queue,
+}
+#[derive(Debug, Clone)]
+pub struct UpscaleError(pub String);
+impl std::fmt::Display for UpscaleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for UpscaleError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpscaleSize {
@@ -157,6 +207,9 @@ impl BilinearBlit {
 }
 
 impl Upscaler for BilinearBlit {
+    fn name(&self) -> &str {
+        "bilinear"
+    }
     fn resize(&mut self, _: &wgpu::Device, _: UpscaleSize, _: UpscaleSize) {}
     fn encode(
         &mut self,
@@ -894,9 +947,9 @@ impl RenderCore {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: INTERNAL_FORMAT,
+            format: INTERNAL_STORAGE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            view_formats: &[INTERNAL_FORMAT],
         });
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("internal depth"),
@@ -910,7 +963,10 @@ impl RenderCore {
         });
         self.upscaler.resize(device, internal, output);
         self.targets = Some(Targets {
-            color_view: color.create_view(&Default::default()),
+            color_view: color.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(INTERNAL_FORMAT),
+                ..Default::default()
+            }),
             depth_view: depth.create_view(&Default::default()),
             color,
             depth,
@@ -919,13 +975,11 @@ impl RenderCore {
         });
     }
 
-    /// Encode one frame into `output` (sized `output_size`). Caller submits.
-    pub fn render(
+    fn encode_forward(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        output: &wgpu::TextureView,
         output_size: UpscaleSize,
     ) {
         self.ensure_targets(device, output_size);
@@ -991,6 +1045,20 @@ impl RenderCore {
             }
             self.last_draw_calls = draws;
         }
+    }
+
+    /// Encode one frame into `output` (sized `output_size`). Caller submits.
+    /// `Encoder`-mode upscalers only (panics loudly for `Queue` mode → use `render_frame`).
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        output: &wgpu::TextureView,
+        output_size: UpscaleSize,
+    ) {
+        self.encode_forward(device, queue, encoder, output_size);
+        let t = self.targets.as_ref().expect("targets");
         self.upscaler.encode(
             device,
             encoder,
@@ -1010,6 +1078,57 @@ impl RenderCore {
         if let Some(tm) = &self.timing {
             encoder.resolve_query_set(&tm.set, 0..4, &tm.resolve, 0);
         }
+    }
+
+    /// Render + upscale one frame into `output` texture and SUBMIT it. Works with both
+    /// upscaler modes (the only way to drive `Queue` mode, e.g. MetalFX). Anything
+    /// the caller encodes afterwards (copy to surface, readback) runs after the upscale
+    /// (same-queue order).
+    pub fn render_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        output: &wgpu::Texture,
+        output_size: UpscaleSize,
+    ) -> Result<(), UpscaleError> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("gaia-render frame"),
+        });
+        match self.upscaler.submit_mode() {
+            UpscaleSubmit::Encoder => {
+                // View in `output_format` (output may be UNORM storage w/ an sRGB view format).
+                let view = output.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(self.opts.output_format),
+                    ..Default::default()
+                });
+                self.render(device, queue, &mut encoder, &view, output_size);
+                queue.submit(Some(encoder.finish()));
+            }
+            UpscaleSubmit::Queue => {
+                self.encode_forward(device, queue, &mut encoder, output_size);
+                if let Some(tm) = &self.timing {
+                    encoder.resolve_query_set(&tm.set, 0..2, &tm.resolve, 0);
+                }
+                queue.submit(Some(encoder.finish()));
+                let t = self.targets.as_ref().expect("targets");
+                self.upscaler.upscale(
+                    device,
+                    queue,
+                    UpscaleInput {
+                        color: &t.color,
+                        color_view: &t.color_view,
+                        depth: &t.depth,
+                        size: t.internal,
+                    },
+                    output,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn upscaler_name(&self) -> &str {
+        self.upscaler.name()
     }
 
     /// Encode a copy of this frame's timestamps; call after `render`, before submit.
@@ -1042,6 +1161,13 @@ impl RenderCore {
         };
         tm.readback.unmap();
         let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 * tm.period_ns as f64 / 1e6;
+        if self.upscaler.submit_mode() == UpscaleSubmit::Queue {
+            // Upscale ran in the scaler's own command buffer: its GPU time comes from
+            // the backend; total = scene + upscale (sum, not one clock span).
+            let scene_ms = ms(ts[0], ts[1]);
+            let upscale_ms = self.upscaler.last_gpu_ms_blocking().unwrap_or(f64::NAN);
+            return Some(GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms });
+        }
         Some(GpuTimings {
             scene_ms: ms(ts[0], ts[1]),
             upscale_ms: ms(ts[2], ts[3]),

@@ -42,6 +42,8 @@ struct RenderWindowConfig {
     /// argv[1] / GAIA_GLB: render this glTF through gaia-render instead of the W1 world pass.
     glb_path: Option<PathBuf>,
     render_height: u32,
+    /// GAIA_UPSCALER: metalfx-spatial | metalfx-temporal | bilinear (default metalfx-spatial on macOS).
+    upscaler: String,
     /// Blocking GPU-timestamp readback every N frames (0 = off).
     timing_every: u32,
 }
@@ -86,6 +88,9 @@ impl RenderWindowConfig {
         let config = Self {
             glb_path,
             render_height: integer("GAIA_RENDER_HEIGHT", 720)?,
+            upscaler: std::env::var("GAIA_UPSCALER").unwrap_or_else(|_| {
+                if cfg!(target_os = "macos") { "metalfx-spatial" } else { "bilinear" }.into()
+            }),
             timing_every: integer("GAIA_TIMING_EVERY", 120)?,
             window_width: number("GAIA_NATIVE_WIDTH", 960.0)?,
             window_height: number("GAIA_NATIVE_HEIGHT", 640.0)?,
@@ -147,6 +152,12 @@ impl RenderWindowConfig {
             || config.panel_height + config.panel_margin > config.window_height
         {
             return Err("overlay panel plus SPIKE_PANEL_MARGIN must fit in the window".into());
+        }
+        if !matches!(config.upscaler.as_str(), "metalfx-spatial" | "metalfx-temporal" | "bilinear") {
+            return Err(format!(
+                "GAIA_UPSCALER must be metalfx-spatial|metalfx-temporal|bilinear, got {:?}",
+                config.upscaler
+            ));
         }
         Ok(config)
     }
@@ -468,7 +479,7 @@ struct OffscreenTarget {
 impl OffscreenTarget {
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("screenshot framebuffer"),
+            label: Some("frame target (surface copy + screenshot)"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -477,11 +488,18 @@ impl OffscreenTarget {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
+            // UNORM storage + sRGB view: MetalFX cannot write sRGB formats; bytes identical.
+            format: format.remove_srgb_suffix(),
+            // TEXTURE_BINDING: MetalFX output demands ShaderRead (Queue-mode upscaler writes here).
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[format],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(format),
+            ..Default::default()
+        });
         let depth_view = create_depth_view(device, width, height);
         let unpadded = width * BYTES_PER_PIXEL;
         let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -559,7 +577,7 @@ impl Renderer {
         window: &tauri::Window,
         capture_sender: mpsc::Sender<CaptureReady>,
         scene: RenderScene,
-        glb: Option<(&gaia_render::SceneData, u32)>,
+        glb: Option<(&gaia_render::SceneData, u32, &str)>,
         timing_every: u32,
     ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -606,7 +624,8 @@ impl Renderer {
             _ => PixelOrder::Rgba,
         };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // COPY_DST: the frame is rendered ONCE into the offscreen target, then copied here.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -744,7 +763,7 @@ impl Renderer {
             })
         };
         let core = match glb {
-            Some((data, render_height)) => {
+            Some((data, render_height, upscaler)) => {
                 let mut core = gaia_render::RenderCore::new(
                     &device,
                     &queue,
@@ -755,6 +774,7 @@ impl Renderer {
                     },
                 );
                 gaia_render::load_scene_into(&mut core, &device, &queue, data)?;
+                install_upscaler(&mut core, &device, &queue, format, upscaler)?;
                 eprintln!(
                     "[gaia-render] instances={} tris={} render_height={render_height} timestamps={}",
                     core.instance_count(),
@@ -881,8 +901,16 @@ impl Renderer {
             width: self.config.width,
             height: self.config.height,
         };
+        // ONE render per frame into the offscreen target (also the /screenshot source),
+        // then a copy to the surface. Queue-mode upscalers (MetalFX) submit inside render_frame.
         if let Some(core) = self.core.as_mut() {
-            core.render(&self.device, &self.queue, &mut encoder, &self.offscreen.view, output);
+            let started = Instant::now();
+            if let Err(error) =
+                core.render_frame(&self.device, &self.queue, &self.offscreen.texture, output)
+            {
+                panic!("[gaia-render] upscaler {} failed: {error}", core.upscaler_name());
+            }
+            self.cpu_encode_ms = started.elapsed().as_secs_f64() * 1e3;
         } else {
             self.encode_world_pass(
                 &mut encoder,
@@ -892,21 +920,15 @@ impl Renderer {
             );
         }
         if let Some(frame) = &surface_frame {
-            let view = frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            if let Some(core) = self.core.as_mut() {
-                let started = Instant::now();
-                core.render(&self.device, &self.queue, &mut encoder, &view, output);
-                self.cpu_encode_ms = started.elapsed().as_secs_f64() * 1e3;
-            } else {
-                self.encode_world_pass(
-                    &mut encoder,
-                    &view,
-                    &self.surface_depth,
-                    "surface world pass",
-                );
-            }
+            encoder.copy_texture_to_texture(
+                self.offscreen.texture.as_image_copy(),
+                frame.texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width: self.offscreen.width.min(frame.texture.width()),
+                    height: self.offscreen.height.min(frame.texture.height()),
+                    depth_or_array_layers: 1,
+                },
+            );
         }
         self.frame_index += 1;
         let read_timing = self.timing_every > 0
@@ -1030,7 +1052,8 @@ impl Renderer {
             });
         if let Some(core) = self.core.as_mut() {
             let size = gaia_render::UpscaleSize { width, height };
-            core.render(&self.device, &self.queue, &mut encoder, &target.view, size);
+            core.render_frame(&self.device, &self.queue, &target.texture, size)
+                .map_err(|error| format!("scry render: {error}"))?;
         } else {
             self.encode_world_pass(
                 &mut encoder,
@@ -1248,6 +1271,7 @@ fn main() {
     );
 
     let render_height = config.render_height;
+    let upscaler = config.upscaler.clone();
     let timing_every = config.timing_every;
     let glb = config.glb_path.as_ref().map(|path| {
         let data = gaia_render::SceneData::from_path(path)
@@ -1304,7 +1328,7 @@ fn main() {
                 &window,
                 capture_sender,
                 render_scene,
-                glb.as_ref().map(|data| (data, render_height)),
+                glb.as_ref().map(|data| (data, render_height, upscaler.as_str())),
                 timing_every,
             )
                 .map_err(std::io::Error::other)?;
@@ -1353,4 +1377,28 @@ fn main() {
                     .store(false, Ordering::Release);
             }
         });
+}
+
+/// GAIA_UPSCALER → gaia-render Upscaler. Unsupported = loud Err, no fallback.
+fn install_upscaler(
+    core: &mut gaia_render::RenderCore,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    choice: &str,
+) -> Result<(), String> {
+    match choice {
+        "bilinear" => Ok(()), // RenderCore default
+        #[cfg(target_os = "macos")]
+        "metalfx-spatial" => {
+            let up = gaia_metalfx::MetalFxSpatial::new(device, queue, format)
+                .map_err(|error| format!("GAIA_UPSCALER=metalfx-spatial: {error}"))?;
+            core.set_upscaler(Box::new(up));
+            Ok(())
+        }
+        other => {
+            let _ = (device, queue, format, &core);
+            Err(format!("GAIA_UPSCALER={other} is not available in this build"))
+        }
+    }
 }

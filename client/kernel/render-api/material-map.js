@@ -69,7 +69,7 @@ if (m.blending === 2) p.blending = 'additive';
 return p;
 }
 
-const SLOT_SIG = (m) => { let s = ''; const ga = m.userData?.gaiaRender?.baseArray; if (ga) s += `|array:${ga.uuid}:${ga.version}`; for (const slot of TEX_SLOTS) { const t = m[slot]; if (t) s += `|${slot}:${t.uuid}:${t.version}:${t.image ? 1 : 0}`; } return s; };
+const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = m[slot]; if (t) s += `|${slot}:${t.uuid}:${t.version}:${t.image ? 1 : 0}`; } return s; };
 // cheap per-frame change signature (NO allocation of params/textures, NO pixel reads). conv.sig === materialSig(m) by construction.
 export function materialSig(m, { exportNodeMaterial = null } = {}) {
   if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;
@@ -95,7 +95,7 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
 if (c.error) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
 return { kind: 'wgsl', package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
   }
-  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial && !m.userData?.gaiaRender ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
+  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
 }
 // a *NodeMaterial with no custom *Node slot set renders exactly like its non-node twin → plain PBR is faithful
 function hasNodes(m) {

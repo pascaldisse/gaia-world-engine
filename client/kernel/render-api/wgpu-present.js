@@ -1,6 +1,7 @@
 // render-api/wgpu-present.js — run the WHOLE live scene through the wasm wgpu renderer (engine seam, ?renderBackend=wgpu).
 // three still builds/animates the scene graph (game code unchanged); this replaces only the draw: scene-adapter.sync → wgpu backend → overlay canvas.
 // Params: ?renderBackend=wgpu &wgpuPkg=<url of render_wasm.js (default /pkg/render_wasm.js)> &wgpuHeight=<internal render height> &wgpuShadows=0|1 &wgpuTsl=1 (opt-in: export NodeMaterials to WGSL — dies on game custom vertex attributes today) &wgpuStats=1
+import { installGpuMirror } from './gpu-mirror.js';
 import { createWgpuBackend } from './wgpu-backend.js';
 import { createSceneAdapter } from './scene-adapter.js';
 import { exportNodeMaterial } from './tsl-export.js';
@@ -8,6 +9,7 @@ import { exportNodeMaterial } from './tsl-export.js';
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, params = new URLSearchParams(location.search) }) {
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = await import(/* @vite-ignore */ pkg);
+  installGpuMirror(renderer); // array pages the game writes straight into three's device stay readable for the wgpu core
   const host = renderer.domElement;
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:1';

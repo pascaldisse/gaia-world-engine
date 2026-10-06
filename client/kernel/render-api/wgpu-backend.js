@@ -130,7 +130,7 @@ let id;
 if (t.array) { id = gpu.createTextureArray(t.width, t.height, t.layers, bytes, t.srgb !== false); t.takeLayerUpdates?.(); }
 else id = t.srgb === false ? gpu.createTextureLinear(t.width, t.height, bytes) : gpu.createTexture(t.width, t.height, bytes); // colour space flag honored (three colorSpace)
 texStats.uploads++;
-if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version });
+if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version, fresh: t.fresh ?? null });
 return { id, key: t.key ?? null };
 }
 // r6-tsl-2: storage buffers shared per three BufferAttribute (refcounted); host bytes = the attribute's typed array as-is.
@@ -321,9 +321,16 @@ threeSkipped() { return gpu.threeSkipped(); },
     },
     // r6-tsl-2: storage-buffer data follows three's BufferAttribute.version (re-uploaded only when it moved).
     updateShaderBuffers(id) {
-      const stor = matStorage.get(id);
-      if (!stor) return 0;
       let n = 0;
+      for (const h of matTextures.get(id) ?? []) { // data-less array pages: layers written to three's device after material creation (gpu-mirror)
+        const c = h.key && texByKey.get(h.key); if (!c?.fresh) continue;
+        const t = c.fresh(); if (!t || t.version === c.version) continue;
+        const dirty = t.takeLayerUpdates(), S = t.width * t.height * 4;
+        for (const l of dirty) gpu.updateTextureLayer(c.id, l, t.data.subarray(l * S, (l + 1) * S));
+        c.version = t.version; texStats.layerUploads = (texStats.layerUploads ?? 0) + dirty.length; n++;
+      }
+      const stor = matStorage.get(id);
+      if (!stor) return n;
       for (const s of stor) if (s.h.version !== s.attr.version) { gpu.updateStorageBuffer(s.h.id, bytesOf(s.attr.array)); s.h.version = s.attr.version; n++; }
       storStats.updates += n;
       return n;

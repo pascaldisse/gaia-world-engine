@@ -1,4 +1,5 @@
 // render-api/material-map.js — three Material → render-api material description. NO three import (duck-typed).
+import { arrayMirror } from './gpu-mirror.js';
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
@@ -57,6 +58,11 @@ function textureData(t) {
 // Compressed arrays are REFUSED loudly (BC/ASTC upload not implemented). Layer updates = three's own texture.layerUpdates set (null = all layers).
 export function arrayTextureData(t) {
   const im = t?.image;
+  if (t && !im?.data && (t.isDataArrayTexture || t.isArrayTexture)) { // data-less page uploaded straight to three's GPU: read the queue.writeTexture mirror (gpu-mirror.js)
+    const m = arrayMirror(t); if (!m) return null;
+    return { array: true, width: m.w, height: m.h, layers: m.layers, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:array`, version: `${t.version}:${m.version}`, data: m.data, fresh: () => arrayTextureData(t),
+      takeLayerUpdates() { const d = [...m.dirty]; m.dirty.clear(); return d; } };
+  }
   if (!im?.data || !(im.width > 0 && im.height > 0 && im.depth > 0)) return null;
   if (t.isCompressedArrayTexture || t.isCompressedTexture) return { array: true, refused: 'compressed texture array (BC/ASTC upload not implemented)' };
   if (!isBytes(im.data) || im.data.length !== im.width * im.height * 4 * im.depth) return { array: true, refused: `array texture data is not rgba8 (${im.data.constructor?.name} len ${im.data.length} vs ${im.width}x${im.height}x4x${im.depth})` };

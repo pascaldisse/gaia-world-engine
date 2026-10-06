@@ -277,7 +277,13 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_material_no_gi(&mut self, id: u32, on: bool) {
         self.core.set_material_no_gi(&self.device, id, on);
     }
-    #[wasm_bindgen(js_name = destroyTexture)]
+    
+    /// three FrontSide material: shadow caster pass culls back faces (r9). Call after setMaterialFlags (which resets it).
+    #[wasm_bindgen(js_name = setMaterialShadowCullBack)]
+    pub fn set_material_shadow_cull_back(&mut self, id: u32, on: bool) {
+        self.core.set_material_shadow_cull_back(id, on);
+    }
+#[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);
     }

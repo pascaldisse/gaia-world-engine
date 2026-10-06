@@ -154,6 +154,9 @@ pub(crate) struct ShadowSystem {
     use_live: bool,
     pipe_opaque: wgpu::RenderPipeline,
     pipe_alpha: wgpu::RenderPipeline,
+    /// back-face-culled variants (materials with `shadow_cull_back`)
+    pipe_opaque_cull: wgpu::RenderPipeline,
+    pipe_alpha_cull: wgpu::RenderPipeline,
     pub stats: ShadowStats,
 }
 
@@ -263,6 +266,7 @@ impl ShadowSystem {
         ];
         let inst_attrs = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4];
         let make = |label: &'static str,
+                    cull: Option<wgpu::Face>,
                     layout: &wgpu::PipelineLayout,
                     vs: &str,
                     fs: Option<&str>,
@@ -294,7 +298,7 @@ impl ShadowSystem {
                     compilation_options: Default::default(),
                 }),
                 // no culling: double-sided casters, same as the forward pass.
-                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                primitive: wgpu::PrimitiveState { cull_mode: cull, ..Default::default() },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: SHADOW_FORMAT,
                     depth_write_enabled: Some(true),
@@ -311,8 +315,10 @@ impl ShadowSystem {
                 cache: None,
             })
         };
-        let pipe_opaque = make("shadow opaque", &pl_opaque, "vs_depth", None, &pos_only);
-        let pipe_alpha = make("shadow alpha-test", &pl_alpha, "vs_alpha", Some("fs_alpha"), &pos_uv);
+        let pipe_opaque = make("shadow opaque", None, &pl_opaque, "vs_depth", None, &pos_only);
+        let pipe_alpha = make("shadow alpha-test", None, &pl_alpha, "vs_alpha", Some("fs_alpha"), &pos_uv);
+        let pipe_opaque_cull = make("shadow opaque cull", Some(wgpu::Face::Back), &pl_opaque, "vs_depth", None, &pos_only);
+        let pipe_alpha_cull = make("shadow alpha-test cull", Some(wgpu::Face::Back), &pl_alpha, "vs_alpha", Some("fs_alpha"), &pos_uv);
 
         let n = opts.cascades as usize;
         let (res, layers) = if opts.enabled { (opts.resolution, n as u32) } else { (1, 1) };
@@ -398,6 +404,8 @@ impl ShadowSystem {
             use_live: false,
             pipe_opaque,
             pipe_alpha,
+            pipe_opaque_cull,
+            pipe_alpha_cull,
             stats: ShadowStats::default(),
         }
     }
@@ -680,13 +688,19 @@ impl ShadowSystem {
                     pass.set_bind_group(0, &g.bind, &[]);
                     pass.set_vertex_buffer(1, buf.slice(..));
                     let mut draws = 0u32;
-                    let mut cur_alpha: Option<bool> = None;
+                    let mut cur_alpha: Option<(bool, bool)> = None;
                     for (mesh, mat, range) in list {
                         let (Some(m), Some(gm)) = (meshes.get(mesh), materials.get(mat)) else { continue };
                         let masked = alpha_ok && gm.desc.as_ref().is_some_and(|d| d.alpha_cutoff.is_some());
-                        if cur_alpha != Some(masked) {
-                            pass.set_pipeline(if masked { &self.pipe_alpha } else { &self.pipe_opaque });
-                            cur_alpha = Some(masked);
+                        let cull = gm.shadow_cull_back;
+                        if cur_alpha != Some((masked, cull)) {
+                            pass.set_pipeline(match (masked, cull) {
+                                (false, false) => &self.pipe_opaque,
+                                (true, false) => &self.pipe_alpha,
+                                (false, true) => &self.pipe_opaque_cull,
+                                (true, true) => &self.pipe_alpha_cull,
+                            });
+                            cur_alpha = Some((masked, cull));
                         }
                         if masked {
                             pass.set_bind_group(1, &gm.bind, &[]);

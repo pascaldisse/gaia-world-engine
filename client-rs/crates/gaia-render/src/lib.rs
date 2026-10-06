@@ -375,6 +375,8 @@ pub struct MaterialFlags {
     pub no_receive_shadow: bool,
     /// true = probe GI is NOT sampled for this material (hemisphere ambient only). three attaches GI only to Standard/Physical/Lambert *NodeMaterial* (gi-attach.js isGIEligibleMaterial); plain MeshStandardMaterial (GLTFLoader figures) never gets it.
     pub no_gi: bool,
+    /// true = the shadow CASTER pass culls back faces (three: a FrontSide material renders `side = shadowSide ?? side` = FrontSide into the shadow map, so a single-sided surface whose front faces AWAY from the sun casts nothing). Default false = double-sided caster (old behaviour). Per MATERIAL.
+    pub shadow_cull_back: bool,
     /// None = default (opaque writes, blended does not).
     pub depth_write: Option<bool>,
     /// Lower draws first (sky = negative → everything else over it). Blended sort far→near inside a group.
@@ -495,6 +497,8 @@ struct GpuMaterial {
     bind: wgpu::BindGroup,
     /// Some = external WGSL pipeline; None = built-in PBR pipeline.
     pipeline: Option<wgpu::RenderPipeline>,
+    /// shadow caster pass culls back faces (MaterialFlags::shadow_cull_back)
+    shadow_cull_back: bool,
 }
 
 /// External material (three TSL node builder output): WGSL module + group(1)
@@ -1014,11 +1018,23 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
+                shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
                 desc: Some(desc),
                 bind,
                 pipeline: None,
             },
         );
+    }
+
+    /// three FrontSide material -> shadow caster pass culls back faces (see `MaterialFlags::shadow_cull_back`). Independent of `set_material_flags` ordering for the GPU material, but that call resets the flag: call AFTER it.
+    pub fn set_material_shadow_cull_back(&mut self, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        f.shadow_cull_back = on;
+        self.material_flags.insert(id, f);
+        if let Some(m) = self.materials.get_mut(&id) {
+            m.shadow_cull_back = on;
+        }
+        self.static_gen += 1; // static shadow cache must re-render
     }
 
     /// Primary material path: external WGSL + layout. Validated with naga BEFORE
@@ -1128,6 +1144,7 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
+                shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
                 desc: None,
                 bind,
                 pipeline: Some(pipeline),

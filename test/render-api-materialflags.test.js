@@ -11,7 +11,7 @@ async function fakeWgpu() {
   const calls = []; let id = 0;
   const rec = (n) => (...a) => { calls.push([n, ...a]); return ++id; };
   const gpu = new Proxy({ hasTimestamps: () => false, createMaterial: rec('createMaterial'), updateMaterial: rec('updateMaterial'), destroyMaterial: rec('destroyMaterial'), createMesh: rec('createMesh'),
-    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoGi: rec('setMaterialNoGi'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
+    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoGi: rec('setMaterialNoGi'), setMaterialShadowCullBack: rec('setMaterialShadowCullBack'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
     { get: (t, k) => (k === 'then' ? undefined : t[k] ?? (() => 0)) });
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -101,6 +101,20 @@ test('r9: SkinnedMesh + static mesh with a plain MeshStandardMaterial (Eden figu
         const after = calls.filter((c) => c[0] === 'setMaterialNoGi' || c[0] === 'setMaterialFlags').at(-1);
         assert.equal(after[0], 'setMaterialNoGi');
       }
+    }
+  }
+});
+test('wgpu-backend r9: FrontSide material → setMaterialShadowCullBack(id,true) AFTER setMaterialFlags (three shadowSide??side); DoubleSide / BackSide keep the double-sided caster', async () => {
+  for (const [side, want] of [[THREE.FrontSide, true], [THREE.DoubleSide, false], [THREE.BackSide, false]]) {
+    const { calls, backend } = await fakeWgpu();
+    const scene = new THREE.Scene(); const o = new THREE.Mesh(tri(), new THREE.MeshStandardMaterial({ side })); o.receiveShadow = false; scene.add(o); // receiveShadow:false => setMaterialFlags path also fires (reset ordering)
+    createSceneAdapter(backend, { three: THREE }).sync(scene);
+    const cull = calls.filter((c) => c[0] === 'setMaterialShadowCullBack');
+    assert.equal(cull.length > 0, want, `side=${side}`);
+    if (want) {
+      assert.equal(cull.at(-1)[2], true);
+      const lastFlags = calls.map((c) => c[0]).lastIndexOf('setMaterialFlags');
+      assert.ok(calls.map((c) => c[0]).lastIndexOf('setMaterialShadowCullBack') > lastFlags, 'cull flag pushed after the setMaterialFlags reset');
     }
   }
 });

@@ -375,12 +375,15 @@ function syncBatched(o, vis) {
 }
 function destroyBatched(r) { for (const gr of r.groups.values()) { if (gr.node) backend.removeNode(gr.node); backend.destroyMesh(gr.mesh); } r.groups.clear(); r.me.users.delete(r); stats.removed++; }
 function visit(o, parentVis, seen) {
-const vis = parentVis && o.visible !== false;
+const treeVis = parentVis && o.visible !== false; // children inherit this; layers are per OBJECT (three Renderer.js: object.layers.test(camera.layers), no inheritance)
+// r10: three draws (main pass AND shadow pass — ShadowNode adopts camera.layers.mask when the shadow camera sits on layer 0 only) only objects whose layers intersect the camera's. Honour it, else layer-gated helpers (depth-only proxies) draw in the main view.
+const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frameCamera.layers));
+if (!vis && treeVis && (o.isMesh || o.isLight)) stats.layerCulled = (stats.layerCulled ?? 0) + 1;
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
 else {
-if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (const c of o.children) visit(c, vis, seen); return; }
+if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (const c of o.children) visit(c, treeVis, seen); return; }
 if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // backend lacks createSkin/updateSkin/createSkinnedMesh
 seen.add(o);
 let rec = recs.get(o);
@@ -388,7 +391,7 @@ if (!rec) { rec = { parts: [], matrix: new Float64Array(16), fbits: 0, fro: 0, d
 else updateMesh(o, rec, vis);
 }
 }
-for (const c of o.children) visit(c, vis, seen);
+for (const c of o.children) visit(c, treeVis, seen);
 }
 // background: Color -> setBackground (linear, as three's clear colour); Texture/CubeTexture/other -> loud unsupported, clear colour kept. Never throws.
 function syncEnvironment(scene) {
@@ -481,7 +484,7 @@ stats,
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
-epoch++; stats.frames++; frameScene = scene; frameCamera = camera;
+epoch++; stats.frames++; stats.layerCulled = 0; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();
 const seen = new Set();

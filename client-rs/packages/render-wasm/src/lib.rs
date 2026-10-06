@@ -147,6 +147,12 @@ impl GaiaRender {
         if let Some(v) = opt_f32(&options, "exposure") {
             opts.exposure = v;
         }
+        if let Some(v) = opt_f32(&options, "hdrScene") {
+            opts.hdr_scene = v > 0.5;
+        }
+        if let Some(v) = opt_f32(&options, "toneMapping") {
+            opts.tone_mapping = v as u32;
+        }
         if let Some(v) = opt_f32(&options, "lightIntensityScale") {
             opts.light_intensity_scale = v;
         }
@@ -663,6 +669,26 @@ o.into()
     #[wasm_bindgen(js_name = clearBackgroundTexture)]
     pub fn clear_background_texture(&mut self) {
         self.core.clear_background_texture();
+    }
+    /// r10: three renderer.toneMapping constant (needs the core built with options.hdrScene = 1).
+    #[wasm_bindgen(js_name = setToneMapping)]
+    pub fn set_tone_mapping(&mut self, mode: u32) -> Result<(), JsError> {
+        self.core.set_tone_mapping(mode).map_err(|e| err(&e))
+    }
+    /// r10: three renderer.toneMappingExposure.
+    #[wasm_bindgen(js_name = setExposure)]
+    pub fn set_exposure(&mut self, e: f32) {
+        self.core.set_exposure(e);
+    }
+    /// r10: three BloomNode params (strength, radius, threshold, smoothWidth); `strength < 0` = bloom off. Needs options.hdrScene = 1.
+    #[wasm_bindgen(js_name = setBloom)]
+    pub fn set_bloom(&mut self, strength: f32, radius: f32, threshold: f32, smooth_width: f32) -> Result<(), JsError> {
+        let b = (strength >= 0.0).then_some(gaia_render::BloomParams { strength, radius, threshold, smooth_width });
+        self.core.set_bloom(b).map_err(|e| err(&e))
+    }
+    #[wasm_bindgen(js_name = hdrScene)]
+    pub fn hdr_scene(&self) -> bool {
+        self.core.hdr_scene()
     }
     #[wasm_bindgen(js_name = setBackgroundColor)]
     pub fn set_background_color(&mut self, rgb: &[f32]) -> Result<(), JsError> {

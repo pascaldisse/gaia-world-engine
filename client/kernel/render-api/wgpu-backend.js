@@ -512,6 +512,10 @@ createNode(mat4, parent = 0) {
     setFog(f) { gpu.setFog(f?.mode ?? 0, Float32Array.from(f?.color ?? [0, 0, 0]), f?.near ?? 0, f?.far ?? 0, f?.density ?? 0); },
     // r6-scene: scene.environment diffuse IBL. {sh: Float32Array(27) (cosine-convolved, /PI), intensity} | null
     setEnvironment(e) { if (e) gpu.setEnvironmentSh(Float32Array.from(e.sh), e.intensity ?? 1); else gpu.clearEnvironment(); },
+    // r10 post (core must be created with options.hdrScene=1; otherwise the core throws and the presenter stays on the legacy per-fragment path)
+    setToneMapping(mode) { gpu.setToneMapping(mode); },
+    setExposure(e) { gpu.setExposure(e); },
+    setBloom(b) { if (b) gpu.setBloom(b.strength, b.radius, b.threshold, b.smoothWidth ?? 0.01); else gpu.setBloom(-1, 0, 0, 0); },
     setBackground(rgb) { gpu.setBackgroundColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0)); },
     renderFrame(/* dt */) {
     if (lightsDirty) pushLights();

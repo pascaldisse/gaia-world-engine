@@ -1,0 +1,76 @@
+<!doctype html><meta charset=utf-8><title>r10 post: tone map operators + bloom, three vs wgpu</title>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js","three/addons/":"/nm/three/examples/jsm/"}}</script>
+<script type=module>
+// r10: (A) tone-map operators: scene.background = linear HDR colour, renderer.toneMapping/Exposure per case; three vs core centre pixel.
+//      (B) bloom: the game's own chain (kernel/renderer.js createRenderer: pass -> bloom(0.35,0.4,0.85) -> color.add(bloom), renderer.toneMapping ACES) vs core driven ONLY by post-bridge reading three's state.
+import * as THREE from 'three/webgpu';
+import { pass } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+import { createPostBridge } from '/kernel/post-bridge.js';
+const q = new URLSearchParams(location.search);
+const W = Number(q.get('w') ?? 640), H = Number(q.get('h') ?? 360);
+const R = window.__result = { done: false, log: [], A: [], B: {} };
+const raf = () => new Promise(requestAnimationFrame);
+const mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.cssText = 'position:absolute;left:-9000px'; document.body.appendChild(c); return c; };
+function snap(canvas) { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0); return x.getImageData(0, 0, W, H); }
+const px = (img, x, y) => { const i = (y * W + x) * 4; return [img.data[i], img.data[i + 1], img.data[i + 2]]; };
+const mean = (img) => { let r = 0, g = 0, b = 0; const n = W * H; for (let i = 0; i < n; i++) { r += img.data[i * 4]; g += img.data[i * 4 + 1]; b += img.data[i * 4 + 2]; } return [r / n, g / n, b / n].map((v) => +v.toFixed(3)); };
+const url = (img) => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(img, 0, 0); return c.toDataURL('image/png'); };
+try {
+  const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 50); cam.position.set(0, 0, 5); cam.updateMatrixWorld(true);
+  // ---------- A: operators ----------
+  const sceneA = new THREE.Scene();
+  const rA = new THREE.WebGPURenderer({ canvas: mkCanvas(), antialias: false }); rA.setPixelRatio(1); rA.setSize(W, H, false); await rA.init();
+  const cWA = mkCanvas();
+  const backend = await createWgpuBackend({ canvas: cWA, wasm, renderHeight: H, options: { hdrScene: 1 } });
+  const adapterA = createSceneAdapter(backend, { three: THREE });
+  const bridgeA = createPostBridge({ backend, renderer: rA });
+  const MODES = { Linear: THREE.LinearToneMapping, Reinhard: THREE.ReinhardToneMapping, Cineon: THREE.CineonToneMapping, ACESFilmic: THREE.ACESFilmicToneMapping, AgX: THREE.AgXToneMapping, Neutral: THREE.NeutralToneMapping };
+  const COLORS = [[0.18, 0.18, 0.18], [1, 0.5, 0.1], [4, 2, 0.5], [0.02, 0.05, 0.4], [0.9, 0.9, 0.9]];
+  for (const [name, mode] of Object.entries(MODES)) for (const ex of [1, 0.6]) for (const c of COLORS) {
+    sceneA.background = new THREE.Color().setRGB(c[0], c[1], c[2], THREE.LinearSRGBColorSpace);
+    rA.toneMapping = mode; rA.toneMappingExposure = ex;
+    rA.render(sceneA, cam); await raf(); const a = snap(rA.domElement);
+    adapterA.sync(sceneA, cam); bridgeA.tick(); backend.renderFrame(0); await raf(); const b = snap(cWA);
+    R.A.push({ name, mode, ex, c, three: px(a, W >> 1, H >> 1), wgpu: px(b, W >> 1, H >> 1) });
+  }
+  R.bridgeA = { pushes: bridgeA.stats.pushes, unsupported: [...bridgeA.stats.unsupported], error: bridgeA.stats.error };
+  // ---------- B: bloom, the game's chain ----------
+  const scene = new THREE.Scene(); scene.background = new THREE.Color('#101c30');
+  const mkQuad = (x, y, w, h, hex, k) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), side: THREE.DoubleSide })); m.position.set(x, y, 0); scene.add(m); return m; };
+  mkQuad(0, -1.6, 12, 1.2, 0x303030, 1); // dim road
+  mkQuad(-2.2, 0.4, 1.0, 1.0, 0xffffff, 6); // bright sun-like highlight (>1 HDR)
+  mkQuad(0.2, 0.2, 0.7, 0.7, 0xffb060, 3);  // warm light
+  mkQuad(2.3, 0.6, 0.5, 1.2, 0x80c0ff, 2);  // cool light
+  mkQuad(0, 1.7, 12, 0.5, 0x6aa0e0, 1.2);   // sky strip
+  const rB = new THREE.WebGPURenderer({ canvas: mkCanvas(), antialias: false }); rB.setPixelRatio(1); rB.setSize(W, H, false);
+  rB.toneMapping = THREE.ACESFilmicToneMapping; await rB.init();
+  const postProcessing = new THREE.PostProcessing(rB);
+  const scenePass = pass(scene, cam); const color = scenePass.getTextureNode('output');
+  const bloomPass = bloom(color, Number(q.get('bs') ?? 0.35), Number(q.get('br') ?? 0.4), Number(q.get('bt') ?? 0.85));
+  postProcessing.outputNode = color.add(bloomPass);
+  const cWB = mkCanvas();
+  const backendB = await createWgpuBackend({ canvas: cWB, wasm, renderHeight: H, options: { hdrScene: 1 } });
+  const adapterB = createSceneAdapter(backendB, { three: THREE });
+  const bridgeB = createPostBridge({ backend: backendB, renderer: rB, getPost: () => ({ postProcessing }) });
+  for (let i = 0; i < 4; i++) { postProcessing.render(); await raf(); }
+  const a = snap(rB.domElement);
+  adapterB.sync(scene, cam); bridgeB.tick(); backendB.renderFrame(0); await raf(); await raf(); const b = snap(cWB);
+  let sad = 0, over8 = 0; const n = W * H;
+  const dif = new ImageData(W, H);
+  for (let i = 0; i < n; i++) { let m = 0; for (let k = 0; k < 3; k++) { const d = Math.abs(a.data[i * 4 + k] - b.data[i * 4 + k]); sad += d; m = Math.max(m, d); } if (m > 8) over8++; dif.data[i * 4] = dif.data[i * 4 + 1] = dif.data[i * 4 + 2] = Math.min(255, m * 8); dif.data[i * 4 + 3] = 255; }
+  // no-bloom control: the core with bloom OFF vs three WITH bloom (shows how much the bloom term matters)
+  backendB.setBloom(null); backendB.renderFrame(0); await raf(); await raf(); const c0 = snap(cWB);
+  let sad0 = 0; for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) sad0 += Math.abs(a.data[i * 4 + k] - c0.data[i * 4 + k]);
+  R.B = { bridge: { pushes: bridgeB.stats.pushes, bloom: bridgeB.stats.bloom, toneMapping: bridgeB.stats.toneMapping, exposure: bridgeB.stats.exposure, unsupported: [...bridgeB.stats.unsupported], error: bridgeB.stats.error },
+    meanThree: mean(a), meanWgpu: mean(b), meanWgpuNoBloom: mean(c0), meanAbs: +(sad / (n * 3)).toFixed(3), pctOver8: +(100 * over8 / n).toFixed(3), meanAbsNoBloomCtl: +(sad0 / (n * 3)).toFixed(3),
+    // sample points: sun quad centre, bloom halo just right of it, dim road, sky
+    probes: Object.fromEntries([['sun', 0.2, 0.46], ['halo', 0.27, 0.47], ['warm', 0.51, 0.47], ['road', 0.5, 0.88], ['sky', 0.5, 0.05]].map(([k, fx, fy]) => [k, { three: px(a, Math.round(fx * W), Math.round(fy * H)), wgpu: px(b, Math.round(fx * W), Math.round(fy * H)) }])) };
+  R.pngs = { three: url(a), wgpu: url(b), diff: url(dif) };
+  R.adapter = { unsupported: [...adapterB.stats.unsupported], degraded: [...adapterB.stats.degraded] };
+} catch (e) { R.log.push('EXC ' + (e.stack || e)); }
+R.done = true;
+</script>

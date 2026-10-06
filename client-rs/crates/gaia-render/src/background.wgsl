@@ -37,5 +37,6 @@ fn fs_main(in: VO) -> @location(0) vec4<f32> {
         c = textureSampleLevel(flat_tex, samp, vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5), 0.0).rgb;
     }
     let e = c * bg.params.y * bg.params.z;
+    if (bg.params.w > 0.5) { return vec4<f32>(c * bg.params.y, 1.0); } // r10 HDR scene: linear out
     return vec4<f32>(e / (vec3<f32>(1.0) + e), 1.0);
 }

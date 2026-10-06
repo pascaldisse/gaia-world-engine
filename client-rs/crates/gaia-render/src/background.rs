@@ -1,6 +1,6 @@
 //! scene.background Texture / CubeTexture (r6-scene). Colour backgrounds stay the clear colour (lib.rs set_background_color).
 //! One fullscreen triangle at the start of the forward pass; bind group rebuilt only when the texture changes.
-use crate::{DEPTH_FORMAT, INTERNAL_FORMAT};
+use crate::DEPTH_FORMAT;
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -30,10 +30,12 @@ pub struct Background {
     bind: Option<wgpu::BindGroup>,
     pub kind: Option<BackgroundKind>,
     pub intensity: f32,
+    /// r10: HDR scene -> shader outputs linear (no exposure/tone map; the post resolve does both)
+    hdr: bool,
 }
 
 impl Background {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, color_format: wgpu::TextureFormat, hdr: bool) -> Self {
         let tex_entry = |binding, dim| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -63,7 +65,7 @@ impl Background {
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState { format: INTERNAL_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
                 compilation_options: Default::default(),
             }),
             primitive: Default::default(),
@@ -76,7 +78,7 @@ impl Background {
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("background sampler"), address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, address_mode_w: wgpu::AddressMode::ClampToEdge, mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
         let dummy_cube = make_texture(device, queue, 1, 1, 6, true, false, &[255u8; 24]);
         let dummy_flat = make_texture(device, queue, 1, 1, 1, false, false, &[255u8; 4]);
-        Self { pipeline, layout, uniform, sampler, dummy_cube, dummy_flat, cube: None, flat: None, bind: None, kind: None, intensity: 1.0 }
+        Self { pipeline, layout, uniform, sampler, dummy_cube, dummy_flat, cube: None, flat: None, bind: None, kind: None, intensity: 1.0, hdr }
     }
 
     pub fn clear(&mut self) {
@@ -128,7 +130,7 @@ impl Background {
         if self.kind.is_none() {
             return;
         }
-        let u = BgUniform { inv_vp: view_proj.inverse().to_cols_array_2d(), cam: cam.extend(1.0).to_array(), params: [self.kind.map_or(0, |k| k as u32) as f32, self.intensity, exposure, 0.0] };
+        let u = BgUniform { inv_vp: view_proj.inverse().to_cols_array_2d(), cam: cam.extend(1.0).to_array(), params: [self.kind.map_or(0, |k| k as u32) as f32, self.intensity, exposure, if self.hdr { 1.0 } else { 0.0 }] };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
     }
 

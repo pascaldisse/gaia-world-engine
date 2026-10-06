@@ -18,6 +18,8 @@ use std::collections::HashMap;
 pub use groups::{GroupMask, InstanceGroups};
 pub use scene::{CameraData, SceneData};
 pub use shadow::{ShadowOptions, ShadowStats};
+mod post;
+pub use post::{BloomParams, Post};
 use wgpu::util::DeviceExt;
 
 pub const MAX_POINT_LIGHTS: usize = 64;
@@ -62,6 +64,10 @@ pub struct RenderOptions {
     /// Visibility-group culling also removes hidden instances from the shadow maps (true = what you can't see casts nothing).
     /// false = hidden instances still cast. Whether the source game does either is UNVERIFIED (see NOTES round 6).
     pub groups_cull_shadows: bool,
+    /// r10: scene pass renders LINEAR HDR (Rgba16Float, no exposure/tone map in the forward shader) and `post` (bloom + tone map, three PostProcessing order) resolves it into the internal sRGB target. false = legacy per-fragment Reinhard.
+    pub hdr_scene: bool,
+    /// three tone-mapping constant used by the post resolve (0 None, 1 Linear, 2 Reinhard, 3 Cineon, 4 ACESFilmic, 6 AgX, 7 Neutral). Only with `hdr_scene`.
+    pub tone_mapping: u32,
 }
 
 impl Default for RenderOptions {
@@ -78,6 +84,8 @@ impl Default for RenderOptions {
             default_fov_y_degrees: 60.0,
             clear_color: [0.45, 0.55, 0.7, 1.0],
             light_intensity_scale: 1.0,
+            hdr_scene: false,
+            tone_mapping: 2,
             anisotropy: 8,
             fit_eye_back: 0.6,
             fit_height_bias: 0.5,
@@ -358,6 +366,8 @@ struct FrameUniform {
     cam_fwd: [f32; 4],
     env: [f32; 4],
     sh: [[f32; 4]; 9],
+    /// r10 post flags (appended LAST): x = 1 -> HDR scene (shader outputs linear, no exposure/tone map)
+    post: [f32; 4],
 }
 
 #[repr(C)]
@@ -453,6 +463,8 @@ impl Camera {
 }
 
 struct Targets {
+    /// HDR scene colour (Some when `hdr_scene`)
+    hdr_view: Option<wgpu::TextureView>,
     color: wgpu::Texture,
     color_view: wgpu::TextureView,
     depth: wgpu::Texture,
@@ -611,6 +623,9 @@ pub struct RenderCore {
     gi: gi::GiProbes,
     /// r6-scene: scene.background Texture/CubeTexture pass (colour backgrounds = clear colour).
     background: background::Background,
+    /// r10 post chain (Some iff `opts.hdr_scene`)
+    post: Option<post::Post>,
+    scene_format: wgpu::TextureFormat,
     meshes: HashMap<u32, GpuMesh>,
     textures: HashMap<u32, wgpu::TextureView>,
     materials: HashMap<u32, GpuMaterial>,
@@ -716,12 +731,14 @@ impl RenderCore {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&shadow_receiver_layout)],
             immediate_size: 0,
         });
-        let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", false);
-        let blend_pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", true);
+        let (hdr_scene, tone_mapping0) = (opts.hdr_scene, opts.tone_mapping);
+        let scene_format = if opts.hdr_scene { post::BLOOM_FORMAT } else { INTERNAL_FORMAT };
+        let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", false, scene_format);
+        let blend_pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", true, scene_format);
         let mut variant_pipelines = HashMap::new();
         for kind in [None, Some(BlendKind::Alpha), Some(BlendKind::Additive), Some(BlendKind::Subtractive)] {
             for dw in [false, true] {
-                variant_pipelines.insert((kind, dw), forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", kind, dw));
+                variant_pipelines.insert((kind, dw), forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", kind, dw, scene_format));
             }
         }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -742,6 +759,7 @@ impl RenderCore {
         };
         let white = upload_rgba8(device, queue, None, 1, 1, &[255; 4]);
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
+        frame.post = [if opts.hdr_scene { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
         frame.ambient = [opts.ambient[0], opts.ambient[1], opts.ambient[2], opts.exposure];
         let ground = opts.ambient_ground.unwrap_or(opts.ambient);
         frame.ambient_ground = [ground[0], ground[1], ground[2], 0.0];
@@ -821,7 +839,9 @@ impl RenderCore {
             frame_buffer,
             frame_bind,
             gi: gi_probes,
-            background: background::Background::new(device, queue),
+            background: background::Background::new(device, queue, scene_format, hdr_scene),
+            post: hdr_scene.then(|| post::Post::new(device, queue, INTERNAL_FORMAT, tone_mapping0)),
+            scene_format,
             meshes: HashMap::new(),
             material_lightmaps: HashMap::new(),
             instance_transforms: Vec::new(),
@@ -1309,6 +1329,7 @@ impl RenderCore {
             &desc.vertex_entry,
             &desc.fragment_entry,
             false,
+            self.scene_format,
         );
         self.materials.insert(
             id,
@@ -1332,7 +1353,7 @@ impl RenderCore {
         package_json: &str,
         textures: HashMap<String, u32>,
     ) -> Result<(), String> {
-        let m = three_material::build(device, package_json, textures, HashMap::new(), INTERNAL_FORMAT, DEPTH_FORMAT)?;
+        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT)?;
         self.materials.remove(&id);
         self.three.remove(id);
         self.three.mats.insert(id, m);
@@ -1625,6 +1646,11 @@ impl RenderCore {
     /// fragment, so the clear value = Reinhard(c * exposure) (same operator as forward.wgsl); the *Srgb target then encodes it.
     pub fn set_background_color(&mut self, rgb: [f32; 3]) {
     self.background.clear();
+    if self.opts.hdr_scene {
+        // r10: the post resolve tone-maps (three order) -> clear = raw linear HDR
+        self.opts.clear_color = [rgb[0] as f64, rgb[1] as f64, rgb[2] as f64, 1.0];
+        return;
+    }
     let e = self.frame.ambient[3];
     let t = |c: f32| { let x = c * e; (x / (1.0 + x)) as f64 };
     self.opts.clear_color = [t(rgb[0]), t(rgb[1]), t(rgb[2]), 1.0];
@@ -1654,6 +1680,25 @@ impl RenderCore {
         self.background.set_flat(device, queue, w, h, rgba, srgb, equirect, intensity)
     }
     pub fn clear_background_texture(&mut self) { self.background.clear(); }
+
+    /// r10: three `renderer.toneMapping` (constant: 0 None, 1 Linear, 2 Reinhard, 3 Cineon, 4 ACESFilmic, 6 AgX, 7 Neutral). Err for others / without `hdr_scene`.
+    pub fn set_tone_mapping(&mut self, mode: u32) -> Result<(), String> {
+        if !matches!(mode, 0 | 1 | 2 | 3 | 4 | 6 | 7) { return Err(format!("set_tone_mapping: unsupported three toneMapping constant {mode} (Custom=5 / unknown)")); }
+        self.opts.tone_mapping = mode;
+        match self.post.as_mut() { Some(p) => { p.tone_mapping = mode; Ok(()) } None => Err("set_tone_mapping: core built without hdr_scene".into()) }
+    }
+    /// r10: three `renderer.toneMappingExposure`. Legacy (non-hdr) path: scales the per-fragment Reinhard.
+    pub fn set_exposure(&mut self, e: f32) { self.frame.ambient[3] = e; self.opts.exposure = e; }
+    pub fn exposure(&self) -> f32 { self.frame.ambient[3] }
+    /// r10: three BloomNode(strength, radius, threshold[, smoothWidth]) in the post chain; None = off. Err without `hdr_scene`.
+    pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
+        match self.post.as_mut() { Some(p) => { p.bloom = b; Ok(()) } None => Err("set_bloom: core built without hdr_scene".into()) }
+    }
+    pub fn hdr_scene(&self) -> bool { self.opts.hdr_scene }
+    /// r10: GPU ms of the post chain (high pass + mip blur + resolve). Call after `encode_post_timing_readback` + submit. Native.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_post_ms_blocking(&self, device: &wgpu::Device) -> Option<f64> { self.post.as_ref()?.read_ms_blocking(device) }
+    pub fn encode_post_timing_readback(&self, encoder: &mut wgpu::CommandEncoder) { if let Some(p) = &self.post { p.encode_timing_readback(encoder); } }
 
     /// Raw frame clear colour (linear, NOT tone-mapped; the *Srgb target encodes it). Prefer `set_background_color` for three parity.
     pub fn set_clear_color(&mut self, rgba: [f64; 4]) {
@@ -1798,8 +1843,24 @@ impl RenderCore {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        let hdr_view = self.opts.hdr_scene.then(|| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("internal hdr scene"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: post::BLOOM_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }).create_view(&Default::default())
+        });
+        if let (Some(v), Some(p)) = (&hdr_view, self.post.as_mut()) {
+            p.resize(device, v, w, h);
+        }
         self.upscaler.resize(device, internal, output);
         self.targets = Some(Targets {
+            hdr_view,
             color_view: color.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(INTERNAL_FORMAT),
                 ..Default::default()
@@ -1879,7 +1940,7 @@ impl RenderCore {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("gaia-render forward"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &t.color_view,
+                    view: t.hdr_view.as_ref().unwrap_or(&t.color_view),
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -1968,6 +2029,9 @@ impl RenderCore {
                 self.three_skipped = skipped;
             }
             self.last_draw_calls = draws;
+        }
+        if let (Some(p), Some(t)) = (self.post.as_mut(), self.targets.as_ref()) {
+            p.encode(queue, encoder, &t.color_view, self.frame.ambient[3]);
         }
     }
 
@@ -2318,8 +2382,9 @@ fn forward_pipeline(
     vs: &str,
     fs: &str,
     blend: bool,
+    color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
-    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend)
+    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend, color_format)
 }
 
 fn forward_pipeline_variant(
@@ -2330,6 +2395,7 @@ fn forward_pipeline_variant(
     fs: &str,
     blend: Option<BlendKind>,
     depth_write: bool,
+    color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("gaia-render forward PBR"),
@@ -2373,7 +2439,7 @@ fn forward_pipeline_variant(
                 module,
                 entry_point: Some(fs),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: INTERNAL_FORMAT,
+                    format: color_format,
                     blend: blend.map(|k| match k {
                     BlendKind::Alpha => wgpu::BlendState::ALPHA_BLENDING,
                     BlendKind::Additive => wgpu::BlendState {

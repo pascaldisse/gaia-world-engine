@@ -26,11 +26,12 @@ fn synthetic_glb() -> Vec<u8> {
         "asset": { "version": "2.0" },
         "scene": 0, "scenes": [{ "nodes": [0, 1, 2, 3, 4] }],
         "nodes": [
-            node("A", -1.0, 1.0, 0, json!({ "gaia": { "visibilityGroups": { "draw": [50] } } })),
+            json!({ "name": "A", "translation": [-1.0, 1.0, -4.0], "children": [5], "extras": { "gaia": { "visibilityGroups": { "draw": [50] } } } }), // group node, mesh lives on a CHILD (inherits)
             node("B", 1.0, 1.0, 1, json!({ "gaia": { "visibilityGroups": { "draw": [3, 130] } } })),
             node("C", -1.0, -1.0, 2, serde_json::Value::Null),
             node("D", 1.0, -1.0, 3, json!({ "gaia": { "visibilityGroups": { "draw": [3], "parentNode": 0 } } })),
-            json!({ "name": "cam", "camera": 0 })
+            json!({ "name": "cam", "camera": 0 }),
+            json!({ "name": "A.mesh", "mesh": 0 })
         ],
         "cameras": [{ "type": "perspective", "perspective": { "yfov": 1.0471976, "znear": 0.1, "zfar": 50 } }],
         "meshes": meshes,

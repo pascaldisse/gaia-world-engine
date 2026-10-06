@@ -21,7 +21,7 @@ pub struct Draw {
     pub first_index: u32,
     pub index_count: u32,
     pub material: usize,
-    /// glTF node this primitive came from (key into `SceneData::node_groups`).
+    /// glTF node that owns this primitive's visibility groups (nearest ancestor-or-self with `node_groups`; else the primitive's own node).
     pub node: usize,
 }
 
@@ -230,6 +230,7 @@ impl SceneData {
                 default_material,
                 &mut u16_prims,
                 &mut blend_prims,
+                None,
             )?;
         }
         out.skins = crate::skin::SkinScene::from_document(doc, buffers, &mut out.notes);
@@ -269,10 +270,14 @@ fn visit(
     default_material: usize,
     u16_prims: &mut usize,
     blend_prims: &mut usize,
+    group_owner: Option<usize>,
 ) -> Result<(), LoadError> {
     let world = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+    // groups are per PART: a node without its own groups inherits the nearest ancestor's (its mesh children share them)
+    let mut group_owner = group_owner;
     if let Some(g) = parse_node_groups(node.extras()) {
         out.node_groups.insert(node.index(), g);
+        group_owner = Some(node.index());
     }
     if let Some(camera) = node.camera()
         && out.camera.is_none()
@@ -378,7 +383,7 @@ fn visit(
                 first_index,
                 index_count: out.indices.len() as u32 - first_index,
                 material,
-                node: node.index(),
+                node: group_owner.unwrap_or(node.index()),
             });
         }
     }
@@ -391,6 +396,7 @@ fn visit(
             default_material,
             u16_prims,
             blend_prims,
+            group_owner,
         )?;
     }
     Ok(())

@@ -48,7 +48,7 @@ out.uniforms = bd.uniforms.map((u) => {
   if (key) liveUniforms.push({ key, u });
   return { name: u.name, semantic, key, source, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) };
 });
-} else if (bd.texture) out.textureUuid = bd.texture.uuid;
+} else if (bd.texture) { out.textureUuid = bd.texture.uuid; out.colorSpace = bd.texture.colorSpace ?? null; }
 return out;
 }),
 }));

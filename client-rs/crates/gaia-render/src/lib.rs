@@ -814,6 +814,12 @@ impl RenderCore {
         Ok(())
     }
 
+    /// RGBA8 sampled as-is (no sRGB decode): three textures with colorSpace != srgb (r4, three_material::upload_linear).
+    pub fn create_texture_linear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+        if rgba.len() != (width * height * 4) as usize { return Err(format!("texture {id}: {} bytes != {width}x{height}x4", rgba.len())); }
+        self.textures.insert(id, three_material::upload_linear(device, queue, width, height, rgba));
+        Ok(())
+    }
     pub fn remove_texture(&mut self, id: u32) {
         self.textures.remove(&id);
     }

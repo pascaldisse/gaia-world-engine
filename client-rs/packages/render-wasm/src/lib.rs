@@ -220,6 +220,13 @@ impl GaiaRender {
             .map_err(err)?;
         Ok(id)
     }
+    /// r4 (lampas/r4-uniforms): RGBA8 sampled without sRGB decode (three colorSpace != srgb).
+    #[wasm_bindgen(js_name = createTextureLinear)]
+    pub fn create_texture_linear(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<u32, JsError> {
+        let id = self.id("texture");
+        self.core.create_texture_linear(&self.device, &self.queue, id, width, height, rgba).map_err(err)?;
+        Ok(id)
+    }
     #[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);

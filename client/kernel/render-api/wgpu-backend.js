@@ -206,7 +206,8 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
         const t = pkg.textureSources?.[b.textureUuid];
         const px = t && texturePixels(t);
         if (!px) throw new Error(`createShaderMaterial: texture binding '${b.name}' (uuid ${b.textureUuid}) has no readable pixels`);
-        const id = gpu.createTexture(px.width, px.height, px.data); owned.push(id); names.push(b.name); ids.push(id);
+        // three samples non-sRGB textures (DataTexture default NoColorSpace) without decode → linear upload (r4)
+        const id = t.colorSpace === 'srgb' ? gpu.createTexture(px.width, px.height, px.data) : gpu.createTextureLinear(px.width, px.height, px.data); owned.push(id); names.push(b.name); ids.push(id);
       }
       const id = gpu.createThreeMaterial(JSON.stringify(pkg), names, Uint32Array.from(ids));
       if (owned.length) matTextures.set(id, owned);

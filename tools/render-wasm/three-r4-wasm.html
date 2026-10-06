@@ -1,0 +1,33 @@
+<!doctype html><meta charset=utf-8><title>render-wasm r4 live uniforms + lights</title>
+<style>body{margin:0;background:#000}canvas{display:block;float:left}</style><script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r4 via the REAL browser path: three scene → scene-adapter.sync (live uniforms → setShaderUniforms) → wgpu-backend → wasm. Sprite = ONE
+// adapter/backend/material, opacity changed per frame, canvas snapshot after each frame into a 2D canvas tile. Diff vs three-ref-r4.html.
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+import { exportNodeMaterial } from '/kernel/tsl-export.js';
+import { CLEAR, SIZE, buildMaterial, makeScene } from '/three-materials.js';
+import { CASES, addLights, applyFrame } from '/three-r4.js';
+const R = window.__result = { done: false, log: [] };
+const tiles = [];
+for (const c of CASES) for (let i = 0; i < c.frames.length; i++) { const t = document.createElement('canvas'); t.width = t.height = SIZE; document.body.appendChild(t); tiles.push(t); }
+const gl = document.createElement('canvas'); gl.width = gl.height = SIZE; gl.style.position = 'absolute'; gl.style.left = '-9999px'; document.body.appendChild(gl);
+let k = 0;
+for (const c of CASES) {
+  try {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = SIZE; canvas.style.cssText = `width:${SIZE}px;height:${SIZE}px;position:absolute;left:-${4000 + k * 300}px`; document.body.appendChild(canvas);
+    const backend = await createWgpuBackend({ canvas, wasm, renderHeight: SIZE, options: { clearColor: [...CLEAR, 1] } });
+    const adapter = createSceneAdapter(backend, { exportNodeMaterial, three: THREE, tslOptions: { THREE } });
+    const m = await buildMaterial(c.base, THREE); const { scene, cam } = makeScene(THREE, m); if (c.lit) addLights(THREE, scene);
+    for (const f of c.frames) {
+      applyFrame(m, f); adapter.sync(scene, cam);
+      backend.renderFrame(0); await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+      tiles[k++].getContext('2d').drawImage(canvas, 0, 0);
+      R.log.push(c.name + ' ' + JSON.stringify(f) + ' draws=' + backend.gpu.drawCalls() + ' uniformWrites=' + (adapter.stats.uniformWrites ?? 0) + ' degraded=' + [...adapter.stats.degraded].join(','));
+    }
+  } catch (e) { R.log.push(c.name + ' EXC ' + (e.stack || e)); k += 0; }
+}
+R.ok = true; R.done = true;
+</script>

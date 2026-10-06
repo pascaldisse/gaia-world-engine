@@ -172,3 +172,8 @@ OPEN / UNVERIFIED
 - forward.wgsl: `gi_query_cascade/gi_query` port of gi-open-nodes.js queryCascadeTSL:45-78 / queryCascadesCoverageTSL:95-109 (+ createOpenQueryNode ambientReplaceTSL:116). WGSL fix hit: vector `&&` illegal → `all()`.
 - Tests: `tests/lighting.rs` 7 (device = Metal). Mutation check: x-slot +1 → `gi_disabled_probe…` fails (tolerance ±1 for GI cases).
 - Proof + numbers + gaps: docs/RENDER-API.md §10 (three vs wgpu: hemi 0.0002 mean abs, GI 0.0037, 5 px >8 of 307200).
+
+## Round 7 — EMISSIVE x emissiveMap===map (lampas/r7-emissive, 2026-10-06)
+- `MaterialDesc.emissive_from_base` -> `MaterialUniform.flags.y`; forward.wgsl `emis = emissive * raw base_tex texel` (three r180 MaterialNode.js:218-229; no vertex colour / base_color factor). render-wasm `create/updateMaterial` emissive len 4 ([3]>0.5 = flag). JS: wgpu-backend matArgs flag when emissiveMap key === map key; distinct -> flat + degraded 'emissiveMap-distinct'.
+- Test `lighting.rs::emissive_from_base_multiplies_texel_not_flat` (RED without the shader line). Proof r7-emissive.html: mean abs 0.81 / 4.8 % px >8 (was 32.75 / 60.6 flat). Detail + gaps: docs/RENDER-API.md §11.
+- Overlap: lane r6-mat (uncommitted at the time) binds a full emissive_tex (maps1.y) — supersedes this flag on merge.

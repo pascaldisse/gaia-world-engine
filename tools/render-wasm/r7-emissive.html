@@ -43,6 +43,7 @@ try {
   floor.rotation.x = -Math.PI / 2; scene.add(floor);
   const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xb8825a, roughness: 1, metalness: 0 })); box.position.set(2, 1, -1); scene.add(box); // control: no emissive
   scene.add(new THREE.HemisphereLight(new THREE.Color(0.41, 0.66, 1.0), new THREE.Color(0.13, 0.16, 0.17), 0.9));
+  scene.add(new THREE.DirectionalLight(0xffffff, 0)); // sun OFF on both sides (a scene with NO directional light leaves the core's default sun on = adapter gap, not r7)
   const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 200); cam.position.set(-6, 7, 9); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
   const cThree = mkCanvas(), cWgpu = mkCanvas();
   const renderer = new THREE.WebGPURenderer({ canvas: cThree, antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);

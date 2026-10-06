@@ -10,7 +10,7 @@ async function fakeWgpu() {
   const calls = []; let id = 0;
   const rec = (n) => (...a) => { calls.push([n, ...a]); return ++id; };
   const gpu = new Proxy({ hasTimestamps: () => false, createMaterial: rec('createMaterial'), updateMaterial: rec('updateMaterial'), destroyMaterial: rec('destroyMaterial'), createMesh: rec('createMesh'),
-    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
+    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialShadowCullBack: rec('setMaterialShadowCullBack'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
     { get: (t, k) => (k === 'then' ? undefined : t[k] ?? (() => 0)) });
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -63,5 +63,20 @@ test('wgpu-backend: receiveShadow:false on EVERY user of a material → setMater
     if (mixed) assert.notEqual(last?.[0], 'setMaterialNoReceiveShadow', 'a receiving user wins (old behaviour)');
     else assert.deepEqual([last[0], last[2]], ['setMaterialNoReceiveShadow', true]);
     if (!mixed) { b.receiveShadow = true; ad.sync(scene); assert.notEqual(calls.at(-1)[0], 'setMaterialNoReceiveShadow'); } // flip one user back → flags re-pushed without the opt-out
+  }
+});
+
+test('wgpu-backend r9: FrontSide material → setMaterialShadowCullBack(id,true) AFTER setMaterialFlags (three shadowSide??side); DoubleSide / BackSide keep the double-sided caster', async () => {
+  for (const [side, want] of [[THREE.FrontSide, true], [THREE.DoubleSide, false], [THREE.BackSide, false]]) {
+    const { calls, backend } = await fakeWgpu();
+    const scene = new THREE.Scene(); const o = new THREE.Mesh(tri(), new THREE.MeshStandardMaterial({ side })); o.receiveShadow = false; scene.add(o); // receiveShadow:false => setMaterialFlags path also fires (reset ordering)
+    createSceneAdapter(backend, { three: THREE }).sync(scene);
+    const cull = calls.filter((c) => c[0] === 'setMaterialShadowCullBack');
+    assert.equal(cull.length > 0, want, `side=${side}`);
+    if (want) {
+      assert.equal(cull.at(-1)[2], true);
+      const lastFlags = calls.map((c) => c[0]).lastIndexOf('setMaterialFlags');
+      assert.ok(calls.map((c) => c[0]).lastIndexOf('setMaterialShadowCullBack') > lastFlags, 'cull flag pushed after the setMaterialFlags reset');
+    }
   }
 });

@@ -2824,6 +2824,7 @@ dependencies = [
  "block2",
  "bytemuck",
  "gaia-core",
+ "gaia-render",
  "glam",
  "objc2-app-kit",
  "png 0.17.16",

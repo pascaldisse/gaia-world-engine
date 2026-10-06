@@ -54,7 +54,8 @@ impl Default for RenderOptions {
 
 /// Hook for the final scale-to-window pass. Default = `BilinearBlit`;
 /// `gaia-metalfx` implements this to plug MetalFX in.
-pub trait Upscaler {
+/// `WasmNotSend`: Send on native (render thread), no bound on wasm32.
+pub trait Upscaler: wgpu::WasmNotSend {
     /// Called whenever internal or output size changes.
     fn resize(&mut self, device: &wgpu::Device, input: UpscaleSize, output: UpscaleSize);
     /// Encode input (internal color, depth) → output view.

@@ -39,6 +39,11 @@ struct RenderWindowConfig {
     auto_test_ipc: bool,
     world_path: PathBuf,
     scene: SceneParameters,
+    /// argv[1] / GAIA_GLB: render this glTF through gaia-render instead of the W1 world pass.
+    glb_path: Option<PathBuf>,
+    render_height: u32,
+    /// Blocking GPU-timestamp readback every N frames (0 = off).
+    timing_every: u32,
 }
 
 impl RenderWindowConfig {
@@ -74,7 +79,14 @@ impl RenderWindowConfig {
         let world_path = std::env::var_os("GAIA_WORLD")
             .map(PathBuf::from)
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../worlds/naruko"));
+        let glb_path = std::env::args_os()
+            .nth(1)
+            .or_else(|| std::env::var_os("GAIA_GLB"))
+            .map(PathBuf::from);
         let config = Self {
+            glb_path,
+            render_height: integer("GAIA_RENDER_HEIGHT", 720)?,
+            timing_every: integer("GAIA_TIMING_EVERY", 120)?,
             window_width: number("GAIA_NATIVE_WIDTH", 960.0)?,
             window_height: number("GAIA_NATIVE_HEIGHT", 640.0)?,
             panel_width: number("SPIKE_PANEL_WIDTH", 300.0)?,
@@ -536,6 +548,9 @@ struct Renderer {
     surface_depth: wgpu::TextureView,
     pixel_order: PixelOrder,
     capture_sender: mpsc::Sender<CaptureReady>,
+    core: Option<gaia_render::RenderCore>,
+    frame_index: u64,
+    timing_every: u32,
 }
 
 impl Renderer {
@@ -543,6 +558,8 @@ impl Renderer {
         window: &tauri::Window,
         capture_sender: mpsc::Sender<CaptureReady>,
         scene: RenderScene,
+        glb: Option<(&gaia_render::SceneData, u32)>,
+        timing_every: u32,
     ) -> Result<Self, String> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let target = unsafe {
@@ -562,7 +579,11 @@ impl Renderer {
         }))
         .map_err(|error| format!("wgpu adapter: {error}"))?;
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_features: adapter.features()
+                    & gaia_render::RenderCore::OPTIONAL_FEATURES,
+                ..Default::default()
+            }))
                 .map_err(|error| format!("wgpu device: {error}"))?;
         let size = window.inner_size().map_err(|error| error.to_string())?;
         let capabilities = surface.get_capabilities(&adapter);
@@ -721,6 +742,28 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
         };
+        let core = match glb {
+            Some((data, render_height)) => {
+                let mut core = gaia_render::RenderCore::new(
+                    &device,
+                    &queue,
+                    gaia_render::RenderOptions {
+                        render_height,
+                        output_format: format,
+                        ..Default::default()
+                    },
+                );
+                gaia_render::load_scene_into(&mut core, &device, &queue, data)?;
+                eprintln!(
+                    "[gaia-render] instances={} tris={} render_height={render_height} timestamps={}",
+                    core.instance_count(),
+                    data.triangle_count(),
+                    device.features().contains(wgpu::Features::TIMESTAMP_QUERY)
+                );
+                Some(core)
+            }
+            None => None,
+        };
         let offscreen = OffscreenTarget::new(&device, format, config.width, config.height);
         let surface_depth = create_depth_view(&device, config.width, config.height);
         eprintln!(
@@ -743,6 +786,9 @@ impl Renderer {
             surface_depth,
             pixel_order,
             capture_sender,
+            core,
+            frame_index: 0,
+            timing_every,
         })
     }
 
@@ -829,23 +875,42 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("world render + framebuffer capture"),
             });
-        self.encode_world_pass(
-            &mut encoder,
-            &self.offscreen.view,
-            &self.offscreen.depth_view,
-            "offscreen world pass",
-        );
+        let output = gaia_render::UpscaleSize {
+            width: self.config.width,
+            height: self.config.height,
+        };
+        if let Some(core) = self.core.as_mut() {
+            core.render(&self.device, &self.queue, &mut encoder, &self.offscreen.view, output);
+        } else {
+            self.encode_world_pass(
+                &mut encoder,
+                &self.offscreen.view,
+                &self.offscreen.depth_view,
+                "offscreen world pass",
+            );
+        }
         if let Some(frame) = &surface_frame {
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_world_pass(
-                &mut encoder,
-                &view,
-                &self.surface_depth,
-                "surface world pass",
-            );
+            if let Some(core) = self.core.as_mut() {
+                core.render(&self.device, &self.queue, &mut encoder, &view, output);
+            } else {
+                self.encode_world_pass(
+                    &mut encoder,
+                    &view,
+                    &self.surface_depth,
+                    "surface world pass",
+                );
+            }
         }
+        self.frame_index += 1;
+        let read_timing = self.timing_every > 0
+            && self.frame_index % u64::from(self.timing_every) == 0
+            && self
+                .core
+                .as_ref()
+                .is_some_and(|core| core.encode_timing_readback(&mut encoder));
 
         if let Some(index) = self.offscreen.claim_slot() {
             let slot = &self.offscreen.slots[index];
@@ -902,6 +967,22 @@ impl Renderer {
         if let Some(frame) = surface_frame {
             self.queue.present(frame);
         }
+        if read_timing
+            && let Some(core) = &self.core
+            && let Some(t) = core.read_timings_blocking(&self.device)
+        {
+            let internal = core.internal_size().unwrap_or(output);
+            eprintln!(
+                "[gpu-ms] frame={} scene={:.3} upscale={:.3} internal={}x{} output={}x{}",
+                self.frame_index,
+                t.scene_ms,
+                t.upscale_ms,
+                internal.width,
+                internal.height,
+                output.width,
+                output.height
+            );
+        }
     }
 
     /// The moving eye: render one frame from an arbitrary pose to a per-request
@@ -940,12 +1021,17 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("scry pose render + capture"),
             });
-        self.encode_world_pass(
-            &mut encoder,
-            &target.view,
-            &target.depth_view,
-            "scry world pass",
-        );
+        if let Some(core) = self.core.as_mut() {
+            let size = gaia_render::UpscaleSize { width, height };
+            core.render(&self.device, &self.queue, &mut encoder, &target.view, size);
+        } else {
+            self.encode_world_pass(
+                &mut encoder,
+                &target.view,
+                &target.depth_view,
+                "scry world pass",
+            );
+        }
         let slot = &target.slots[0];
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -1154,6 +1240,22 @@ fn main() {
         render_scene.vertices.len()
     );
 
+    let render_height = config.render_height;
+    let timing_every = config.timing_every;
+    let glb = config.glb_path.as_ref().map(|path| {
+        let data = gaia_render::SceneData::from_path(path)
+            .unwrap_or_else(|error| panic!("load glb {}: {error}", path.display()));
+        eprintln!(
+            "[gaia-render] {} draws={} tris={} images={} points={} notes={:?}",
+            path.display(),
+            data.draws.len(),
+            data.triangle_count(),
+            data.images.len(),
+            data.points.len(),
+            data.notes
+        );
+        data
+    });
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![panel_pressed])
         .setup(move |app| {
@@ -1191,7 +1293,13 @@ fn main() {
 
             let latest = Arc::new(RwLock::new(None));
             let capture_sender = spawn_capture_worker(latest.clone());
-            let renderer = Renderer::new(&window, capture_sender, render_scene)
+            let renderer = Renderer::new(
+                &window,
+                capture_sender,
+                render_scene,
+                glb.as_ref().map(|data| (data, render_height)),
+                timing_every,
+            )
                 .map_err(std::io::Error::other)?;
             let (scry_tx, scry_rx) = mpsc::channel::<ScryRequest>();
             start_screenshot_server(native_port, latest, scry_tx)

@@ -24,7 +24,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   addEventListener('resize', size);
-  const st = { frames: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
+  const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {
     backend, adapter, canvas, stats: st, giBridge,
     // one frame: world matrices → adapter diff/push → core render. Replaces renderer.render(scene, camera) / post.render().
@@ -32,8 +32,9 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
       const a = performance.now();
       camera.updateMatrixWorld?.();
       adapter.sync(scene, camera);
+      const g0 = performance.now();
       giBridge?.tick();
-      const b = performance.now();
+      const b = performance.now(); st.adapterMs += g0 - a; st.giMs += b - g0;
       backend.renderFrame();
       const c = performance.now();
       st.frames++; st.lastSync = b - a; st.lastSubmit = c - b; st.syncMs += b - a; st.submitMs += c - b;

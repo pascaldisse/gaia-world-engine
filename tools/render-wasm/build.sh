@@ -3,7 +3,7 @@
 #   wasm-bindgen-cli pinned to the Cargo.lock wasm-bindgen version; installed into .scratch/tools if absent.
 set -euo pipefail
 R=$(cd "$(dirname "$0")/../.." && pwd)
-WBG=$(awk '/name = "wasm-bindgen"/{getline; gsub(/[" ]|version=/,""); print; exit}' "$R/client-rs/Cargo.lock")
+WBG=$(awk '/name = "wasm-bindgen"/{getline; gsub(/"/,""); sub(/^ *version *= */,""); print; exit}' "$R/client-rs/Cargo.lock")
 BIN=${WBG_BIN:-$R/.scratch/tools/bin/wasm-bindgen}
 [ -x "$BIN" ] || cargo install wasm-bindgen-cli --version "$WBG" --root "$R/.scratch/tools" --target-dir "$R/.scratch/tools-build"
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$R/.scratch/target}

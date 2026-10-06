@@ -861,6 +861,7 @@ document.addEventListener('pointerlockchange', syncCrosshair);
 // plugins self-register on window.gaia before this line — never overwrite, extend
 // (3 independent victims 07-28: scrubber, QA intro, frame-check menu)
 window.gaia = Object.assign(window.gaia ?? {}, {
+  renderer, scene, camera, // probes/proof drivers (r5-game)
   staticBatch,
   pixels, // §IRON pixel governor — proofs pin it to measure at a known ratio
   store,
@@ -910,6 +911,12 @@ function captureShot() {
   canvasToDataURL((data) => net.sendRaw({ type: 'screenshot', id, data: data.split(',')[1] }));
 }
 
+// ?renderBackend=wgpu: draw through the wasm wgpu renderer (render-api/wgpu-present.js); three keeps owning the scene graph.
+const wgpuPresent = new URLSearchParams(location.search).get('renderBackend') === 'wgpu'
+  ? await (await import('./kernel/render-api/wgpu-present.js')).createWgpuPresenter({ renderer, scene, camera, THREE })
+  : null;
+if (wgpuPresent) window.__wgpu = wgpuPresent;
+
 let last = performance.now();
 renderer.setAnimationLoop(() => {
   const now = performance.now();
@@ -956,7 +963,8 @@ renderer.setAnimationLoop(() => {
   outliner.update();
   publishPresence(now);
   staticBatch.update();
-  if (post) post.render();
+  if (wgpuPresent) wgpuPresent.frame();
+  else if (post) post.render();
   else renderer.render(scene, camera);
   if (pendingShot !== null) captureShot();
   if (pendingSnapshot) captureSnapshot();

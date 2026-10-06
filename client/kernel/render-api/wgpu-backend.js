@@ -162,13 +162,27 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   // visibility groups: node.groups = { words:Uint32Array, parent?:NodeId } → core instance mask (+ parent = that node's CORE instance).
   // A parent without a core instance yet (created later / hidden) → applied when it gets one (relinkGroupChildren).
     function applyGroups(node) {
-    if (!node.groups || !node.rid) return;
+    if (!node.groups || !node.rid || node.kind !== 'instance') return; // blocks carry no groups (core: always drawn)
     gpu.setInstanceGroups(node.rid, node.groups.words);
     const p = node.groups.parent ? nodes.get(node.groups.parent) : null;
     gpu.setInstanceGroupParent(node.rid, p?.rid ? p.rid : 0xffffffff);
   }
   function relinkGroupChildren(parentNode) { for (const n of nodes.values()) if (n.groups?.parent === parentNode.id) applyGroups(n); }
-  function applyShadowFlags(node) {
+  // native block upload: create / update / remove per visibility; `flagsDirty` re-applies shadow flags (material change = recreate).
+function pushBlock(node, flagsDirty = false) {
+  if (!node.visible || node.count === 0) { if (node.rid) { gpu.removeInstanceBlock(node.rid); node.rid = 0; } return; }
+  const colors = node.colors ?? new Float32Array(0), stride = node.colors ? node.stride : 0;
+  if (node.rid && (node.ridMat !== node.material || node.ridMesh !== node.mesh)) { gpu.removeInstanceBlock(node.rid); node.rid = 0; }
+  if (!node.rid) {
+    node.rid = gpu.createInstanceBlock(node.mesh, node.material, node.mats, colors, stride, node.count, node.world);
+    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true;
+  } else gpu.updateInstanceBlock(node.rid, node.mats, colors, stride, node.count, node.world);
+  if (flagsDirty) {
+    const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
+    gpu.setInstanceBlockFlags(node.rid, node.castShadow !== false, !!st);
+  }
+}
+function applyShadowFlags(node) {
   if (node.castShadow !== undefined) gpu.setInstanceCastShadow(node.rid, node.castShadow);
   const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
   if (st) gpu.setInstanceStatic(node.rid, true);
@@ -178,7 +192,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     node.parent = parentId || 0;
   }
   function dropRids(node) {
-    if (node.rid) { gpu.removeInstance(node.rid); node.rid = 0; }
+    if (node.rid) { if (node.kind === 'instanced') gpu.removeInstanceBlock(node.rid); else gpu.removeInstance(node.rid); node.rid = 0; }
     for (const cid of node.children) dropRids(nodes.get(cid));
   }
 
@@ -197,7 +211,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -280,8 +294,28 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
       const [pw, pv] = parentState(node); sync(node, pw, pv);
       return node.id;
     },
+    // ---- native instancing (InstancedMesh / BatchedMesh geometry): ONE core instance block, matrices stay in the caller's typed array ----
+    // mats = count×16 local mat4s (three instanceMatrix.array), flags.matrix = node matrixWorld (premultiplied in the core), flags.colors = count×stride rgb(a) (three instanceColor.array; stride 3|4).
+    createInstanced(mesh, material, mats, count, flags = {}) {
+      const node = { id: next++, kind: 'instanced', parent: 0, children: new Set(), mesh, material, rid: 0, mats, count, world: Float32Array.from(flags.matrix ?? IDENTITY_MAT4),
+        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, static: flags.static, ridMat: 0, ridMesh: 0 };
+      nodes.set(node.id, node); pushBlock(node); return node.id;
+    },
+    updateInstances(id, mats, count, matrixWorld, colors = null, colorStride = 3) {
+      const node = need(nodes, id, 'node');
+      node.mats = mats; node.count = count; if (matrixWorld) node.world = Float32Array.from(matrixWorld); node.colors = colors; node.stride = colorStride;
+      pushBlock(node);
+    },
     updateNode(id, patch = {}) {
       const node = need(nodes, id, 'node');
+      if (node.kind === 'instanced') {
+        if (patch.visible !== undefined) node.visible = !!patch.visible;
+        if (patch.material !== undefined) node.material = patch.material;
+        if (patch.castShadow !== undefined) node.castShadow = !!patch.castShadow;
+        if (patch.static !== undefined) node.static = !!patch.static;
+        if (patch.mat4) node.world = Float32Array.from(patch.mat4);
+        pushBlock(node, true); return;
+      }
       if (patch.mat4) node.local = Float64Array.from(asMat(patch.mat4));
       if (patch.visible !== undefined) node.visible = !!patch.visible;
       if (patch.material !== undefined && node.kind === 'instance') node.material = patch.material;

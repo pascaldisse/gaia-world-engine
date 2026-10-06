@@ -13,15 +13,19 @@ import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {} } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true } = {}) {
+// nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
+const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
 const geos = new Map();        // geometry → { id, sig, users:Set<rec> }  (key = geometry object; uuid dedup is implicit)
 const mats = new Map();        // material → { id, sig, epoch, params, users:Set }
 const lights = new Map();      // Light → { id, kind, sig }
-const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 0, degraded: new Set(), unsupported: new Set() };
+const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 0, updatedBy: {}, degraded: new Set(), unsupported: new Set() };
 let epoch = 0, cameraSig = '';
 // r6: HemisphereLight/AmbientLight accumulate per frame into one irradiance pair (sum = three: every light node `+=` into context.irradiance); scene.background -> setBackground
 const amb = { sky: [0, 0, 0], ground: [0, 0, 0], n: 0, sig: null, bgSig: null };
+// every backend-visible change is attributed (stats.updatedBy[reason]) — names the per-frame dirty source on a live scene; idle frame = no increments
+const upd = (why) => { stats.updated++; stats.updatedBy[why] = (stats.updatedBy[why] ?? 0) + 1; };
 
 const eqArr = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
 function geometryArrays(g, start = 0, count = Infinity) {
@@ -74,7 +78,7 @@ e.parts.set(key, p); stats.uploadsGeometry++; stats.created++;
 } else if (!geoSame(g, start, count, p.sig)) {
 const sig = geoSig(g, start, count);
 const arrays = geometryArrays(g, start, count);
-if (backend.updateMesh) { backend.updateMesh(p.id, arrays); p.sig = sig; stats.uploadsGeometry++; stats.updated++; }
+if (backend.updateMesh) { backend.updateMesh(p.id, arrays); p.sig = sig; stats.uploadsGeometry++; upd('geometry'); }
 else { // degrade: new mesh, users re-created by caller (flag)
 stats.degraded.add('updateMesh-missing:recreate');
 const old = p.id; p.id = backend.createMesh(arrays); p.sig = sig; p.stale = old; stats.uploadsGeometry++;
@@ -115,7 +119,7 @@ const old = e.id; e.id = createMat(conv);
 for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); }
 backend.destroyMaterial(old);
 }
-e.sig = conv.sig; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; stats.updated++;
+e.sig = conv.sig; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
 }
 if (conv.degraded) stats.degraded.add(conv.degraded);
 return e;
@@ -148,9 +152,9 @@ if (!gp) continue;
 const me = ensureMaterial(m);
 me.users.add(rec);
 const flags = nodeFlags(o, vis);
-const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: m, flags, node: 0 };
+const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: m, flags, node: 0, gp };
 if (o.isInstancedMesh) {
-if (backend.createInstanced) { part.node = backend.createInstanced(gp.id, me.id, instanceMats(o), o.count, { ...flags, matrix: Array.from(o.matrixWorld.elements) }); part.instV = o.instanceMatrix.version; part.instCount = o.count; }
+if (nativeInst()) { part.node = backend.createInstanced(gp.id, me.id, instanceMats(o), o.count, { ...flags, matrix: Array.from(o.matrixWorld.elements), ...instColors(o) }); part.instV = o.instanceMatrix.version; part.instC = o.instanceColor?.version ?? -1; part.instCount = o.count; }
 else { stats.degraded.add('createInstanced-missing:expanded-per-instance'); part.expanded = []; for (let i = 0; i < o.count; i++) part.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), flags)); part.instV = o.instanceMatrix.version; part.instCount = o.count; }
 } else part.node = backend.createInstance(gp.id, me.id, Array.from(o.matrixWorld.elements), flags);
 rec.parts.push(part); stats.created++;
@@ -158,6 +162,8 @@ rec.parts.push(part); stats.created++;
 return rec.parts.length > 0;
 }
 const instanceMats = (o) => o.instanceMatrix.array.subarray(0, o.count * 16);
+// instanceColor (rgb, itemSize 3) rides the same native block; absent = white
+const instColors = (o) => (o.instanceColor ? { colors: o.instanceColor.array.subarray(0, o.count * o.instanceColor.itemSize), colorStride: o.instanceColor.itemSize } : {});
 function instanceWorld(o, i) { // instanceMatrix[i] * matrixWorld (column-major 4x4)
 const a = o.matrixWorld.elements, b = o.instanceMatrix.array, off = i * 16, out = new Array(16);
 for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[off + c * 4 + k]; out[c * 4 + r] = s; }
@@ -186,7 +192,7 @@ const len = Math.hypot(...d) || 1; const dir = d.map((v) => v / len);
 const sig = `${dir}|${c}|${o.intensity}|${o.castShadow}|${vis}`;
 if (!r) { lights.set(o, { id: backend.setSun({ direction: dir, color: c, intensity: vis ? o.intensity : 0, castShadow: !!o.castShadow }), kind: 'sun', sig }); stats.created++; }
 else if (r.sig !== sig) { // interface has no updateSun: recreate (removeLight exists for all LightIds)
-backend.removeLight(r.id); r.id = backend.setSun({ direction: dir, color: c, intensity: vis ? o.intensity : 0, castShadow: !!o.castShadow }); r.sig = sig; stats.updated++; }
+backend.removeLight(r.id); r.id = backend.setSun({ direction: dir, color: c, intensity: vis ? o.intensity : 0, castShadow: !!o.castShadow }); r.sig = sig; upd('sun'); }
 return;
 }
 if (o.isPointLight) {
@@ -194,7 +200,7 @@ const e = o.matrixWorld.elements, pos = [e[12], e[13], e[14]];
 const p = { position: pos, color: c, intensity: vis ? o.intensity : 0, distance: o.distance ?? 0, decay: o.decay ?? 2 };
 const sig = JSON.stringify(p);
 if (!r) { lights.set(o, { id: backend.addPointLight(p), kind: 'point', sig }); stats.created++; }
-else if (r.sig !== sig) { backend.updatePointLight(r.id, p); r.sig = sig; stats.updated++; }
+else if (r.sig !== sig) { backend.updatePointLight(r.id, p); r.sig = sig; upd('pointLight'); }
 return;
 }
 if ((o.isHemisphereLight || o.isAmbientLight) && backend.setAmbient) { // r6: three HemisphereLightNode/AmbientLightNode: E = colour x intensity (linear), hemi mixes ground->sky by 0.5 n.y + 0.5 (light dir +Y)
@@ -255,18 +261,64 @@ if (stale) {
 const pre = mul4(mw, bi, r.pre ??= new Float64Array(16)), tmp = r.tmp ??= new Float64Array(16), L = st.last, pal = r.pal;
 for (let i = 0; i < nb; i++) { mul4b(pre, L, i * 16, tmp); pal.set(tmp, i * 16); }
 r.seenSkel = st.ver; r.lastWorld.set(mw); r.lastBind.set(bi);
-const ts0 = now(); backend.updateSkin(r.skin, pal); skinMs += now() - ts0; skinCalls++; stats.updated++; stats.skinUploads = (stats.skinUploads ?? 0) + 1;
+const ts0 = now(); backend.updateSkin(r.skin, pal); skinMs += now() - ts0; skinCalls++; upd('skin'); stats.skinUploads = (stats.skinUploads ?? 0) + 1;
 }
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0;
-if (fb !== r.fbits || fro !== r.fro) { backend.updateNode(r.node, nodeFlags(o, vis)); r.fbits = fb; r.fro = fro; stats.updated++; }
+if (fb !== r.fbits || fro !== r.fro) { backend.updateNode(r.node, nodeFlags(o, vis)); r.fbits = fb; r.fro = fro; upd('skinFlags'); }
 ensureMaterial(r.mat);
 }
 function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNode(r.node); backend.destroySkinnedMesh?.(r.mesh); backend.destroySkin?.(r.skin); stats.removed++; }
+// ---- BatchedMesh: one native instance block per geometryIndex (shared material); per-geometry vertex/index slice uploaded ONCE (geometryInfo is append-only),
+// matrices/colors/visibility re-packed only when matricesTexture/colorsTexture version, visibility bits or the instance table changed.
+const batchRecs = new Map();
+const _bm = typeof Float32Array !== 'undefined' ? new Float32Array(16) : null;
+function batchGeometry(o, gi) {
+  const g = o.geometry, gInfo = o._geometryInfo[gi], pos = g.attributes.position, nrm = g.attributes.normal, uv = g.attributes.uv;
+  const vs = gInfo.vertexStart, vc = gInfo.vertexCount;
+  const positions = Float32Array.from(pos.array.subarray(vs * 3, (vs + vc) * 3));
+  const arrays = { positions };
+  if (nrm) arrays.normals = Float32Array.from(nrm.array.subarray(vs * 3, (vs + vc) * 3));
+  if (uv) arrays.uvs = Float32Array.from(uv.array.subarray(vs * 2, (vs + vc) * 2));
+  if (g.index) { const src = g.index.array.subarray(gInfo.indexStart, gInfo.indexStart + gInfo.indexCount), ix = new Uint32Array(src.length); for (let i = 0; i < src.length; i++) ix[i] = src[i] - vs; arrays.indices = ix; }
+  return arrays;
+}
+function syncBatched(o, vis) {
+  const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+  let r = batchRecs.get(o);
+  if (r && (r.mref !== mat || r.geo !== o.geometry)) { destroyBatched(r); batchRecs.delete(o); r = null; }
+  if (!r) { r = { users: null, mref: mat, geo: o.geometry, groups: new Map(), mv: -1, cv: -1, vbits: '', ninfo: -1, fbits: -1, world: new Float64Array(16).fill(NaN), mat }; batchRecs.set(o, r); r.me = ensureMaterial(mat); r.me.users.add(r); stats.created++; }
+  ensureMaterial(mat);
+  const info = o._instanceInfo, mtex = o._matricesTexture, ctex = o._colorsTexture;
+  if (!mtex) return;
+  let vb = ''; for (let i = 0; i < info.length; i++) vb += info[i].active && info[i].visible ? '1' : '0'; // cheap: one char per instance
+  const fb = flagBits(o, vis), mw = o.matrixWorld.elements;
+  const dirty = r.mv !== mtex.version || r.cv !== (ctex?.version ?? -1) || r.vbits !== vb || r.ninfo !== info.length || !eqArr(r.world, mw);
+  if (!dirty && fb === r.fbits) return;
+  const fl = nodeFlags(o, vis);
+  if (dirty) {
+    const by = new Map();
+    for (let i = 0; i < info.length; i++) if (info[i].active && info[i].visible) { let l = by.get(info[i].geometryIndex); if (!l) by.set(info[i].geometryIndex, l = []); l.push(i); }
+    const md = mtex.image.data, cd = ctex?.image.data;
+    for (const [gi, ids] of by) {
+      const mats = new Float32Array(ids.length * 16), cols = cd ? new Float32Array(ids.length * 4) : null;
+      ids.forEach((id, k) => { mats.set(md.subarray(id * 16, id * 16 + 16), k * 16); if (cols) cols.set(cd.subarray(id * 4, id * 4 + 4), k * 4); });
+      let gr = r.groups.get(gi);
+      if (!gr) { const arrays = batchGeometry(o, gi); gr = { mesh: backend.createMesh(arrays), node: 0 }; r.groups.set(gi, gr); stats.uploadsGeometry++; }
+      if (!gr.node) gr.node = backend.createInstanced(gr.mesh, r.me.id, mats, ids.length, { ...fl, matrix: Array.from(mw), ...(cols ? { colors: cols, colorStride: 4 } : {}) });
+      else backend.updateInstances(gr.node, mats, ids.length, mw, cols, 4);
+      gr.n = ids.length; upd('batched');
+    }
+    for (const [gi, gr] of r.groups) if (!by.has(gi) && gr.node) { backend.updateInstances(gr.node, new Float32Array(0), 0, mw, null, 4); gr.n = 0; upd('batched'); }
+    r.mv = mtex.version; r.cv = ctex?.version ?? -1; r.vbits = vb; r.ninfo = info.length; r.world.set(mw);
+  }
+  if (fb !== r.fbits) { for (const gr of r.groups.values()) if (gr.node) backend.updateNode(gr.node, fl); r.fbits = fb; upd('batchedFlags'); }
+}
+function destroyBatched(r) { for (const gr of r.groups.values()) { if (gr.node) backend.removeNode(gr.node); backend.destroyMesh(gr.mesh); } r.groups.clear(); r.me.users.delete(r); stats.removed++; }
 function visit(o, parentVis, seen) {
 const vis = parentVis && o.visible !== false;
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
-if (o.isBatchedMesh) stats.unsupported.add('BatchedMesh'); // needs createBatched (per-instance geometry ids + indirect draw) — not in interface
+if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
 else {
 if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (const c of o.children) visit(c, vis, seen); return; }
 if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // backend lacks createSkin/updateSkin/createSkinnedMesh
@@ -335,25 +387,26 @@ amb.envSig = sig; stats.updated++;
 }
 function updateMesh(o, rec, vis) {
 const gone = rec.geoRef !== o.geometry || rec.dirtyGeo || (rec.mref !== o.material && (Array.isArray(o.material) || Array.isArray(rec.mref)));
-if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; stats.updated++; return; }
+if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; upd('rebuild'); return; }
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0, flagsChanged = fb !== rec.fbits || fro !== rec.fro, moved = !eqArr(rec.matrix, o.matrixWorld.elements);
 const f = flagsChanged || o.isInstancedMesh ? nodeFlags(o, vis) : null;
 const single = rec.parts.length === 1 && !Array.isArray(o.material);
 let swapped = single && rec.parts[0].mat !== o.material;
 for (const p of rec.parts) {
 if (p.expanded) { // instanced fallback
-if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), f)); p.instV = o.instanceMatrix.version; p.instCount = o.count; stats.updated++; }
+if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), f)); p.instV = o.instanceMatrix.version; p.instCount = o.count; upd('expandedRebuild'); }
 continue;
 }
-ensureGeometry(rec, p.geo, p.start, p.count); // version-compare only (no upload unless attribute/index version moved)
-const u = {};
-if (moved && !o.isInstancedMesh) u.mat4 = Array.from(o.matrixWorld.elements);
-if (flagsChanged) Object.assign(u, f);
-if (swapped) { const me = ensureMaterial(o.material); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = o.material; u.material = me.id; rec.mref = o.material; }
+if (!p.gp || !geoSame(p.geo, p.start, p.count, p.gp.sig)) { const gp2 = ensureGeometry(rec, p.geo, p.start, p.count); if (gp2) p.gp = gp2; } // fast path: in-place version compare, no key string / Map lookups
+let u = null;
+if (moved && !o.isInstancedMesh) (u ??= {}).mat4 = Array.from(o.matrixWorld.elements);
+if (flagsChanged) u = Object.assign(u ?? {}, f);
+if (swapped) { const me = ensureMaterial(o.material); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = o.material; (u ??= {}).material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
-if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count) { backend.updateInstances(p.node, instanceMats(o), o.count, Array.from(o.matrixWorld.elements)); p.instV = o.instanceMatrix.version; p.instCount = o.count; stats.updated++; }
+const ic = o.instanceColor?.version ?? -1;
+if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const c = instColors(o); backend.updateInstances(p.node, instanceMats(o), o.count, o.matrixWorld.elements, c.colors ?? null, c.colorStride); p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
 }
-if (Object.keys(u).length) { backend.updateNode(p.node, u); stats.updated++; }
+if (u) { backend.updateNode(p.node, u); upd('node'); }
 // refresh material conversion (property edits) — cheap, once per material per frame (epoch-gated inside)
 ensureMaterial(p.mat);
 }
@@ -378,6 +431,7 @@ syncEnvironment(scene);
 const t2 = now();
 for (const [o, rec] of recs) if (!seen.has(o)) { destroyParts(rec); recs.delete(o); }
 for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }
+for (const [o, r] of batchRecs) if (!seen.has(o)) { destroyBatched(r); batchRecs.delete(o); }
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
 const t3 = now();
@@ -386,12 +440,12 @@ if (camera) {
 if (updateMatrices) camera.updateMatrixWorld?.();
 const view = Array.from(camera.matrixWorldInverse?.elements ?? []), proj = Array.from(camera.projectionMatrix?.elements ?? []);
 const sig = `${view}|${proj}`;
-if (view.length === 16 && proj.length === 16 && sig !== cameraSig) { backend.setCamera(view, proj); cameraSig = sig; stats.updated++; }
+if (view.length === 16 && proj.length === 16 && sig !== cameraSig) { backend.setCamera(view, proj); cameraSig = sig; upd('camera'); }
 }
 const t4 = now();
 // last-frame phase breakdown (ms): matrixWorld (three's own updateMatrixWorld, 0 when updateMatrices=false) · visit (per-object diff + backend calls) · sweep (removed objects + gc) · camera/live uniforms
 stats.phase = { matrixWorld: t1 - t0, visit: t2 - t1, sweep: t3 - t2, camera: t4 - t3, total: t4 - t0, backendSkinUpload: skinMs, skinUploads: skinCalls };
 },
-dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
+dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of batchRecs) destroyBatched(r); batchRecs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
 };
 }

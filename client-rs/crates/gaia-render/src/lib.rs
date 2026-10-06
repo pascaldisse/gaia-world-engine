@@ -535,6 +535,17 @@ struct Instance {
     cast_shadow: bool,
 }
 
+/// Native instanced draw (three InstancedMesh / one BatchedMesh geometry): ONE mesh+material, N world transforms + optional per-instance RGBA,
+/// replaced wholesale by `update_instance_block` (no per-instance create/remove). Expanded into the same sorted batches as single instances.
+struct InstanceBlock {
+    mesh: u32,
+    material: u32,
+    transforms: Vec<[f32; 16]>,
+    /// empty = all white; else one rgba per transform
+    colors: Vec<[f32; 4]>,
+    is_static: bool,
+    cast_shadow: bool,
+}
 pub struct RenderCore {
     opts: RenderOptions,
     pub camera: Camera,
@@ -556,6 +567,9 @@ pub struct RenderCore {
     textures: HashMap<u32, wgpu::TextureView>,
     materials: HashMap<u32, GpuMaterial>,
     instances: HashMap<u32, Instance>,
+    blocks: HashMap<u32, InstanceBlock>,
+    /// per-instance rgba (vertex slot 4, @location(9)), same order as `instance_buffer`; white for plain instances.
+    instance_colors: Option<wgpu::Buffer>,
     /// Rebuilt when instances change: sorted (mesh, material) batches.
     instance_buffer: Option<wgpu::Buffer>,
     /// CPU copy of the sorted instance transforms (transparent sort).
@@ -737,6 +751,8 @@ impl RenderCore {
             textures: HashMap::new(),
             materials: HashMap::new(),
             instances: HashMap::new(),
+            blocks: HashMap::new(),
+            instance_colors: None,
             instance_buffer: None,
             batches: Vec::new(),
             instances_dirty: true,
@@ -1257,6 +1273,63 @@ impl RenderCore {
         groups::is_drawn(&self.groups, id, self.active_groups.as_ref())
     }
 
+    // ---- instance blocks (native InstancedMesh): column-major local 4x4s, premultiplied by `world` here ----
+    fn fill_block(b: &mut InstanceBlock, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: &[f32; 16]) {
+        let w = Mat4::from_cols_array(world);
+        let ident = world.iter().enumerate().all(|(i, v)| *v == if i % 5 == 0 { 1.0 } else { 0.0 });
+        let n = count.min(mats.len() / 16);
+        b.transforms.clear();
+        b.transforms.reserve(n);
+        for i in 0..n {
+            let mut t = [0.0f32; 16];
+            t.copy_from_slice(&mats[i * 16..i * 16 + 16]);
+            if !ident {
+                t = (w * Mat4::from_cols_array(&t)).to_cols_array();
+            }
+            b.transforms.push(t);
+        }
+        b.colors.clear();
+        if color_stride >= 3 && colors.len() >= n * color_stride {
+            b.colors.reserve(n);
+            for i in 0..n {
+                let c = &colors[i * color_stride..];
+                b.colors.push([c[0], c[1], c[2], if color_stride >= 4 { c[3] } else { 1.0 }]);
+            }
+        }
+    }
+    pub fn create_instance_block(&mut self, id: u32, mesh: u32, material: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
+        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), is_static: false, cast_shadow: true };
+        Self::fill_block(&mut b, mats, colors, color_stride, count, &world);
+        self.blocks.insert(id, b);
+        self.instances_dirty = true;
+    }
+    pub fn update_instance_block(&mut self, id: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
+        if let Some(b) = self.blocks.get_mut(&id) {
+            Self::fill_block(b, mats, colors, color_stride, count, &world);
+            self.instances_dirty = true;
+            if b.is_static {
+                self.static_gen += 1;
+            }
+        }
+    }
+    pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
+        if let Some(b) = self.blocks.get_mut(&id) {
+            b.cast_shadow = cast_shadow;
+            b.is_static = is_static;
+            self.instances_dirty = true;
+            self.static_gen += 1;
+        }
+    }
+    pub fn remove_instance_block(&mut self, id: u32) {
+        if self.blocks.remove(&id).is_some_and(|b| b.is_static) {
+            self.static_gen += 1;
+        }
+        self.instances_dirty = true;
+    }
+    /// Total drawn instances (single + block members).
+    pub fn drawn_instance_count(&self) -> usize {
+        self.instances.len() + self.blocks.values().map(|b| b.transforms.len()).sum::<usize>()
+    }
     pub fn instance_count(&self) -> usize {
         self.instances.len()
     }
@@ -1381,39 +1454,55 @@ impl RenderCore {
     }
 
     fn rebuild_instances(&mut self, device: &wgpu::Device) {
-        let mut ids: Vec<(&u32, &Instance)> = self.instances.iter().collect();
-        // group culling: hidden instances leave the sorted list (main passes) — and, if `groups_cull_shadows`, the casters too
+        struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], is_static: bool, cast_shadow: bool }
+        let mut all: Vec<Ent> = Vec::with_capacity(self.instances.len());
+        for (id, i) in self.instances.iter() {
+            all.push(Ent { id: Some(*id), mesh: i.mesh, material: i.material, transform: i.transform, color: [1.0; 4], is_static: i.is_static, cast_shadow: i.cast_shadow });
+        }
+        for b in self.blocks.values() {
+            for (k, t) in b.transforms.iter().enumerate() {
+                all.push(Ent { id: None, mesh: b.mesh, material: b.material, transform: *t, color: b.colors.get(k).copied().unwrap_or([1.0; 4]), is_static: b.is_static, cast_shadow: b.cast_shadow });
+            }
+        }
+        all.sort_by_key(|i| (i.mesh, i.material));
+        // group culling: hidden instances leave the sorted list (main passes) — and, if `groups_cull_shadows`, the casters too.
+        // Instance blocks carry no groups (always drawn).
         let hidden: std::collections::HashSet<u32> = if self.active_groups.is_some() {
-            ids.iter().filter(|(id, _)| !self.instance_group_visible(**id)).map(|(id, _)| **id).collect()
+            all.iter().filter_map(|e| e.id).filter(|id| !self.instance_group_visible(*id)).collect()
         } else {
             Default::default()
         };
         self.last_group_hidden = hidden.len() as u32;
         let cull_shadows = self.opts.groups_cull_shadows;
-        ids.sort_by_key(|(_, i)| (i.mesh, i.material));
-        let all: Vec<(u32, &Instance)> = ids.iter().map(|(id, i)| (**id, *i)).collect();
-        let list: Vec<&Instance> = all.iter().filter(|(id, _)| !hidden.contains(id)).map(|(_, i)| *i).collect();
+        let is_hidden = |e: &Ent| e.id.is_some_and(|id| hidden.contains(&id));
+        let list: Vec<&Ent> = all.iter().filter(|e| !is_hidden(e)).collect();
         let mut data: Vec<[f32; 16]> = Vec::with_capacity(list.len());
+        let mut cols: Vec<[f32; 4]> = Vec::with_capacity(list.len());
         self.batches.clear();
         for (n, inst) in list.iter().enumerate() {
             data.push(inst.transform);
+            cols.push(inst.color);
             let n = n as u32;
             match self.batches.last_mut() {
                 Some((m, mat, r)) if *m == inst.mesh && *mat == inst.material => r.end = n + 1,
                 _ => self.batches.push((inst.mesh, inst.material, n..n + 1)),
             }
         }
+        self.instance_colors = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("instance colours"),
+            contents: nonempty(bytemuck::cast_slice(&cols)),
+            usage: wgpu::BufferUsages::VERTEX,
+        }));
         self.instance_transforms = data.clone();
         // world-space AABBs for shadow caster culling (same order as `data`)
+        let mut bounds: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
         let casters: Vec<shadow::Caster> = all
             .iter()
-            .filter(|(id, inst)| inst.cast_shadow && (!cull_shadows || !hidden.contains(id)))
-            .map(|(_, inst)| {
-                let (lo, hi) = self
-                    .meshes
-                    .get(&inst.mesh)
-                    .map(|m| (Vec3::from_array(m.lo), Vec3::from_array(m.hi)))
-                    .unwrap_or((Vec3::ZERO, Vec3::ZERO));
+            .filter(|inst| inst.cast_shadow && (!cull_shadows || !is_hidden(inst)))
+            .map(|inst| {
+                let (lo, hi) = *bounds.entry(inst.mesh).or_insert_with(|| {
+                    self.meshes.get(&inst.mesh).map(|m| (Vec3::from_array(m.lo), Vec3::from_array(m.hi))).unwrap_or((Vec3::ZERO, Vec3::ZERO))
+                });
                 let t = Mat4::from_cols_array(&inst.transform);
                 let (mut wlo, mut whi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
                 for i in 0..8 {
@@ -1426,14 +1515,7 @@ impl RenderCore {
                     wlo = wlo.min(w);
                     whi = whi.max(w);
                 }
-                shadow::Caster {
-                    mesh: inst.mesh,
-                    material: inst.material,
-                    transform: inst.transform,
-                    is_static: inst.is_static,
-                    lo: wlo,
-                    hi: whi,
-                }
+                shadow::Caster { mesh: inst.mesh, material: inst.material, transform: inst.transform, is_static: inst.is_static, lo: wlo, hi: whi }
             })
             .collect();
         self.casters = casters;
@@ -1444,7 +1526,6 @@ impl RenderCore {
         }));
         self.instances_dirty = false;
     }
-
     fn ensure_targets(&mut self, device: &wgpu::Device, output: UpscaleSize) {
         if self.targets.as_ref().is_some_and(|t| t.output == output) {
             return;
@@ -1596,6 +1677,9 @@ impl RenderCore {
             let mut draws = 0u32;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
+                if let Some(ic) = &self.instance_colors {
+                    pass.set_vertex_buffer(4, ic.slice(..));
+                }
                 // opaque + MASK (alpha test in shader) first; BLEND batches after, far→near.
                 let eye3 = eye;
                 let mut order: Vec<usize> = (0..self.batches.len())
@@ -2032,6 +2116,12 @@ fn forward_pipeline_variant(
                         array_stride: 16,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &wgpu::vertex_attr_array![8 => Float32x4],
+                    }),
+                    // slot 4 = per-instance rgba (InstancedMesh.instanceColor), @location(9); external WGSL may ignore it.
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 16,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![9 => Float32x4],
                     }),
                 ],
                 compilation_options: Default::default(),

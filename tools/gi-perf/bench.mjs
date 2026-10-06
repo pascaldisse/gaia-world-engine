@@ -30,6 +30,7 @@ for (let rep = 1; rep <= spec.reps; rep++) for (const [name, L] of Object.entrie
   if (L.q?.includes('dsGi=off') === false) await c.evalJs(INSTALL); else await c.evalJs(`(()=>{const r=gaia.environment.renderer;window.__pb={giMs:0,giN:0,winMs:0,compMs:0,compN:0,rGpu:0,cGpu:0,gN:0,frames:0,frameDt:[]};const o=r.compute.bind(r);r.compute=(...a)=>{const t=performance.now();const v=o(...a);__pb.compMs+=performance.now()-t;return v};return 'ok'})()`);
   for (const h of L.res) for (const walk of (L.walk?.includes(h) ? [false, true] : [false])) {
     await c.evalJs(`gaia.pixels.setTargetHeight(${h})`); await c.sleep(1500);
+    if (!walk && spec.shots && rep === 1) { await c.sleep(300); writeFileSync(`${outDir}/${name}-${h}.png`, Buffer.from((await c.send('Page.captureScreenshot', { format: 'png' })).data, 'base64')); }
     const m0 = await metrics(); const res = await c.evalJs(RUN(spec.ms ?? 6000, walk)); const m1 = await metrics(); const load = +execSync('uptime').toString().match(/load averages?: ([\d.]+)/)?.[1];
     const row = { rep, load: name, h, walk, ...res, taskMsPerFrame: +((m1.TaskDuration - m0.TaskDuration) * 1000 / res.frames).toFixed(2), scriptMsPerFrame: +((m1.ScriptDuration - m0.ScriptDuration) * 1000 / res.frames).toFixed(2), loadavg: load, st, err: c.log.filter(l => !/ERR_CONNECTION_REFUSED|ladder7010/.test(l)).slice(0, 2) };
     appendFileSync(`${outDir}/rows.jsonl`, JSON.stringify(row) + '\n'); console.log(JSON.stringify(row));

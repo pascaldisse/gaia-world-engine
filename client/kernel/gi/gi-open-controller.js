@@ -22,7 +22,8 @@ export const OPEN_PARAM_DEFAULTS = {
   ambientLight: null, // 'replace': HemisphereLight-like {color, groundColor, intensity} synced every update(); null = first HemisphereLight found in the scene (cached; re-searched only if it leaves the scene)
   relocateMax: null, // world units; null = half the finest spacing
   maxMarchDist: 48, // = OPEN_MARCH_STEPS*cell/2 at 1 m cells
-  rayParallel: true, // DDGI 2-pass (trace: 1 thread per probe-ray -> ray buffer, then per-texel blend; docs/GI-RAYPAR.md). false = legacy per-texel full-ray kernels (A/B)
+  queryEarlyOut: true, // per-pixel material query skips coarser cascades where the finer one fully covers (same result, fewer probe reads; false = evaluate all cascades, A/B)
+rayParallel: true, // DDGI 2-pass (trace: 1 thread per probe-ray -> ray buffer, then per-texel blend; docs/GI-RAYPAR.md). false = legacy per-texel full-ray kernels (A/B)
 };
 
 export class GIOpen {
@@ -53,7 +54,7 @@ export class GIOpen {
     if (this.rayParallel) { const k = createRayParallelKernels({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.trace = k.trace; this.rayBuf = k.rayBuf; this.irr = k.irr; this.dep = k.dep; }
     else { this.irr = createOpenIrradianceKernel({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.dep = createOpenDepthKernel(common); }
     if (p.bounceScale != null) this.irr.bounceScale.value = p.bounceScale;
-    this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells, ambient: this.ambientMode, ambientU: this.ambientU });
+    this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells, ambient: this.ambientMode, ambientU: this.ambientU, earlyOut: p.queryEarlyOut !== false });
     this.baseCells = null; this.cursors = this.cascades.map(() => 0);
     this.stats = { frames: 0, bricksRebuilt: 0, bricksUploaded: 0, freshProbes: 0, dispatchedProbes: 0 };
     this.attachment?.attachAll(this.scene, this.queryNode);

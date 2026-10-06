@@ -32,3 +32,5 @@ Manifest `materialFlags: [{ name?: regex, extras?: {key: regex}, set: {blend: al
 ## Skinned characters (lampas/r3-skin, 10-06)
 Manifest `skinned: { nodes: regex (default '^skinned:'), clip?: regex, maxCharacters? }` → skins + joint hierarchy (ancestors kept) + ONE merged animation `skinned-characters` (first clip `<characterId>/…` touching the skin's joints). JOINTS_0 u16, WEIGHTS_0 f32. selfCheck allows skins/animations only when `skinned` is set; it does NOT check node cycles.
 Asylum: `.scratch/asylum-skinned.manifest.json` = scene-export lane's manifest + `skinned.nodes '^skinned:[co]\d{4}_'` → 88 skins / 3302 joints / 82 clips / 9604 channels, 121 MB, 8.5 s. Player parts (`skinned:player*`) excluded (all 36 class bodies sit at the start).
+## Ambient (lampas/r5-sky)
+Manifest `ambient: {sky:[r,g,b], ground:[r,g,b], scale?}` -> `scenes[0].extras.gaia.ambient {sky,ground}` (colour x scale, linear shader units; engine = hemisphere lerp by n.y). COLOR_0 is passed through if the SOURCE has it (engine multiplies rgb+alpha). DS sky vertex alpha is NOT in the DS glb (companion glb-add-vertex-colors gap, see gaia-render NOTES round 5).

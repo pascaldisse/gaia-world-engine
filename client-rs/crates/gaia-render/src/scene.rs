@@ -89,11 +89,19 @@ pub struct PointLight {
     pub range: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Hemisphere {
+    pub sky: Vec3,
+    pub ground: Vec3,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SceneData {
     pub vertices: Vec<Vertex>,
     /// TEXCOORD_1 per vertex (parallel to `vertices`; zero when absent).
     pub uv1: Vec<[f32; 2]>,
+    /// COLOR_0 per vertex (parallel to `vertices`; 1.0 when absent).
+    pub colors: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
     pub draws: Vec<Draw>,
     pub materials: Vec<Material>,
@@ -101,6 +109,8 @@ pub struct SceneData {
     pub camera: Option<CameraData>,
     pub sun: Option<DirectionalLight>,
     pub points: Vec<PointLight>,
+    /// Hemisphere ambient from `scenes[default].extras.gaia.ambient = {sky:[r,g,b], ground:[r,g,b]}` (linear, shader units).
+    pub ambient: Option<Hemisphere>,
     pub bounds_min: Vec3,
     pub bounds_max: Vec3,
     /// Contract deviations accepted while loading (u16 indices, no camera, ...).
@@ -206,6 +216,7 @@ impl SceneData {
             out.notes
                 .push("no KHR_lights_punctual directional — default sun used".into());
         }
+        out.ambient = parse_ambient(&doc);
         if out.vertices.is_empty() {
             out.bounds_min = Vec3::ZERO;
             out.bounds_max = Vec3::ZERO;
@@ -289,6 +300,11 @@ fn visit(
                 .map(|t| t.into_f32().collect())
                 .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
             out.uv1.extend_from_slice(&uv1);
+            let cols: Vec<[f32; 4]> = reader
+                .read_colors(0)
+                .map(|c| c.into_rgba_f32().collect())
+                .unwrap_or_else(|| vec![[1.0; 4]; positions.len()]);
+            out.colors.extend_from_slice(&cols);
             let base = out.vertices.len() as u32;
             for i in 0..positions.len() {
                 let p = world.transform_point3(Vec3::from_array(positions[i]));
@@ -393,4 +409,16 @@ fn parse_lightmap(doc: &gltf::Document, extras: &gltf::json::Extras) -> Option<L
         tex_coord: lm.get("texCoord").and_then(|t| t.as_u64()).unwrap_or(1) as u32,
         fac: lm.get("fac").and_then(|f| f.as_f64()).unwrap_or(0.5) as f32,
     })
+}
+
+/// `scene.extras.gaia.ambient = {sky:[r,g,b], ground:[r,g,b]}` (scene-export manifest `ambient`).
+fn parse_ambient(doc: &gltf::Document) -> Option<Hemisphere> {
+    let scene = doc.default_scene().or_else(|| doc.scenes().next())?;
+    let v: serde_json::Value = serde_json::from_str(scene.extras().as_ref()?.get()).ok()?;
+    let a = v.get("gaia")?.get("ambient")?;
+    let rgb = |k: &str| -> Option<Vec3> {
+        let c = a.get(k)?.as_array()?;
+        Some(Vec3::new(c.first()?.as_f64()? as f32, c.get(1)?.as_f64()? as f32, c.get(2)?.as_f64()? as f32))
+    };
+    Some(Hemisphere { sky: rgb("sky")?, ground: rgb("ground")? })
 }

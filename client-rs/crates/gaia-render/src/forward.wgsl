@@ -12,6 +12,7 @@ struct Frame {
     ambient: vec4<f32>,      // rgb, w = exposure
     counts: vec4<u32>,       // x = point light count
     points: array<PointLight, MAX_POINT_LIGHTS>,
+    ambient_ground: vec4<f32>, // hemisphere ambient: ground (down-facing) colour; `ambient.rgb` = sky (up-facing)
 };
 struct Material {
     base_color: vec4<f32>,
@@ -83,12 +84,13 @@ struct VsOut {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) uv1: vec2<f32>,
+    @location(4) color: vec4<f32>,
 };
 
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>,
            @location(3) m0: vec4<f32>, @location(4) m1: vec4<f32>, @location(5) m2: vec4<f32>, @location(6) m3: vec4<f32>,
-           @location(7) uv1: vec2<f32>) -> VsOut {
+           @location(7) uv1: vec2<f32>, @location(8) color: vec4<f32>) -> VsOut {
     // per-instance model matrix (instance-step vertex buffer: no storage buffers needed)
     let model = mat4x4<f32>(m0, m1, m2, m3);
     let world = model * vec4<f32>(pos, 1.0);
@@ -99,6 +101,7 @@ fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locatio
     o.normal = (model * vec4<f32>(normal, 0.0)).xyz;
     o.uv = uv;
     o.uv1 = uv1;
+    o.color = color;
     return o;
 }
 
@@ -131,6 +134,8 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     if (material.params.w > 0.5) {
         base = base * textureSample(base_tex, base_samp, in.uv);
     }
+    // glTF COLOR_0: multiplies base colour (rgb + alpha); 1.0 when the mesh has none.
+    base = base * in.color;
     // DS client rule (lightmap.mjs overlayNode): Blender OVERLAY, linear inputs.
     let fac = material.emissive.w;
     if (fac > 0.0) {
@@ -167,7 +172,9 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
         }
         color = color + brdf(n, v, d * inverseSqrt(dist2), base.rgb, metallic, rough) * pl.color.rgb * atten;
     }
-    color = color + frame.ambient.rgb * base.rgb + material.emissive.rgb;
+    // hemisphere ambient: lerp(ground, sky, 0.5 n.y + 0.5) x albedo (flat when sky == ground)
+    let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));
+    color = color + hemi * base.rgb + material.emissive.rgb;
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).

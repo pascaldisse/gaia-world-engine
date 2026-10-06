@@ -39,3 +39,22 @@ Sponza (Khronos, .scratch/sponza): 720p total 0.84–1.45 ms (load 18.75) · nat
 - wasm32: compiles (cargo build --release) — never RUN in a browser; no wasm-bindgen surface yet
 - external WGSL path proven only with forward.wgsl fed back as external (tests/shader_material.rs, Metal, 0 validation errors) — not with real TSL output
 Screenshots: .scratch/asy-window-{720,1600}.png (native window, screencapture -l) + asy-fb-*.png (framebuffer readback); Sponza: window-*.png
+
+## Round 2 (lampas, 2026-10-06 18:06–18:30)
+API additions (no removals): `Upscaler::{name, submit_mode, output_usage, upscale, last_gpu_ms_blocking}` (all defaulted; `encode` now defaulted → panics loudly for Queue mode) · `UpscaleSubmit{Encoder,Queue}` · `UpscaleError` · `RenderCore::render_frame(device, queue, &Texture, size) -> Result` (submits; only driver for Queue mode) · `upscaler_name` · `set_mesh_uv1` · `set_material_lightmap(id, tex, fac)` · `set_material_blend` · `RenderOptions.anisotropy` (8) · `INTERNAL_STORAGE_FORMAT` · `SceneData.uv1` · `scene::{Material.lightmap, Lightmap}`.
+- internal color = Rgba8Unorm storage + Rgba8UnormSrgb view: MetalFX spatial rejects EVERY sRGB format (gaia-metalfx format_probe: "mixed sRGB inputs and outputs is not supported", sRGB→sRGB also nil). Bytes identical to before.
+- render-window: ONE render per frame → offscreen (UNORM + sRGB view) → copy to surface (surface usage +COPY_DST); /screenshot reads the same frame. GAIA_UPSCALER=metalfx-spatial (default macOS)|bilinear; metalfx-temporal = loud Err (not wired).
+- mipmaps: full chain GPU-generated at `create_texture` (sRGB-view blit per level), trilinear + anisotropy. Visual: floor speckle gone (.scratch/r2/cmp-mip.png).
+- MASK = alpha test (already: params.z cutoff → discard). BLEND = sorted transparent pass (alpha blend, depth-write off, far→near by AABB center). Asylum player_start view: blend-vs-before diff 0.01 → no BLEND prim in view → UNVERIFIED visually.
+- lightmap: TEXCOORD_1 + extras.lightmap {texture,texCoord,fac} → albedo := Blender OVERLAY(albedo, lm, fac) (linear, both sRGB-decoded), THEN scene lights (= DS client default path, nari-world-companion client/ds-world/lightmap.mjs overlayNode + extension.js:197; NOT its dsLighting/MTD variants). 293/329 materials carry it. Frame mean 25.2→17.9 (darker: overlay with l<0.5 darkens).
+- tris RESOLVED: 620,554 = unique meshes (487 meshes, sum indices/3) = exporter; 730,897 = per node instance (58 meshes reused by 276 extra nodes). Both right; GPU draws 730,897.
+### Measured (release, window 1280x800pt = 2560x1600, Fifo, GPU shared w/ other lanes; total = scene + upscale)
+| path | GPU total ms (8 samples) | load avg |
+| metalfx-spatial 1152x720→2560x1600 (run 1) | 3.97–4.40 (outliers 6.3–10.6) | 24–56 |
+| metalfx-spatial (after lightmap/mips/blend) | 5.3–10.8 | 5–7 |
+| bilinear 720 | 1.80–5.8 (outlier 12.9) | 12–14 |
+| native 2560x1600 (bilinear 1:1) | 5.9–14.0 | 5–20 |
+- MetalFX `upscale` = its MTLCommandBuffer GPUEnd−GPUStart: 2.3–6.4 ms in-loop vs 1.58 ms standalone bench, and it tracks scene ms → SUSPECT (interval may include queue waiting on the forward pass / contention). Not a clean number. Need idle machine + Instruments/Metal System Trace.
+Screenshots (.scratch/r2/, framebuffer = final frame): mfx720-fb vs native1600-fb vs bil720-fb (cmp-full.png, cmp-detail.png: MetalFX crack detail sharper than bilinear, slightly softer than native) · cmp-lightmap.png · cmp-mip.png. Camera = player_start, faces a dark wall; scene still very dark (light units uncalibrated).
+### UNVERIFIED
+- MetalFX ms (above) · BLEND visuals · lightmap vs the DS client side-by-side (no pixel comparison done) · temporal (no jitter/MV) · wasm runtime (cargo check wasm32 passes).

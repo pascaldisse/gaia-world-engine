@@ -10,8 +10,8 @@ MetalFX upscale for wgpu (Pascal: render 720p → MetalFX on M1 Pro). macOS only
 - texture usage demanded (M1 Pro, measured): color = ShaderRead (wgpu TEXTURE_BINDING) · output = ShaderRead|RenderTarget (TEXTURE_BINDING|RENDER_ATTACHMENT). Checked per call → loud `Err::BadUsage`.
 - support: `supportsDevice` checked in `new()` → `Err::Unsupported`, no fallback.
 
-## Upscaler trait
-`gaia-render` lane not merged → LOCAL `Upscaler { fn upscale(&mut self, queue, input, output) -> Result }` (queue variant, not encoder: MetalFX can't share wgpu's open encoder safely). Swap to `gaia_render::Upscaler` once merged; if theirs takes `&mut CommandEncoder`, impl must still submit separately (or use `as_hal_mut` encoder → raw_command_buffer — UNTESTED, wgpu may hold an open pass encoder).
+## Upscaler trait (round 2: UNIFIED)
+LOCAL trait REMOVED. `MetalFxSpatial` = `gaia_render::Upscaler` (Queue mode): scaler rebuilt per resize, marks each new output texture initialised (§TRAP), Err on unsupported. Output format = surface format without sRGB (MetalFX accepts NO sRGB format: examples/format_probe). `SpatialUpscaler::upscale(input, output)` = inherent method.
 
 ## Measured (M1 Pro, debug build, GPUStartTime/GPUEndTime, own cb per call, 50 iters, 1108x720→3024x1964 RGBA8)
 - spatial: median 1.58 ms (min 1.20, max 2.92) · load avg ~18-23 (machine busy with other lanes)

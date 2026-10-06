@@ -40,6 +40,7 @@ out[st] = r.status === 0 ? 'valid' : (r.stderr || r.stdout).split('\n').slice(0,
 return out;
 };
 function check(name, material, object) {
+  const _p = exportNodeMaterial(material, { THREE, object }); if (process.env.R3_DUMP) fs.writeFileSync(process.env.R3_DUMP + "/" + name + ".json", JSON.stringify(_p, null, 1));
 const pkg = exportNodeMaterial(material, { THREE, object });
 assert.ok(/@vertex/.test(pkg.vertex), `${name}: vertex WGSL`);
 assert.ok(/@fragment/.test(pkg.fragment), `${name}: fragment WGSL`);

@@ -3,6 +3,8 @@
 //! resolution (`render_height`) and scales to the output through an `Upscaler`.
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
 pub mod scene;
+mod three_material;
+pub use three_material::ThreeFrame;
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -498,6 +500,10 @@ pub struct RenderCore {
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
     mipgen: BilinearBlit,
+    /// three.js TSL packages run as-is (three_material.rs).
+    three: three_material::ThreeMaterials,
+    /// value fed to TSL `time` (seconds); host-advanced via `set_three_time`.
+    three_time: f32,
 }
 
 impl RenderCore {
@@ -623,6 +629,8 @@ impl RenderCore {
             frame,
             targets: None,
             timing,
+            three: Default::default(),
+            three_time: 0.0,
         }
     }
 
@@ -945,7 +953,27 @@ impl RenderCore {
         Ok(())
     }
 
+    /// three.js TSL material package (tsl-export.js JSON) run as-is: separate vertex + fragment WGSL,
+    /// naga-reflected bindings, three's camera/object uniforms filled from gaia frame data,
+    /// attributes by name. `textures`: binding var name (e.g. `nodeUniform4`) -> texture id.
+    pub fn create_three_material(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        package_json: &str,
+        textures: HashMap<String, u32>,
+    ) -> Result<(), String> {
+        let m = three_material::build(device, package_json, textures, INTERNAL_FORMAT, DEPTH_FORMAT)?;
+        self.materials.remove(&id);
+        self.three.remove(id);
+        self.three.mats.insert(id, m);
+        Ok(())
+    }
+    pub fn set_three_time(&mut self, seconds: f32) {
+        self.three_time = seconds;
+    }
     pub fn remove_material(&mut self, id: u32) {
+        self.three.remove(id);
         self.materials.remove(&id);
     }
 
@@ -1118,6 +1146,23 @@ impl RenderCore {
         let eye = self.camera.world.transform_point3(Vec3::ZERO);
         self.frame.camera_pos = eye.extend(1.0).to_array();
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&self.frame));
+        let three_list: Vec<(u32, u32, [f32; 16])> = if self.three.mats.is_empty() {
+            Vec::new()
+        } else {
+            let mut v: Vec<_> = self.instances.iter().filter(|(_, i)| self.three.is_three(i.material)).map(|(k, i)| (*k, i.material, i.transform)).collect();
+            v.sort_by_key(|x| x.0);
+            v
+        };
+        if !three_list.is_empty() {
+            let far = self.camera.zfar.unwrap_or(f32::INFINITY);
+            let proj = match self.camera.zfar {
+                Some(f) => Mat4::perspective_rh(self.camera.yfov, aspect, self.camera.znear, f),
+                None => Mat4::perspective_infinite_rh(self.camera.yfov, aspect, self.camera.znear),
+            };
+            let frame = ThreeFrame { view: self.camera.world.inverse(), proj, camera_world: self.camera.world, near: self.camera.znear, far, time: self.three_time };
+            self.three.prepare(device, queue, &three_list, &frame, &self.textures, &self.white, &self.sampler);
+        }
+        let t = self.targets.as_ref().expect("targets");
         let c = self.opts.clear_color;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1188,6 +1233,12 @@ impl RenderCore {
                     pass.draw_indexed(0..m.index_count, 0, range.clone());
                     draws += 1;
                 }
+            }
+            if !three_list.is_empty() {
+                let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
+                let meshes = &self.meshes;
+                let mesh_of = |m: u32| meshes.get(&m).map(|g| (g.vertices.slice(..), g.indices.slice(..), g.index_count));
+                draws += self.three.draw(&mut pass, &three_list, &mesh_of, &inst_mesh);
             }
             self.last_draw_calls = draws;
         }

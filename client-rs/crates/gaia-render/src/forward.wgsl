@@ -113,6 +113,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     color = color + frame.ambient.rgb * base.rgb + material.emissive.rgb;
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
-    return vec4<f32>(e / (vec3<f32>(1.0) + e), 1.0);
+    // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).
+    return vec4<f32>(e / (vec3<f32>(1.0) + e), base.a);
 }
 

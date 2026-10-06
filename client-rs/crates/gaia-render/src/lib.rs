@@ -418,6 +418,8 @@ pub struct MaterialDesc {
 }
 
 struct GpuMesh {
+    /// Object-space AABB center (transparent sort key).
+    center: [f32; 3],
     vertices: wgpu::Buffer,
     /// TEXCOORD_1 (vertex slot 2, @location(7)); zeros until `set_mesh_uv1`.
     uv1: wgpu::Buffer,
@@ -479,6 +481,8 @@ pub struct RenderCore {
     instances: HashMap<u32, Instance>,
     /// Rebuilt when instances change: sorted (mesh, material) batches.
     instance_buffer: Option<wgpu::Buffer>,
+    /// CPU copy of the sorted instance transforms (transparent sort).
+    instance_transforms: Vec<[f32; 16]>,
     batches: Vec<(u32, u32, std::ops::Range<u32>)>,
     instances_dirty: bool,
     /// material id -> (lightmap texture id, overlay fac)
@@ -489,6 +493,9 @@ pub struct RenderCore {
     targets: Option<Targets>,
     upscaler: Box<dyn Upscaler>,
     timing: Option<Timing>,
+    /// glTF BLEND: alpha-blended, depth-write off, drawn after opaque, sorted far→near.
+    blend_pipeline: wgpu::RenderPipeline,
+    blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
     mipgen: BilinearBlit,
 }
@@ -525,7 +532,8 @@ impl RenderCore {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
             immediate_size: 0,
         });
-        let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main");
+        let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", false);
+        let blend_pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", true);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("base color sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -592,6 +600,8 @@ impl RenderCore {
             },
             upscaler: Box::new(BilinearBlit::new(device, opts.output_format)),
             mipgen,
+            blend_pipeline,
+            blend_materials: Default::default(),
             opts,
             pipeline,
             material_layout,
@@ -602,6 +612,7 @@ impl RenderCore {
             frame_bind,
             meshes: HashMap::new(),
             material_lightmaps: HashMap::new(),
+            instance_transforms: Vec::new(),
             textures: HashMap::new(),
             materials: HashMap::new(),
             instances: HashMap::new(),
@@ -655,7 +666,13 @@ impl RenderCore {
         vertices: &[scene::Vertex],
         indices: &[u32],
     ) {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for v in vertices {
+            lo = lo.min(Vec3::from_array(v.position));
+            hi = hi.max(Vec3::from_array(v.position));
+        }
         let mesh = GpuMesh {
+            center: if vertices.is_empty() { [0.0; 3] } else { ((lo + hi) * 0.5).to_array() },
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("mesh vertices"),
                 contents: nonempty(bytemuck::cast_slice(vertices)),
@@ -675,6 +692,16 @@ impl RenderCore {
             vertex_count: vertices.len() as u32,
         };
         self.meshes.insert(id, mesh);
+    }
+
+    /// glTF alphaMode BLEND for a material: drawn in the sorted transparent pass.
+    pub fn set_material_blend(&mut self, id: u32, blend: bool) {
+        if blend {
+            self.blend_materials.insert(id);
+        } else {
+            self.blend_materials.remove(&id);
+        }
+        self.instances_dirty = true;
     }
 
     /// Second UV set (TEXCOORD_1, lightmap UVs): flat u,v pairs, one per vertex.
@@ -905,6 +932,7 @@ impl RenderCore {
             &shader,
             &desc.vertex_entry,
             &desc.fragment_entry,
+            false,
         );
         self.materials.insert(
             id,
@@ -1016,6 +1044,7 @@ impl RenderCore {
                 _ => self.batches.push((inst.mesh, inst.material, n..n + 1)),
             }
         }
+        self.instance_transforms = data.clone();
         self.instance_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instance transforms"),
             contents: nonempty(bytemuck::cast_slice(&data)),
@@ -1128,11 +1157,30 @@ impl RenderCore {
             let mut draws = 0u32;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
-                for (mesh, material, range) in &self.batches {
+                // opaque + MASK (alpha test in shader) first; BLEND batches after, far→near.
+                let eye3 = eye;
+                let mut order: Vec<usize> = (0..self.batches.len())
+                    .filter(|&b| !self.blend_materials.contains(&self.batches[b].1))
+                    .collect();
+                let mut blended: Vec<(f32, usize)> = (0..self.batches.len())
+                    .filter(|&b| self.blend_materials.contains(&self.batches[b].1))
+                    .map(|b| {
+                        let (mesh, _, range) = &self.batches[b];
+                        let c = self.meshes.get(mesh).map(|m| Vec3::from_array(m.center)).unwrap_or(Vec3::ZERO);
+                        let t = Mat4::from_cols_array(&self.instance_transforms[range.start as usize]);
+                        (t.transform_point3(c).distance_squared(eye3), b)
+                    })
+                    .collect();
+                blended.sort_by(|a, b| b.0.total_cmp(&a.0));
+                let opaque_count = order.len();
+                order.extend(blended.into_iter().map(|(_, b)| b));
+                for (k, &b) in order.iter().enumerate() {
+                    let (mesh, material, range) = &self.batches[b];
                     let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
                         continue; // dangling ids: counted by caller via instance_count vs drawn
                     };
-                    pass.set_pipeline(mat.pipeline.as_ref().unwrap_or(&self.pipeline));
+                    let builtin = if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline };
+                    pass.set_pipeline(mat.pipeline.as_ref().unwrap_or(builtin));
                     pass.set_bind_group(1, &mat.bind, &[]);
                     pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_vertex_buffer(2, m.uv1.slice(..));
@@ -1383,6 +1431,9 @@ pub fn load_scene_into(
                 emissive: m.emissive,
             },
         );
+        if matches!(m.alpha, scene::AlphaMode::Blend) {
+            core.set_material_blend(i as u32, true);
+        }
         if let Some(lm) = m.lightmap {
             core.set_material_lightmap(device, i as u32, lm.image as u32, lm.fac);
         }
@@ -1427,6 +1478,7 @@ fn forward_pipeline(
     module: &wgpu::ShaderModule,
     vs: &str,
     fs: &str,
+    blend: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("gaia-render forward PBR"),
@@ -1459,7 +1511,7 @@ fn forward_pipeline(
                 entry_point: Some(fs),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: INTERNAL_FORMAT,
-                    blend: None,
+                    blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -1472,7 +1524,8 @@ fn forward_pipeline(
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
+                // transparent pass tests depth but does not write it (sorted back-to-front)
+                depth_write_enabled: Some(!blend),
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),

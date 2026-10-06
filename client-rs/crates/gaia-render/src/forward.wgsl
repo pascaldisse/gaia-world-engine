@@ -13,6 +13,11 @@ struct Frame {
     counts: vec4<u32>,       // x = point light count
     points: array<PointLight, MAX_POINT_LIGHTS>,
     ambient_ground: vec4<f32>, // hemisphere ambient: ground (down-facing) colour; `ambient.rgb` = sky (up-facing)
+    fog_color: vec4<f32>,    // rgb linear; w = mode (0 none, 1 smoothstep(near,far) [three Fog], 2 exp2 [three FogExp2])
+    fog_params: vec4<f32>,   // x near, y far, z density
+    cam_fwd: vec4<f32>,      // xyz camera forward (view depth for fog)
+    env: vec4<f32>,          // x = IBL diffuse on (1) / off (0), y = intensity
+    sh: array<vec4<f32>, 9>, // IBL diffuse irradiance, SH9, already cosine-convolved and /PI: E(n)/PI = sum Y_i(n) sh[i].rgb
 };
 struct Material {
     base_color: vec4<f32>,
@@ -228,6 +233,24 @@ fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locatio
     return o;
 }
 
+fn sh_irradiance(n: vec3<f32>) -> vec3<f32> {
+    var r = frame.sh[0].rgb * 0.282095;
+    r = r + frame.sh[1].rgb * (0.488603 * n.y) + frame.sh[2].rgb * (0.488603 * n.z) + frame.sh[3].rgb * (0.488603 * n.x);
+    r = r + frame.sh[4].rgb * (1.092548 * n.x * n.y) + frame.sh[5].rgb * (1.092548 * n.y * n.z);
+    r = r + frame.sh[6].rgb * (0.315392 * (3.0 * n.z * n.z - 1.0)) + frame.sh[7].rgb * (1.092548 * n.x * n.z);
+    r = r + frame.sh[8].rgb * (0.546274 * (n.x * n.x - n.y * n.y));
+    return max(r, vec3<f32>(0.0));
+}
+// three fog (linear working space, scene-referred: applied before exposure/tonemap). depth = distance along camera forward.
+fn apply_fog(c: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    let mode = frame.fog_color.w;
+    if (mode < 0.5) { return c; }
+    let d = max(dot(world - frame.camera_pos.xyz, frame.cam_fwd.xyz), 0.0);
+    var f = 0.0;
+    if (mode < 1.5) { f = smoothstep(frame.fog_params.x, frame.fog_params.y, d); }
+    else { let k = frame.fog_params.z * d; f = 1.0 - exp(-k * k); }
+    return mix(c, frame.fog_color.rgb, clamp(f, 0.0, 1.0));
+}
 fn d_ggx(nh: f32, a: f32) -> f32 {
     let a2 = a * a;
     let d = nh * nh * (a2 - 1.0) + 1.0;
@@ -273,7 +296,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     if (material.flags.x > 0.5) {
-        return base; // unlit: authored colour as-is (backdrops, sky domes, additive cards)
+        return vec4<f32>(apply_fog(base.rgb, in.world), base.a); // unlit: authored colour as-is (backdrops, sky domes, additive cards)
     }
     var n = normalize(in.normal);
     if (!front) { n = -n; }
@@ -306,6 +329,9 @@ let g = q.xyz / PI;
 irr = select(hemi + g, mix(hemi, g, q.w), gi.tex.z == 1u);
 }
 color = color + irr * base.rgb * (1.0 - metallic) + material.emissive.rgb;
+    // IBL diffuse (scene.environment): SH9 irradiance x albedo x (1 - metallic). Specular IBL not implemented.
+    if (frame.env.x > 0.5) { color = color + sh_irradiance(n) * frame.env.y * base.rgb * (1.0 - metallic); }
+    color = apply_fog(color, in.world);
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).

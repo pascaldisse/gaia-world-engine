@@ -188,7 +188,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'probe-gi', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -324,6 +324,14 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     // r6 S3: probe-GI atlases (gi-bridge.js readback of three's GI compute). irradiance Float32Array 4/texel, depth 2/texel, params = packGiParams(). See gaia-render gi.rs.
     setGiProbes(irradiance, depth, params) { gpu.setGiProbes(irradiance, depth, params); },
     clearGiProbes() { gpu.clearGiProbes(); },
+    // r6-scene: scene.background Texture/CubeTexture. {kind:'cube'|'equirect'|'screen', width, height, rgba (Uint8Array; cube = 6 faces), srgb, intensity}
+    setBackgroundTexture({ kind, width, height, rgba, srgb = true, intensity = 1 }) {
+      if (kind === 'cube') gpu.setBackgroundCube(width, rgba, srgb, intensity); else gpu.setBackgroundTexture(width, height, rgba, srgb, kind === 'equirect', intensity);
+    },
+    // r6-scene: scene.fog. {mode:1 Fog(smoothstep near..far)|2 FogExp2, color:[r,g,b] linear, near, far, density} | null = off
+    setFog(f) { gpu.setFog(f?.mode ?? 0, Float32Array.from(f?.color ?? [0, 0, 0]), f?.near ?? 0, f?.far ?? 0, f?.density ?? 0); },
+    // r6-scene: scene.environment diffuse IBL. {sh: Float32Array(27) (cosine-convolved, /PI), intensity} | null
+    setEnvironment(e) { if (e) gpu.setEnvironmentSh(Float32Array.from(e.sh), e.intensity ?? 1); else gpu.clearEnvironment(); },
     setBackground(rgb) { gpu.setBackgroundColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0)); },
     renderFrame(/* dt */) {
     if (lightsDirty) pushLights();

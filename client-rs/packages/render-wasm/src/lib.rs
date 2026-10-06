@@ -482,6 +482,34 @@ o.into()
         self.core.clear_gi_probes(&self.queue);
     }
     /// three scene.background Color (linear rgb): tone-mapped like three does (Reinhard x exposure) → clear colour.
+    #[wasm_bindgen(js_name = setFog)]
+    pub fn set_fog(&mut self, mode: u32, color: &[f32], near: f32, far: f32, density: f32) -> Result<(), JsError> {
+        if color.len() != 3 {
+            return Err(err("setFog: color needs 3 floats"));
+        }
+        self.core.set_fog(mode, [color[0], color[1], color[2]], near, far, density);
+        Ok(())
+    }
+    #[wasm_bindgen(js_name = setEnvironmentSh)]
+    pub fn set_environment_sh(&mut self, sh: &[f32], intensity: f32) -> Result<(), JsError> {
+        self.core.set_environment_sh(sh, intensity).map_err(err)
+    }
+    #[wasm_bindgen(js_name = clearEnvironment)]
+    pub fn clear_environment(&mut self) {
+        self.core.clear_environment();
+    }
+    #[wasm_bindgen(js_name = setBackgroundCube)]
+    pub fn set_background_cube(&mut self, size: u32, faces: &[u8], srgb: bool, intensity: f32) -> Result<(), JsError> {
+        self.core.set_background_cube(&self.device, &self.queue, size, faces, srgb, intensity).map_err(err)
+    }
+    #[wasm_bindgen(js_name = setBackgroundTexture)]
+    pub fn set_background_texture(&mut self, width: u32, height: u32, rgba: &[u8], srgb: bool, equirect: bool, intensity: f32) -> Result<(), JsError> {
+        self.core.set_background_texture(&self.device, &self.queue, width, height, rgba, srgb, equirect, intensity).map_err(err)
+    }
+    #[wasm_bindgen(js_name = clearBackgroundTexture)]
+    pub fn clear_background_texture(&mut self) {
+        self.core.clear_background_texture();
+    }
     #[wasm_bindgen(js_name = setBackgroundColor)]
     pub fn set_background_color(&mut self, rgb: &[f32]) -> Result<(), JsError> {
     if rgb.len() != 3 {

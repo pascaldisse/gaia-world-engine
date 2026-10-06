@@ -9,6 +9,7 @@ mod timing_async;
 pub use three_material::ThreeFrame;
 pub mod skin;
 mod gi;
+pub mod background;
 pub use gi::{GI_MAX_CASCADES, GI_PARAM_CASCADE, GI_PARAM_HEADER, GI_TEX_WIDTH};
 
 use glam::{Mat4, Vec3};
@@ -340,6 +341,12 @@ struct FrameUniform {
     points: [GpuPointLight; MAX_POINT_LIGHTS],
     /// hemisphere ambient ground colour (rgb); `ambient` = sky. Appended LAST: earlier offsets unchanged for external WGSL.
     ambient_ground: [f32; 4],
+    /// r6 fog + IBL (appended LAST; earlier offsets unchanged for external WGSL)
+    fog_color: [f32; 4],
+    fog_params: [f32; 4],
+    cam_fwd: [f32; 4],
+    env: [f32; 4],
+    sh: [[f32; 4]; 9],
 }
 
 #[repr(C)]
@@ -537,6 +544,8 @@ pub struct RenderCore {
     frame_bind: wgpu::BindGroup,
     /// r6 probe-GI atlases + params (group 0 bindings 1..3); count 0 = off.
     gi: gi::GiProbes,
+    /// r6-scene: scene.background Texture/CubeTexture pass (colour backgrounds = clear colour).
+    background: background::Background,
     meshes: HashMap<u32, GpuMesh>,
     textures: HashMap<u32, wgpu::TextureView>,
     materials: HashMap<u32, GpuMaterial>,
@@ -709,6 +718,7 @@ impl RenderCore {
             frame_buffer,
             frame_bind,
             gi: gi_probes,
+            background: background::Background::new(device, queue),
             meshes: HashMap::new(),
             material_lightmaps: HashMap::new(),
             instance_transforms: Vec::new(),
@@ -1241,11 +1251,37 @@ impl RenderCore {
     /// three `scene.background` Color. MEASURED (r6 S4, r180 WebGPURenderer + ReinhardToneMapping): three TONE-MAPS the background colour like any
     /// fragment, so the clear value = Reinhard(c * exposure) (same operator as forward.wgsl); the *Srgb target then encodes it.
     pub fn set_background_color(&mut self, rgb: [f32; 3]) {
+    self.background.clear();
     let e = self.frame.ambient[3];
     let t = |c: f32| { let x = c * e; (x / (1.0 + x)) as f64 };
     self.opts.clear_color = [t(rgb[0]), t(rgb[1]), t(rgb[2]), 1.0];
     }
     
+    /// three `scene.fog`. mode 0 none · 1 THREE.Fog (smoothstep(near, far, viewDepth)) · 2 THREE.FogExp2 (1 - exp(-(density*depth)^2)). Colour linear.
+    /// Applied to the builtin forward materials only (external TSL/WGSL materials: not fogged).
+    pub fn set_fog(&mut self, mode: u32, color: [f32; 3], near: f32, far: f32, density: f32) {
+        self.frame.fog_color = [color[0], color[1], color[2], mode as f32];
+        self.frame.fog_params = [near, far, density, 0.0];
+    }
+    /// three `scene.environment` diffuse IBL as SH9 (27 floats: 9 x rgb, already cosine-convolved and divided by PI, see forward.wgsl sh_irradiance). `intensity` = environmentIntensity.
+    pub fn set_environment_sh(&mut self, sh: &[f32], intensity: f32) -> Result<(), String> {
+        if sh.len() != 27 { return Err(format!("set_environment_sh: need 27 floats, got {}", sh.len())); }
+        for i in 0..9 { self.frame.sh[i] = [sh[i * 3], sh[i * 3 + 1], sh[i * 3 + 2], 0.0]; }
+        self.frame.env = [1.0, intensity, 0.0, 0.0];
+        Ok(())
+    }
+    pub fn clear_environment(&mut self) { self.frame.env = [0.0; 4]; }
+
+    /// three `scene.background` CubeTexture: 6 RGBA8 faces (+X -X +Y -Y +Z -Z, rows top-first), tone-mapped like three. Replaces a colour/texture background.
+    pub fn set_background_cube(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: u32, faces: &[u8], srgb: bool, intensity: f32) -> Result<(), String> {
+        self.background.set_cube(device, queue, size, faces, srgb, intensity)
+    }
+    /// three `scene.background` Texture: `equirect` = EquirectangularReflection mapping, else screen-aligned 2D. rows top-first.
+    pub fn set_background_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, rgba: &[u8], srgb: bool, equirect: bool, intensity: f32) -> Result<(), String> {
+        self.background.set_flat(device, queue, w, h, rgba, srgb, equirect, intensity)
+    }
+    pub fn clear_background_texture(&mut self) { self.background.clear(); }
+
     /// Raw frame clear colour (linear, NOT tone-mapped; the *Srgb target encodes it). Prefer `set_background_color` for three parity.
     pub fn set_clear_color(&mut self, rgba: [f64; 4]) {
         self.opts.clear_color = rgba;
@@ -1409,7 +1445,9 @@ impl RenderCore {
         self.frame.view_proj = self.camera.view_proj(aspect).to_cols_array_2d();
         let eye = self.camera.world.transform_point3(Vec3::ZERO);
         self.frame.camera_pos = eye.extend(1.0).to_array();
+        self.frame.cam_fwd = self.camera.world.transform_vector3(-Vec3::Z).normalize_or_zero().extend(0.0).to_array();
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&self.frame));
+        self.background.prepare(queue, self.camera.view_proj(aspect), eye, self.frame.ambient[3]);
         // sun shadow cascades first (own passes, before the forward pass samples them)
         self.shadow_timed = self.shadow.encode(
             device,
@@ -1479,6 +1517,7 @@ impl RenderCore {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            self.background.draw(&mut pass);
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.frame_bind, &[]);
             pass.set_bind_group(2, self.shadow.receiver_bind(), &[]);

@@ -9,6 +9,7 @@
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
 import { materialToParams, materialSig } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
+import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -284,12 +285,53 @@ const sig = `${amb.sky}|${amb.ground}`;
 if (sig !== amb.sig) { backend.setAmbient({ sky: amb.sky.slice(), ground: amb.ground.slice() }); amb.sig = sig; stats.updated++; }
 }
 const bg = scene.background;
-if (!backend.setBackground) { if (bg) stats.unsupported.add('background'); return; }
-let sig, rgb = null;
+if (!backend.setBackground) { if (bg) stats.unsupported.add('background'); }
+else {
+let sig, rgb = null, tex = null;
+const bi = scene.backgroundIntensity ?? 1;
 if (bg && bg.isColor) { rgb = [bg.r, bg.g, bg.b]; sig = `c${rgb}`; }
+else if (bg && bg.isTexture && backend.setBackgroundTexture && !bg.isRenderTargetTexture) { tex = bg; sig = `t${bg.uuid}:${bg.version}:${bi}`; }
 else if (bg) { sig = 'x'; stats.unsupported.add(bg.isCubeTexture ? 'background:CubeTexture' : bg.isTexture ? 'background:Texture' : `background:${bg.constructor?.name ?? typeof bg}`); }
 else sig = 'null';
-if (sig !== amb.bgSig) { if (sig !== 'x') backend.setBackground(rgb); amb.bgSig = sig; stats.updated++; }
+if (sig !== amb.bgSig) {
+if (tex) { // r6-scene: Texture (2D screen-aligned | equirect) / CubeTexture → core background pass (tone-mapped like three's bg)
+try {
+if (tex.isCubeTexture) { const c = readCube(tex); backend.setBackgroundTexture({ kind: 'cube', width: c.size, height: c.size, rgba: c.faces, srgb: c.srgb, intensity: bi }); if (c.hdrClamped) stats.degraded.add('background:hdr-clamped-to-ldr'); }
+else { const t = readTexture(tex); backend.setBackgroundTexture({ kind: tex.mapping === 303 || tex.mapping === 304 ? 'equirect' : 'screen', width: t.w, height: t.h, rgba: t.rgba8, srgb: t.srgb, intensity: bi }); if (t.hdrClamped) stats.degraded.add('background:hdr-clamped-to-ldr'); }
+} catch (e) { stats.unsupported.add(`background:${String(e.message ?? e).slice(0, 80)}`); sig = 'x'; }
+} else if (sig !== 'x') { backend.setBackground(rgb); }
+amb.bgSig = sig; stats.updated++;
+}
+}
+// fog: THREE.Fog (linear, smoothstep) / FogExp2 → setFog (change-tracked; the game animates near/far/color per frame → 1 cheap sig compare)
+if (backend.setFog) {
+const f = scene.fog;
+const sig = f ? (f.isFogExp2 ? `2|${f.color.r},${f.color.g},${f.color.b}|${f.density}` : f.isFog ? `1|${f.color.r},${f.color.g},${f.color.b}|${f.near}|${f.far}` : 'x') : '0';
+if (sig !== amb.fogSig) {
+if (sig === '0' || sig === 'x') backend.setFog(null);
+else backend.setFog({ mode: f.isFogExp2 ? 2 : 1, color: [f.color.r, f.color.g, f.color.b], near: f.near ?? 0, far: f.far ?? 0, density: f.density ?? 0 });
+if (sig === 'x') stats.unsupported.add('fog:unknown-type');
+amb.fogSig = sig; stats.updated++;
+}
+} else if (scene.fog) stats.unsupported.add('fog');
+// environment IBL (diffuse irradiance only; specular IBL NOT implemented): scene.environment CubeTexture / equirect Texture → SH9 on the CPU → setEnvironment
+if (backend.setEnvironment) {
+const env = scene.environment, ei = scene.environmentIntensity ?? 1;
+const sig = env ? `${env.uuid}:${env.version}:${ei}` : '0';
+if (sig !== amb.envSig) {
+if (!env) backend.setEnvironment(null);
+else {
+try {
+const eq = !env.isCubeTexture && (env.mapping === 303 || env.mapping === 304);
+if (!env.isCubeTexture && !eq) throw new Error(`mapping ${env.mapping} (needs cube or equirect; PMREM/render-target textures are unreadable)`);
+const src = env.isCubeTexture ? readCube(env) : readTexture(env);
+backend.setEnvironment({ sh: shIrradiance(src, { equirect: eq }), intensity: ei });
+stats.degraded.add('environment:diffuse-only(no specular IBL)');
+} catch (e) { stats.unsupported.add(`environment:${String(e.message ?? e).slice(0, 100)}`); backend.setEnvironment(null); }
+}
+amb.envSig = sig; stats.updated++;
+}
+} else if (scene.environment) stats.unsupported.add('environment');
 }
 function updateMesh(o, rec, vis) {
 const gone = rec.geoRef !== o.geometry || rec.dirtyGeo || (rec.mref !== o.material && (Array.isArray(o.material) || Array.isArray(rec.mref)));

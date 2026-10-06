@@ -381,6 +381,22 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<u32, JsValue> {
         self.core.set_three_uniforms(material, json).map(|n| n as u32).map_err(|e| JsValue::from_str(&e))
     }
+    /// r6-tsl: extra named per-vertex attribute (uv1, colour, custom, node buffer attribute: `node:<uuid>`) for TSL materials.
+    #[wasm_bindgen(js_name = setMeshAttribute)]
+    pub fn set_mesh_attribute(&mut self, mesh: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), JsError> {
+        self.core.set_mesh_attribute(&self.device, mesh, name, item_size, data).map_err(err)
+    }
+    /// r6-tsl: per-instance attribute value (one element) for TSL materials (expanded InstancedMesh rows).
+    #[wasm_bindgen(js_name = setInstanceAttribute)]
+    pub fn set_instance_attribute(&mut self, instance: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), JsError> {
+        self.core.set_instance_attribute(&self.device, instance, name, item_size, data).map_err(err)
+    }
+    /// r6-tsl: three instances SKIPPED in the last frame (material needs an attribute the mesh/instance lacks).
+    #[wasm_bindgen(js_name = threeSkipped)]
+    pub fn three_skipped(&self) -> u32 {
+        self.core.three_skipped
+    }
+
     #[wasm_bindgen(js_name = destroyMaterial)]
     pub fn destroy_material(&mut self, id: u32) {
         self.core.remove_material(id);

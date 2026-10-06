@@ -477,6 +477,8 @@ struct GpuMesh {
     vertex_count: u32,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// r6-tsl: extra named vertex attributes (TSL attribute(), uv1/colour/custom) → (buffer, f32 item size). Fed to three materials only.
+    attrs: HashMap<String, (wgpu::Buffer, u32)>,
 }
 
 struct GpuMaterial {
@@ -571,6 +573,10 @@ pub struct RenderCore {
     three: three_material::ThreeMaterials,
     /// value fed to TSL `time` (seconds); host-advanced via `set_three_time`.
     three_time: f32,
+    /// r6-tsl: per-instance vertex attributes (TSL instancedBufferAttribute, expanded InstancedMesh rows): instance id → key → (buffer, item size).
+    inst_attrs: HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>,
+    /// r6-tsl: three draws skipped last frame (material needs an attribute the mesh/instance lacks) — loud counter, never silent.
+    pub three_skipped: u32,
     /// GPU skinning (src/skin.rs): skinned meshes + joint palettes, one compute pass/frame.
     skin: skin::SkinSystem,
 }
@@ -721,6 +727,8 @@ impl RenderCore {
             timing,
             three: Default::default(),
             three_time: 0.0,
+            inst_attrs: HashMap::new(),
+            three_skipped: 0,
         }
     }
 
@@ -790,6 +798,7 @@ impl RenderCore {
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             vertex_count: vertices.len() as u32,
+        attrs: HashMap::new(),
         };
         self.static_gen += 1;
         self.meshes.insert(id, mesh);
@@ -832,6 +841,25 @@ impl RenderCore {
         Ok(())
     }
 
+    /// r6-tsl: extra named per-vertex attribute (f32 x item_size, one per vertex) for TSL materials: uv1, colour, any geometry attribute, node attribute buffers.
+    pub fn set_mesh_attribute(&mut self, device: &wgpu::Device, id: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), String> {
+        let m = self.meshes.get_mut(&id).ok_or_else(|| format!("set_mesh_attribute: no mesh {id}"))?;
+        if !(1..=4).contains(&item_size) || data.len() != m.vertex_count as usize * item_size as usize {
+            return Err(format!("mesh {id} attribute `{name}`: {} floats != {item_size} x {} vertices", data.len(), m.vertex_count));
+        }
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("mesh attribute"), contents: nonempty(bytemuck::cast_slice(data)), usage: wgpu::BufferUsages::VERTEX });
+        m.attrs.insert(name.to_string(), (buf, item_size));
+        Ok(())
+    }
+    /// r6-tsl: per-INSTANCE attribute value (one element, bound with step-mode Instance) for a TSL material on this instance.
+    pub fn set_instance_attribute(&mut self, device: &wgpu::Device, inst: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), String> {
+        if !(1..=4).contains(&item_size) || data.len() != item_size as usize {
+            return Err(format!("instance {inst} attribute `{name}`: {} floats != item size {item_size}", data.len()));
+        }
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instance attribute"), contents: bytemuck::cast_slice(data), usage: wgpu::BufferUsages::VERTEX });
+        self.inst_attrs.entry(inst).or_default().insert(name.to_string(), (buf, item_size));
+        Ok(())
+    }
     /// Baked lightmap for a built-in material: texture sampled at TEXCOORD_1, combined
     /// as Blender OVERLAY(albedo, lightmap, fac) before lighting (DS client rule,
     /// nari-world-companion ds-world/lightmap.mjs). Rebinds the material if it exists.
@@ -1176,6 +1204,7 @@ impl RenderCore {
     }
 
     pub fn remove_instance(&mut self, id: u32) {
+        self.inst_attrs.remove(&id);
         if self.instances.remove(&id).is_some_and(|i| i.is_static) {
             self.static_gen += 1;
         }
@@ -1494,9 +1523,9 @@ impl RenderCore {
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
-                let meshes = &self.meshes;
-                let mesh_of = |m: u32| meshes.get(&m).map(|g| (g.vertices.slice(..), g.indices.slice(..), g.index_count));
-                draws += self.three.draw(&mut pass, &three_list, &mesh_of, &inst_mesh);
+                let (n, skipped) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs);
+                draws += n;
+                self.three_skipped = skipped;
             }
             self.last_draw_calls = draws;
         }

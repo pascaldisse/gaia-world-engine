@@ -50,6 +50,17 @@ pub(crate) struct ThreeMaterial {
     layouts: Vec<wgpu::BindGroupLayout>,
     slots: Vec<Slot>,
     textures: HashMap<String, u32>,
+/// r6-tsl: non-core vertex attributes, one vertex-buffer slot each (after the core Vertex slot, if any).
+extra: Vec<AttrSpec>,
+core_slot: Option<u32>,
+}
+/// One TSL vertex attribute that the core's interleaved Vertex does not carry.
+struct AttrSpec {
+/// data key: geometry attribute name, or `node:<uuid>` for node-held BufferAttributes (tsl-export).
+key: String,
+slot: u32,
+items: u32,
+instanced: bool,
 }
 /// Per (instance) GPU state: one buffer per uniform slot + bind groups.
 struct InstanceGpu {
@@ -182,20 +193,52 @@ pub(crate) fn build(
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("three group"), entries: &entries })
         })
         .collect();
-    // attributes: builder location by NAME → offset in core Vertex (pos 0, normal 12, uv 24; stride 32)
-    let mut attrs = Vec::new();
-    for a in pkg["attributes"].as_array().into_iter().flatten() {
-        let name = a["name"].as_str().unwrap_or("");
-        let loc = a["location"].as_u64().ok_or("attribute without location")? as u32;
-        let (offset, format) = match name {
-            "position" => (0, wgpu::VertexFormat::Float32x3),
-            "normal" => (12, wgpu::VertexFormat::Float32x3),
-            "uv" => (24, wgpu::VertexFormat::Float32x2),
-            o => return Err(format!("three attribute `{o}` not provided by core meshes (position/normal/uv)")),
-        };
-        attrs.push(wgpu::VertexAttribute { format, offset, shader_location: loc });
-    }
-    let side = pkg["material"]["side"].as_u64().unwrap_or(0);
+            // attributes: core Vertex (pos 0, normal 12, uv 24; stride 32) for position/normal/uv GEOMETRY attributes; every other attribute
+        // (uv1, color, custom, node-held buffer attributes, instanced) = its own vertex slot, f32 x items, fed by set_mesh_attribute / set_instance_attribute.
+        let mut core_attrs = Vec::new();
+        let mut extra: Vec<AttrSpec> = Vec::new();
+        let mut extra_attrs: Vec<wgpu::VertexAttribute> = Vec::new();
+        for a in pkg["attributes"].as_array().into_iter().flatten() {
+            let name = a["name"].as_str().unwrap_or("");
+            let loc = a["location"].as_u64().ok_or("attribute without location")? as u32;
+            let node_sourced = a["source"].as_str() == Some("node");
+            let instanced = a["instanced"].as_bool().unwrap_or(false);
+            let ty = a["type"].as_str().unwrap_or("");
+            let (items, format) = match ty {
+                "float" => (1, wgpu::VertexFormat::Float32),
+                "vec2" => (2, wgpu::VertexFormat::Float32x2),
+                "vec3" => (3, wgpu::VertexFormat::Float32x3),
+                "vec4" => (4, wgpu::VertexFormat::Float32x4),
+                o => return Err(format!("attribute `{name}` type `{o}` unsupported (float/vec2/vec3/vec4 only)")),
+            };
+            let core = if node_sourced || instanced { None } else { match name { "position" => Some((0, 3)), "normal" => Some((12, 3)), "uv" => Some((24, 2)), _ => None } };
+            if let Some((off, n)) = core {
+                if n != items { return Err(format!("attribute `{name}`: shader wants {ty}, core provides {n} floats")); }
+                core_attrs.push(wgpu::VertexAttribute { format, offset: off, shader_location: loc });
+                continue;
+            }
+            let key = a["key"].as_str().map(String::from).unwrap_or_else(|| name.to_string());
+            extra.push(AttrSpec { key, slot: 0, items, instanced });
+            extra_attrs.push(wgpu::VertexAttribute { format, offset: 0, shader_location: loc });
+        }
+        let core_slot = (!core_attrs.is_empty()).then_some(0u32);
+        for (i, e) in extra.iter_mut().enumerate() {
+            e.slot = i as u32 + core_slot.map_or(0, |_| 1);
+        }
+        let extra_attr_arrays: Vec<[wgpu::VertexAttribute; 1]> = extra_attrs.iter().map(|a| [*a]).collect();
+        let mut vbufs: Vec<wgpu::VertexBufferLayout> = Vec::new();
+        if core_slot.is_some() {
+            vbufs.push(wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &core_attrs });
+        }
+        for (e, arr) in extra.iter().zip(&extra_attr_arrays) {
+            vbufs.push(wgpu::VertexBufferLayout { array_stride: e.items as u64 * 4, step_mode: if e.instanced { wgpu::VertexStepMode::Instance } else { wgpu::VertexStepMode::Vertex }, attributes: arr });
+        }
+        let vbufs_opt: Vec<Option<wgpu::VertexBufferLayout>> = vbufs.into_iter().map(Some).collect();
+        // WebGPU limit: maxVertexBuffers (default 8) — loud refusal beats a pipeline-creation validation abort.
+        if vbufs_opt.len() > 8 {
+            return Err(format!("material needs {} vertex buffers (> 8)", vbufs_opt.len()));
+        }
+let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     let transparent = pkg["material"]["transparent"].as_bool().unwrap_or(false);
     let vm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three vertex"), source: wgpu::ShaderSource::Wgsl(vs.into()) });
     let fm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three fragment"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
@@ -208,7 +251,7 @@ pub(crate) fn build(
             module: &vm,
             entry_point: Some(pkg["vertexEntry"].as_str().unwrap_or("main")),
             compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs })],
+            buffers: &vbufs_opt,
         },
         fragment: Some(wgpu::FragmentState {
             module: &fm,
@@ -237,7 +280,7 @@ pub(crate) fn build(
         multiview_mask: None,
         cache: None,
     });
-    Ok(ThreeMaterial { pipeline, layouts, slots, textures })
+    Ok(ThreeMaterial { pipeline, layouts, slots, textures, extra, core_slot })
 }
 
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
@@ -385,21 +428,34 @@ impl ThreeMaterials {
             }
         }
     }
-    /// Inside the forward pass: one draw per three instance (per-object uniforms).
-    pub(crate) fn draw<'a>(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], mesh_of: &dyn Fn(u32) -> Option<(wgpu::BufferSlice<'a>, wgpu::BufferSlice<'a>, u32)>, inst_mesh: &HashMap<u32, u32>) -> u32 {
-        let mut n = 0;
+        /// Inside the forward pass: one draw per three instance (per-object uniforms). Returns (draws, skipped): an instance is SKIPPED
+    /// (counted, surfaced by the host) when its material needs a vertex attribute the mesh/instance does not provide — never drawn with garbage.
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>) -> (u32, u32) {
+        let (mut n, mut skipped) = (0, 0);
         for &(iid, mat_id, _) in instances {
             let (Some(mat), Some(g)) = (self.mats.get(&mat_id), self.inst.get(&iid)) else { continue };
-            let Some((vb, ib, count)) = inst_mesh.get(&iid).and_then(|m| mesh_of(*m)) else { continue };
+            let Some(gm) = inst_mesh.get(&iid).and_then(|m| meshes.get(m)) else { continue };
+            let ia = inst_attrs.get(&iid);
+            let mut bound: Vec<(u32, &wgpu::Buffer)> = Vec::new();
+            let mut missing = false;
+            for e in &mat.extra {
+                let found = if e.instanced { ia.and_then(|m| m.get(&e.key)) } else { gm.attrs.get(&e.key) };
+                match found {
+                    Some((b, items)) if *items == e.items => bound.push((e.slot, b)),
+                    _ => { missing = true; break; }
+                }
+            }
+            if missing { skipped += 1; continue; }
             pass.set_pipeline(&mat.pipeline);
             for (i, bg) in g.groups.iter().enumerate() {
                 pass.set_bind_group(i as u32, bg, &[]);
             }
-            pass.set_vertex_buffer(0, vb);
-            pass.set_index_buffer(ib, wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..count, 0, 0..1);
+            if let Some(cs) = mat.core_slot { pass.set_vertex_buffer(cs, gm.vertices.slice(..)); }
+            for (slot, b) in &bound { pass.set_vertex_buffer(*slot, b.slice(..)); }
+            pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..gm.index_count, 0, 0..1);
             n += 1;
         }
-        n
+        (n, skipped)
     }
 }

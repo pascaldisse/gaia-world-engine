@@ -8,6 +8,7 @@
 //     keepTexCoord1?: true,                           // keep TEXCOORD_1 (lightmap UV) when present
 //     materialFlags?: [{ name?: regex, extras?: {key: regex}, set: {blend:'alpha'|'additive'|'subtractive', unlit, depthWrite, renderOrder, castShadow} }],
 //     sun?: { direction:[x,y,z] (travel, glTF basis) | rotationDeg:[pitch,yaw] (+pitch = from above) + basisFlip?:[1,1,-1], color:[r,g,b], intensity },
+//     ambient?: { sky:[r,g,b], ground:[r,g,b], scale? } (hemisphere ambient, linear, shader units; -> scenes[0].extras.gaia.ambient = colour x scale),
 //     pointLights?: [{ name, position:[x,y,z], color:[r,g,b], intensity, range }],
 //     camera?: { name, position:[x,y,z], yawDeg, pitchDeg, fovYDeg, near, far },
 //     skinned?: { nodes?: regex (skinned node names, default '^skinned:'), clip?: regex (animation name; default = first clip
@@ -244,6 +245,7 @@ Object.assign(stats, { skins: outSkins.length, joints: outSkins.reduce((a, s) =>
 ...(outSkins.length ? { skins: outSkins } : {}),
 ...(outAnims.length ? { animations: outAnims } : {}),
 };
+  if (manifest.ambient) { const a = manifest.ambient, k = a.scale ?? 1, f = (c) => c.map(x => +(x * k).toFixed(6)); gltf.scenes[0].extras = { gaia: { ambient: { sky: f(a.sky), ground: f(a.ground ?? a.sky) } } }; }
   if (lights.length) { gltf.extensionsUsed = ['KHR_lights_punctual']; gltf.extensions = { KHR_lights_punctual: { lights } }; }
   const pad = (4 - (binLen % 4)) % 4; if (pad) { chunks.push(Buffer.alloc(pad)); binLen += pad; }
   gltf.buffers[0].byteLength = binLen;

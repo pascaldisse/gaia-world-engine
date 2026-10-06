@@ -33,7 +33,10 @@ pub struct RenderOptions {
     pub render_height: u32,
     pub output_format: wgpu::TextureFormat,
     pub exposure: f32,
+    /// Sky (up-facing) ambient; also the flat ambient when `ambient_ground` is None.
     pub ambient: [f32; 3],
+    /// Ground (down-facing) ambient; None = flat (= `ambient`). A glb `scene.extras.gaia.ambient` overrides both at load.
+    pub ambient_ground: Option<[f32; 3]>,
     /// Used only when the glb carries no directional light.
     pub default_sun_direction: [f32; 3],
     pub default_sun_color: [f32; 3],
@@ -60,6 +63,7 @@ impl Default for RenderOptions {
             output_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             exposure: 1.0,
             ambient: [0.08, 0.09, 0.11],
+            ambient_ground: None,
             default_sun_direction: [-0.3, -1.0, -0.2],
             default_sun_color: [1.0, 0.95, 0.85],
             default_sun_intensity: 3.0,
@@ -332,6 +336,8 @@ struct FrameUniform {
     ambient: [f32; 4],
     counts: [u32; 4],
     points: [GpuPointLight; MAX_POINT_LIGHTS],
+    /// hemisphere ambient ground colour (rgb); `ambient` = sky. Appended LAST: earlier offsets unchanged for external WGSL.
+    ambient_ground: [f32; 4],
 }
 
 #[repr(C)]
@@ -520,6 +526,9 @@ pub struct RenderCore {
     frame_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
+    /// COLOR_0 vertex-colour slot (vertex slot 3, @location(8)): per-mesh buffers; meshes without one bind `white_colors` (grown on demand, all 1.0).
+    mesh_colors: HashMap<u32, wgpu::Buffer>,
+    white_colors: wgpu::Buffer,
     frame_buffer: wgpu::Buffer,
     frame_bind: wgpu::BindGroup,
     meshes: HashMap<u32, GpuMesh>,
@@ -620,6 +629,8 @@ impl RenderCore {
         let white = upload_rgba8(device, queue, None, 1, 1, &[255; 4]);
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
         frame.ambient = [opts.ambient[0], opts.ambient[1], opts.ambient[2], opts.exposure];
+        let ground = opts.ambient_ground.unwrap_or(opts.ambient);
+        frame.ambient_ground = [ground[0], ground[1], ground[2], 0.0];
         frame.sun_dir = Vec3::from_array(opts.default_sun_direction)
             .normalize()
             .extend(0.0)
@@ -689,6 +700,8 @@ impl RenderCore {
             frame_layout,
             sampler,
             white,
+            mesh_colors: HashMap::new(),
+            white_colors: device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("white vertex colours"), contents: &[0u8; 16], usage: wgpu::BufferUsages::VERTEX }),
             frame_buffer,
             frame_bind,
             meshes: HashMap::new(),
@@ -805,6 +818,18 @@ impl RenderCore {
         Ok(())
     }
 
+    /// COLOR_0 per vertex (rgba f32 x4, linear): multiplies base colour rgb AND alpha in the built-in shader (glTF semantics).
+    /// Meshes never given one draw with 1.0. Same vertex count as the mesh; Err otherwise.
+    pub fn set_mesh_colors(&mut self, device: &wgpu::Device, id: u32, rgba: &[f32]) -> Result<(), String> {
+        let m = self.meshes.get(&id).ok_or_else(|| format!("set_mesh_colors: no mesh {id}"))?;
+        if rgba.len() != m.vertex_count as usize * 4 {
+            return Err(format!("mesh {id}: colours {} floats != 4 x {} vertices", rgba.len(), m.vertex_count));
+        }
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("mesh colours"), contents: nonempty(bytemuck::cast_slice(rgba)), usage: wgpu::BufferUsages::VERTEX });
+        self.mesh_colors.insert(id, buf);
+        Ok(())
+    }
+
     /// Baked lightmap for a built-in material: texture sampled at TEXCOORD_1, combined
     /// as Blender OVERLAY(albedo, lightmap, fac) before lighting (DS client rule,
     /// nari-world-companion ds-world/lightmap.mjs). Rebinds the material if it exists.
@@ -834,6 +859,7 @@ impl RenderCore {
 
     pub fn remove_mesh(&mut self, id: u32) {
         self.meshes.remove(&id);
+        self.mesh_colors.remove(&id);
     }
 
     // ---- textures (RGBA8 sRGB) ----
@@ -1180,6 +1206,13 @@ impl RenderCore {
         self.frame.sun_color = (Vec3::from_array(color) * intensity * s).extend(1.0).to_array();
     }
 
+    /// Hemisphere ambient: irradiance = lerp(ground, sky, 0.5 n.y + 0.5), times albedo. Linear colours, shader units.
+    pub fn set_hemisphere_ambient(&mut self, sky: [f32; 3], ground: [f32; 3]) {
+        let e = self.frame.ambient[3];
+        self.frame.ambient = [sky[0], sky[1], sky[2], e];
+        self.frame.ambient_ground = [ground[0], ground[1], ground[2], 0.0];
+    }
+
     /// Packed 8 floats/light: x y z range r g b intensity. Extra lights beyond
     /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn.
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {
@@ -1323,6 +1356,12 @@ impl RenderCore {
     ) {
         self.ensure_targets(device, output_size);
         self.encode_skinning(device, queue, encoder);
+        // white COLOR_0 fallback must cover the largest vertex buffer in use (skinned meshes share one big dst buffer)
+        let need = self.meshes.values().map(|m| m.vertices.size() / std::mem::size_of::<scene::Vertex>() as u64).max().unwrap_or(1).max(1) * 16;
+        if self.white_colors.size() < need {
+            let ones: Vec<f32> = vec![1.0; (need / 4) as usize];
+            self.white_colors = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("white vertex colours"), contents: bytemuck::cast_slice(&ones), usage: wgpu::BufferUsages::VERTEX });
+        }
         if self.instances_dirty {
             self.rebuild_instances(device);
         }
@@ -1444,6 +1483,7 @@ impl RenderCore {
                     pass.set_bind_group(1, &mat.bind, &[]);
                     pass.set_vertex_buffer(0, m.vertices.slice(..));
                 pass.set_vertex_buffer(2, m.uv1.slice(..));
+                pass.set_vertex_buffer(3, self.mesh_colors.get(&mesh).unwrap_or(&self.white_colors).slice(..));
                     pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..m.index_count, 0, range.clone());
                     draws += 1;
@@ -1732,6 +1772,11 @@ pub fn load_scene_into(
         if let Some(uv1) = scene.uv1.get(d.first_vertex as usize..(d.first_vertex + d.vertex_count) as usize) {
             core.set_mesh_uv1(device, i as u32, bytemuck::cast_slice(uv1))?;
         }
+        if let Some(c) = scene.colors.get(d.first_vertex as usize..(d.first_vertex + d.vertex_count) as usize) {
+            if c.iter().any(|x| *x != [1.0; 4]) {
+                core.set_mesh_colors(device, i as u32, bytemuck::cast_slice(c))?;
+            }
+        }
         core.create_instance(i as u32, i as u32, d.material as u32, identity);
         core.set_instance_static(i as u32, true); // glb nodes are baked: never move
         let diag = v.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), x| {
@@ -1761,6 +1806,9 @@ pub fn load_scene_into(
         })
         .collect();
     core.set_point_lights(&packed);
+    if let Some(h) = scene.ambient {
+        core.set_hemisphere_ambient(h.sky.to_array(), h.ground.to_array());
+    }
     if let Some(sk) = &scene.skins {
         sk.load_into(core)?;
     }
@@ -1810,6 +1858,12 @@ fn forward_pipeline_variant(
                         array_stride: 8,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &wgpu::vertex_attr_array![7 => Float32x2],
+                    }),
+                    // slot 3 = COLOR_0 (rgba); external WGSL may ignore @location(8).
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 16,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![8 => Float32x4],
                     }),
                 ],
                 compilation_options: Default::default(),

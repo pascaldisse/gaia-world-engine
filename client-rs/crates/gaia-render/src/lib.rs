@@ -465,6 +465,8 @@ pub struct MaterialDesc {
     /// Some(c) = alpha MASK with cutoff c; None = opaque.
     pub alpha_cutoff: Option<f32>,
     pub emissive: [f32; 3],
+    /// three `emissiveMap === map`: emissive x base_color_texture sample (three r180 MeshStandardNodeMaterial: emissive x emissiveMap.rgb; no vertex colour, no base_color factor). Ignored without a base texture.
+    pub emissive_from_base: bool,
 }
 
 struct GpuMesh {
@@ -934,7 +936,7 @@ impl RenderCore {
                 has_tex,
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
-            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, 0.0, 0.0],
         };
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
@@ -1801,6 +1803,7 @@ pub fn load_scene_into(
                     _ => None,
                 },
                 emissive: m.emissive,
+                emissive_from_base: false,
             },
         );
         if matches!(m.alpha, scene::AlphaMode::Blend) {

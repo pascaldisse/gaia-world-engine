@@ -18,7 +18,7 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
-    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure)
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map)
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 // ---- r6 probe GI (gi.rs): atlases read back from three's GI compute, sampled with the SAME math as client/kernel/gi/gi-open-nodes.js ----
@@ -254,8 +254,11 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, albedo: vec3<f32>, metallic: f
 @fragment
 fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     var base = material.base_color;
+    var emis = material.emissive.rgb;
     if (material.params.w > 0.5) {
-        base = base * textureSample(base_tex, base_samp, in.uv);
+        let texel = textureSample(base_tex, base_samp, in.uv);
+        base = base * texel;
+        if (material.flags.y > 0.5) { emis = emis * texel.rgb; } // three emissiveMap: totalEmissive = emissive x emissiveMap.rgb
     }
     // glTF COLOR_0: multiplies base colour (rgb + alpha); 1.0 when the mesh has none.
     base = base * in.color;
@@ -305,7 +308,7 @@ let g = q.xyz / PI;
 // ambient 'replace' (gi-open-nodes.js :116-117 ambientReplaceTSL + the hemi light's own +hemi): net E = hemi + c*(gi - hemi) = mix(hemi, gi, c); 'add': hemi + gi
 irr = select(hemi + g, mix(hemi, g, q.w), gi.tex.z == 1u);
 }
-color = color + irr * base.rgb * (1.0 - metallic) + material.emissive.rgb;
+color = color + irr * base.rgb * (1.0 - metallic) + emis;
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).

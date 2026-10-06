@@ -63,7 +63,7 @@ fn plane_scene_at(device: &wgpu::Device, queue: &wgpu::Queue, metallic: f32, eye
     opts.render_height = 64;
     let mut core = RenderCore::new(device, queue, opts);
     core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 0.0); // sun off: ambient only
-    core.create_material(device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3] });
+    core.create_material(device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
     let s = 4.0;
     let pos = [-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s];
     let n = [0., normal_y, 0., 0., normal_y, 0., 0., normal_y, 0., 0., normal_y, 0.];
@@ -114,6 +114,23 @@ fn clear_colour_is_scene_background() {
     assert!(close(px, want, 1), "clear: got {px:?} want {want:?}");
 }
 
+/// r7: three emissiveMap === map -> totalEmissive = emissive x map.rgb (raw texel: no base_color factor, no vertex colour). Hemi zero + sun off => only the emissive term remains.
+#[test]
+fn emissive_from_base_multiplies_texel_not_flat() {
+let (device, queue) = device();
+let emis = [0.4f32, 0.2, 0.1];
+let texel = 128.0 / 255.0; // linear texture: sampled value is 128/255 = 0.502 (no sRGB decode)
+for (flag, k) in [(true, texel), (false, 1.0)] {
+let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+core.set_hemisphere_irradiance([0.0; 3], [0.0; 3]);
+core.create_texture_linear(&device, &queue, 7, 2, 2, &[128u8; 16]).unwrap();
+// base_color 0.5 factor on purpose: must NOT scale the emissive term
+core.create_material(&device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: Some(7), alpha_cutoff: None, emissive: emis, emissive_from_base: flag });
+let got = centre(&shoot(&device, &queue, &mut core));
+let want = expect_rgb([emis[0] * k, emis[1] * k, emis[2] * k]);
+assert!(close(got, want, 2), "emissive_from_base={flag}: got {got:?} want {want:?}");
+}
+}
 // ---------------------------------------------------------------------------------------------------------------------------
 // r6 S3 probe GI. Synthetic atlases (res 4/4) with per-probe constant irradiance; expected values = gi-open-nodes.js math done by hand.
 const PI: f32 = std::f32::consts::PI;

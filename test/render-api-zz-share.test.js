@@ -1,4 +1,4 @@
-// r10-4: shared frame-scope updates + shared LightsNode — values identical to the legacy per-package path, frame-scope work runs once per frame token.
+// r10-4: shared frame-scope updates + shared LightsNode — values identical to the legacy per-package path, frame-scope work runs once per frame token. // NOTE: file name sorts LAST on purpose u2014 live.update mutates three singleton uniform values (global), which render-api-tsl-cache.test.js reads as ship-time values.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';

@@ -177,3 +177,9 @@ OPEN / UNVERIFIED
 - `MaterialDesc.emissive_from_base` -> `MaterialUniform.flags.y`; forward.wgsl `emis = emissive * raw base_tex texel` (three r180 MaterialNode.js:218-229; no vertex colour / base_color factor). render-wasm `create/updateMaterial` emissive len 4 ([3]>0.5 = flag). JS: wgpu-backend matArgs flag when emissiveMap key === map key; distinct -> flat + degraded 'emissiveMap-distinct'.
 - Test `lighting.rs::emissive_from_base_multiplies_texel_not_flat` (RED without the shader line). Proof r7-emissive.html: mean abs 0.81 / 4.8 % px >8 (was 32.75 / 60.6 flat). Detail + gaps: docs/RENDER-API.md §11.
 - Overlap: lane r6-mat (uncommitted at the time) binds a full emissive_tex (maps1.y) — supersedes this flag on merge.
+
+## Round 8 — EDEN LOOK (lampas/r8-eden-look, 2026-10-06)
+- Sky box = adapter dropped transparent/opacity/blend/depthWrite/renderOrder/unlit of MeshBasic -> drawn opaque lit. Now `setMaterialFlags` + `setMaterialUnlitToneMapped` (wasm) from wgpu-backend; sky repro r8-sky.html: meanAbs 64.97 -> 8.6 (0.51 with fog off); before/after docs/render-api-r8/sky-before-after.png.
+- three r180 WebGPU tone-maps toneMapped:false too (measured r8-blend.html) -> unlit stays tone-mapped. Gap: three blends HDR-linear then tone-maps; core blends post-tonemap (a=.5 white: 165 vs 157).
+- receiveShadow:false -> `MaterialFlags.no_receive_shadow` (per material, all-users rule). Shadow geometry itself verified correct (r8-shadow.html). Skinned lighting parity test green -> character darkness not in core path (UNVERIFIED cause).
+- Overlap r6-mat: blend/depthWrite/side (see RENDER-API §12). Detail: docs/RENDER-API.md §12.

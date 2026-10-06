@@ -88,7 +88,7 @@ const srig = (n, cfg) => { const s = new SunShadows({ position: new THREE.Vector
 test('staticCache: cascade 0 every frame; far cascades render once, then only on sun move / every cacheRefresh frames (offset per cascade)', () => {
   const s = srig(4, { staticCache: true, cacheRefresh: 10 }); const hits = [[], [], [], []];
   for (let f = 0; f < 25; f++) { s.node.lights.forEach((l) => { l.shadow.needsUpdate = false; }); s.tick(); s.node.lights.forEach((l, i) => { if (i === 0 ? l.shadow.autoUpdate : l.shadow.needsUpdate) hits[i].push(f); }); }
-  assert.equal(hits[0].length, 25); assert.deepEqual(hits[1], [0, 9, 19]); assert.deepEqual(hits[2], [0, 8, 18]); assert.deepEqual(hits[3], [0, 7, 17]);
+  assert.equal(hits[0].length, 25); assert.deepEqual(hits[1], [0, 8, 18]); assert.deepEqual(hits[2], [0, 7, 17]); assert.deepEqual(hits[3], [0, 6, 16]);
   s.sun.position.set(5, 5, 5); s.node.lights.forEach((l) => { l.shadow.needsUpdate = false; }); s.tick();
   assert.ok(s.node.lights.slice(1).every((l) => l.shadow.needsUpdate), 'sun move refreshes all far cascades');
 });

@@ -1,0 +1,99 @@
+<!doctype html><meta charset=utf-8><title>r6 probe-GI: three vs wgpu</title>
+<style>body{margin:0;background:#222;color:#ccc;font:12px monospace}canvas{display:block}</style>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r6 S4 proof: the SAME three scene (engine GI open mode, ambient:'replace') drawn by three WebGPURenderer and by the wasm wgpu renderer
+// (scene-adapter → wgpu-backend → gi-bridge atlas readback → forward.wgsl). Same pose, same size. Variants (sequential, one page load):
+//   hemi   : hemisphere+ambient only, sun 0, NO GI              (S1/S2 faithfulness)
+//   gi     : GI replace, sun 0                                  (S3: GI ambient only)
+//   gisun  : GI replace + sun (shadows on both sides)           (realistic; direct light/shadow differences dominate)
+//   gi_off : three GI vs wgpu with GI DISABLED (shows what GI adds / what a missing bridge costs)
+// URL: ?w=640&h=480&gi.. params from run.mjs (w,h,rh). Result: window.__result = { done, variants:{name:{meanAbs,pctOver8,...}}, pngs:{<name>.three|wgpu|diff} }
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+import { createGiBridge } from '/kernel/gi-bridge.js';
+import { GIController } from '/gi/gi-controller.js';
+const q = new URLSearchParams(location.search);
+const W = Number(q.get('w') ?? 640), H = Number(q.get('h') ?? 480);
+const R = window.__result = { done: false, log: [], variants: {}, pngs: {} };
+const log = (...a) => { R.log.push(a.join(' ')); };
+const raf = () => new Promise(requestAnimationFrame);
+const mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.cssText = `width:${W}px;height:${H}px;position:absolute;left:-${9000}px`; document.body.appendChild(c); return c; };
+function snap(canvas) { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0); return x.getImageData(0, 0, W, H); }
+function png(img) { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(img, 0, 0); return c.toDataURL('image/png'); }
+function diff(a, b) {
+  const out = new ImageData(W, H); let sum = 0, over = 0, max = 0, sumLum = [0, 0];
+  for (let i = 0; i < a.data.length; i += 4) {
+    let m = 0;
+    for (let k = 0; k < 3; k++) { const d = Math.abs(a.data[i + k] - b.data[i + k]); sum += d; if (d > m) m = d; out.data[i + k] = Math.min(255, d * 4); }
+    out.data[i + 3] = 255; if (m > 8) over++; if (m > max) max = m;
+    sumLum[0] += (a.data[i] + a.data[i + 1] + a.data[i + 2]) / 3; sumLum[1] += (b.data[i] + b.data[i + 1] + b.data[i + 2]) / 3;
+  }
+  const n = W * H;
+  return { img: out, meanAbs: sum / (n * 3), pctOver8: (100 * over) / n, maxDiff: max, meanLumThree: sumLum[0] / n, meanLumWgpu: sumLum[1] / n };
+}
+// ---- scene (metres): ground slab, building, wall, canopy on pillars (dark under it), sky-blue background ----
+function buildScene() {
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x9ec0e8);
+  const box = (w, h, d, x, y, z, color) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardNodeMaterial({ color, roughness: 1, metalness: 0 })); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; scene.add(m); return m; };
+  const solids = { ground: box(160, 2, 160, 0, -1, 0, 0x8c8c84), building: box(14, 12, 14, 12, 6, -6, 0xb8825a), wall: box(2, 6, 30, -10, 3, 0, 0x6fa070) };
+  // canopy: 16x1x16 slab at y 5..6 on four 1x5x1 pillars → the dark area underneath is the probe-occlusion test
+  solids.slab = box(16, 1, 16, -26, 5.5, 14, 0xc8c8c8);
+  [[-33.5, 8], [-18.5, 8], [-33.5, 21], [-18.5, 21]].forEach(([x, z], i) => { solids['pillar' + i] = box(1, 5, 1, x, 2.5, z, 0xc8c8c8); });
+  const hemi = new THREE.HemisphereLight(new THREE.Color(0.41, 0.66, 1.0), new THREE.Color(0.13, 0.16, 0.17), 0.9); scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xfff0e0, 0); sun.position.set(40, 60, 25); sun.castShadow = true;
+  Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 70, bottom: -70, near: 1, far: 220 }); sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; scene.add(sun, sun.target);
+  const cam = new THREE.PerspectiveCamera(55, W / H, 0.1, 400); cam.position.set(-34, 7, 38); cam.lookAt(-2, 2, 4); cam.updateMatrixWorld(true);
+  return { scene, cam, hemi, sun, solids };
+}
+try {
+  const { scene, cam, hemi, sun, solids } = buildScene();
+  const cThree = mkCanvas(), cWgpu = mkCanvas();
+  const renderer = new THREE.WebGPURenderer({ canvas: cThree, antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
+  await renderer.init(); R.adapter = renderer.backend?.adapter?.info ? { ...renderer.backend.adapter.info } : null;
+  const backend = await createWgpuBackend({ canvas: cWgpu, wasm, renderHeight: H });
+  const adapter = createSceneAdapter(backend, { three: THREE });
+  const shotThree = async () => { renderer.render(scene, cam); await raf(); await raf(); return snap(cThree); };
+  const shotWgpu = async () => { adapter.sync(scene, cam); backend.renderFrame(0); await raf(); await raf(); return snap(cWgpu); };
+  const finish = (name, a, b) => { const d = diff(a, b); R.pngs[name + '.three'] = png(a); R.pngs[name + '.wgpu'] = png(b); R.pngs[name + '.diff'] = png(d.img); const { img, ...m } = d; R.variants[name] = m; log(name, JSON.stringify(m)); };
+
+  // ---- 1. hemi only, no GI ----
+  sun.intensity = 0;
+  const hemiThree = await shotThree(); const hemiWgpu = await shotWgpu();
+  finish('hemi', hemiThree, hemiWgpu);
+  log('adapter unsupported=', [...adapter.stats.unsupported].join(','), 'degraded=', [...adapter.stats.degraded].join(','));
+
+  // ---- 2. GI open mode (engine config, BP-style sky calibration), converge ----
+  const gi = new GIController({ renderer, scene });
+  gi.configure({ enabled: true, mode: 'open', ambient: 'replace', raysPerProbe: 32, irradianceAlpha: 0.85,
+    sky: { zenith: [0.685, 1.103, 1.663], horizon: [1.727, 2.135, 2.274], ground: [0.432, 0.534, 0.569] }, skyScale: Number(q.get('skyScale') ?? 0.134),
+    sun: { direction: [-40, -60, -25], color: [1, 0.94, 0.88], intensity: 0 },
+    cascades: { count: 3, spacings: [2, 6, 18], dims: [{ x: 16, y: 8, z: 16 }, { x: 16, y: 8, z: 16 }, { x: 16, y: 8, z: 16 }], updateFractions: [1, 1, 1], blendCells: 1.5 } });
+  for (const [id, m] of Object.entries(solids)) gi.addThreeMesh(id, m);
+  const camPos = [cam.position.x, cam.position.y, cam.position.z];
+  const frames = Number(q.get('giFrames') ?? 90);
+  for (let i = 0; i < frames; i++) { gi.update(0.016, camPos); if (i % 10 === 0) await renderer.renderAsync(scene, cam); }
+  await renderer.renderAsync(scene, cam);
+  const open = gi.resources.open; R.gi = { frames, stats: { ...open.stats }, ambientMode: open.ambientMode, baseCells: open.baseCells };
+  const giThree = await shotThree();
+  // ---- 2a. wgpu WITHOUT bridge (GI off) vs three GI: what GI adds ----
+  const noGiWgpu = await shotWgpu(); finish('gi_off', giThree, noGiWgpu);
+  // ---- 2b. wgpu WITH bridge ----
+  const bridge = createGiBridge({ backend, renderer, getController: () => gi, everyFrames: 1 });
+  const t0 = performance.now(); await bridge.tick(); R.bridge = { ...bridge.stats, ms: performance.now() - t0 }; log('bridge', JSON.stringify(R.bridge));
+  const giWgpu = await shotWgpu(); finish('gi', giThree, giWgpu);
+
+  // ---- 3. + sun (both sides cast shadows) ----
+  sun.intensity = 2; sun.target.position.set(0, 0, 0); sun.updateMatrixWorld(true);
+  gi.resources.open.setSun({ direction: [-40, -60, -25], intensity: 2 });
+  for (let i = 0; i < 60; i++) gi.update(0.016, camPos);
+  await renderer.renderAsync(scene, cam); await bridge.tick();
+  const sunThree = await shotThree(); const sunWgpu = await shotWgpu(); finish('gisun', sunThree, sunWgpu);
+  R.adapterStats = { unsupported: [...adapter.stats.unsupported], degraded: [...adapter.stats.degraded] };
+  R.ok = true;
+} catch (e) { log('EXC', e.stack || e); R.ok = false; }
+R.done = true;
+</script>

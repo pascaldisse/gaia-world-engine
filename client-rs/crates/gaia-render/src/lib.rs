@@ -1238,7 +1238,15 @@ impl RenderCore {
         self.gi.clear(queue);
     }
 
-    /// Frame clear colour = three `scene.background` Color (linear working space; the *Srgb target encodes it, as three's output does).
+    /// three `scene.background` Color. MEASURED (r6 S4, r180 WebGPURenderer + ReinhardToneMapping): three TONE-MAPS the background colour like any
+    /// fragment, so the clear value = Reinhard(c * exposure) (same operator as forward.wgsl); the *Srgb target then encodes it.
+    pub fn set_background_color(&mut self, rgb: [f32; 3]) {
+    let e = self.frame.ambient[3];
+    let t = |c: f32| { let x = c * e; (x / (1.0 + x)) as f64 };
+    self.opts.clear_color = [t(rgb[0]), t(rgb[1]), t(rgb[2]), 1.0];
+    }
+    
+    /// Raw frame clear colour (linear, NOT tone-mapped; the *Srgb target encodes it). Prefer `set_background_color` for three parity.
     pub fn set_clear_color(&mut self, rgba: [f64; 4]) {
         self.opts.clear_color = rgba;
     }

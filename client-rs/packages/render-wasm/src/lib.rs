@@ -481,7 +481,16 @@ o.into()
     pub fn clear_gi_probes(&mut self) {
         self.core.clear_gi_probes(&self.queue);
     }
-    /// frame clear colour (linear rgb + a) = three scene.background Color.
+    /// three scene.background Color (linear rgb): tone-mapped like three does (Reinhard x exposure) → clear colour.
+    #[wasm_bindgen(js_name = setBackgroundColor)]
+    pub fn set_background_color(&mut self, rgb: &[f32]) -> Result<(), JsError> {
+    if rgb.len() != 3 {
+    return Err(err("setBackgroundColor: needs 3 floats"));
+    }
+    self.core.set_background_color([rgb[0], rgb[1], rgb[2]]);
+    Ok(())
+    }
+    /// raw frame clear colour (linear rgb + a), not tone-mapped.
     #[wasm_bindgen(js_name = setClearColor)]
     pub fn set_clear_color(&mut self, rgba: &[f32]) -> Result<(), JsError> {
         if rgba.len() != 4 {

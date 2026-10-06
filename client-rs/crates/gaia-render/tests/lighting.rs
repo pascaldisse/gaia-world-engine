@@ -181,3 +181,19 @@ fn gi_add_mode_adds_to_hemisphere() {
     let want = expect_rgb([(1.0 + g[0] / PI) * 0.5, (1.0 + g[1] / PI) * 0.5, (1.0 + g[2] / PI) * 0.5]);
     assert!(close(got, want, 1), "GI add: got {got:?} want {want:?}");
 }
+
+#[test]
+fn background_color_is_tone_mapped_like_three() {
+    // measured vs three r180 WebGPURenderer + ReinhardToneMapping (exposure 1): background 0x9ec0e8 → (138,158,178)±2 on screen = Reinhard(linear) then sRGB
+    let (device, queue) = device();
+    let mut opts = RenderOptions::default();
+    opts.render_height = 64;
+    let mut core = RenderCore::new(&device, &queue, opts);
+    core.set_camera(glam::Mat4::IDENTITY.to_cols_array(), 40f32.to_radians(), 0.1, Some(100.0));
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    let c = [lin(0x9e as f32 / 255.0), lin(0xc0 as f32 / 255.0), lin(0xe8 as f32 / 255.0)];
+    core.set_background_color(c);
+    let px = centre(&shoot(&device, &queue, &mut core));
+    assert!(close(px, expect_rgb(c), 1), "bg: got {px:?} want {:?}", expect_rgb(c));
+    assert!(close(px, [138, 158, 178], 3), "bg vs three-measured: {px:?}");
+}

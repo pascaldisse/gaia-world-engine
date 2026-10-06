@@ -4,6 +4,7 @@
 //   /kernel/*       → client/kernel/render-api/
 //   /asylum.glb     → $GLB (read-only, default scene-export lane .scratch/asylum.glb)
 //   /nm/*           → $NODE_MODULES (default: nearest node_modules walking up from the repo root; three r180 for three.html)
+//   /gi/*          → client/kernel/gi (GIController for r6-gi.html)
 //   /tsl/*          → scratch/tsl-games (game TSL sources staged by test/render-api-tsl.test.js)
 import { resolve, join, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -21,6 +22,7 @@ export function serve({ port = Number(process.env.PORT || 5391),
     else if (u.startsWith('/pkg/')) p = safe(pkg, u.slice(4));
     else if (u.startsWith('/nm/')) p = safe(nm, u.slice(3));
     else if (u.startsWith('/tsl/')) p = safe(join(root, 'scratch/tsl-games'), u.slice(4));
+    else if (u.startsWith('/gi/')) p = safe(join(root, 'client/kernel/gi'), u.slice(3));
     else if (u.startsWith('/kernel/')) p = safe(join(root, 'client/kernel/render-api'), u.slice(7));
     else p = safe(here, u === '/' ? '/index.html' : u);
     const f = p && Bun.file(p);

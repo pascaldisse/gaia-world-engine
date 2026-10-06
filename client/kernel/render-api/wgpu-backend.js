@@ -320,11 +320,11 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     // r6: hemisphere + ambient light = irradiance E in three units (colour x intensity, linear; AmbientLight folded in by the adapter).
     // {sky:[r,g,b] (up-facing), ground:[r,g,b] (down-facing)}. Core divides by PI (three: E x BRDF_Lambert = E x albedo / PI).
     setAmbient({ sky = [0, 0, 0], ground = sky } = {}) { gpu.setHemisphereIrradiance(Float32Array.from(sky), Float32Array.from(ground)); },
-    // r6: scene.background Color -> frame clear colour. rgb = LINEAR working-space colour (three Color.r/g/b), the *Srgb target encodes on store. null -> opaque black.
+    // r6: scene.background Color -> frame clear colour. rgb = LINEAR working-space colour (three Color.r/g/b), tone-mapped in the core (three tone-maps its background: measured r6 S4). null -> black.
     // r6 S3: probe-GI atlases (gi-bridge.js readback of three's GI compute). irradiance Float32Array 4/texel, depth 2/texel, params = packGiParams(). See gaia-render gi.rs.
     setGiProbes(irradiance, depth, params) { gpu.setGiProbes(irradiance, depth, params); },
     clearGiProbes() { gpu.clearGiProbes(); },
-    setBackground(rgb) { gpu.setClearColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0, 1)); },
+    setBackground(rgb) { gpu.setBackgroundColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0)); },
     renderFrame(/* dt */) {
     if (lightsDirty) pushLights();
       return gpu.render();

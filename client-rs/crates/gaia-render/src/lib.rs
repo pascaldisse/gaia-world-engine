@@ -340,6 +340,33 @@ struct MaterialUniform {
     base_color: [f32; 4],
     params: [f32; 4],
     emissive: [f32; 4],
+    flags: [f32; 4],
+}
+
+/// Blend equation of a built-in material (glTF has only alpha; scene-export `materialFlags` writes the others).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BlendKind {
+    /// src*a + dst*(1-a)
+    Alpha,
+    /// src*a + dst (glow cards, light shafts: black = no contribution)
+    Additive,
+    /// dst - src*a
+    Subtractive,
+}
+
+/// Per-material render flags (data from `material.extras.gaia`; no game names in the engine).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MaterialFlags {
+    /// None = from glTF alphaMode (BLEND → Alpha).
+    pub blend: Option<BlendKind>,
+    /// Base colour only: no lights, shadows, exposure (sky domes, backdrops).
+    pub unlit: bool,
+    /// None = default (opaque writes, blended does not).
+    pub depth_write: Option<bool>,
+    /// Lower draws first (sky = negative → everything else over it). Blended sort far→near inside a group.
+    pub render_order: i32,
+    /// None = default (opaque/MASK cast, blended never).
+    pub cast_shadow: Option<bool>,
 }
 
 /// Free camera state; initialised from the glb camera node (or a bounds fit).
@@ -515,6 +542,9 @@ pub struct RenderCore {
     timing: Option<Timing>,
     /// glTF BLEND: alpha-blended, depth-write off, drawn after opaque, sorted far→near.
     blend_pipeline: wgpu::RenderPipeline,
+    /// (blend kind or None, depth write) → built-in pipeline variant (flags path).
+    variant_pipelines: HashMap<(Option<BlendKind>, bool), wgpu::RenderPipeline>,
+    material_flags: HashMap<u32, MaterialFlags>,
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
     mipgen: BilinearBlit,
@@ -570,6 +600,12 @@ impl RenderCore {
         });
         let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", false);
         let blend_pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", true);
+        let mut variant_pipelines = HashMap::new();
+        for kind in [None, Some(BlendKind::Alpha), Some(BlendKind::Additive), Some(BlendKind::Subtractive)] {
+            for dw in [false, true] {
+                variant_pipelines.insert((kind, dw), forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", kind, dw));
+            }
+        }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("base color sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -644,6 +680,8 @@ impl RenderCore {
             shadow_timed: false,
             skin: Default::default(),
             blend_pipeline,
+            variant_pipelines,
+            material_flags: HashMap::new(),
             blend_materials: Default::default(),
             opts,
             pipeline,
@@ -777,6 +815,23 @@ impl RenderCore {
         }
     }
 
+    /// Render flags for a built-in material (blend equation, unlit, depth write, order, shadow).
+    /// Rebinds the material if it exists; blended kinds join the sorted transparent pass.
+    pub fn set_material_flags(&mut self, device: &wgpu::Device, id: u32, flags: MaterialFlags) {
+        self.material_flags.insert(id, flags);
+        if flags.blend.is_some() {
+            self.set_material_blend(id, true);
+        }
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+        self.static_gen += 1;
+    }
+
+    pub fn material_flags(&self, id: u32) -> MaterialFlags {
+        self.material_flags.get(&id).copied().unwrap_or_default()
+    }
+
     pub fn remove_mesh(&mut self, id: u32) {
         self.meshes.remove(&id);
     }
@@ -842,6 +897,7 @@ impl RenderCore {
                 has_tex,
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
+            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
@@ -1357,12 +1413,22 @@ impl RenderCore {
                 blended.sort_by(|a, b| b.0.total_cmp(&a.0));
                 let opaque_count = order.len();
                 order.extend(blended.into_iter().map(|(_, b)| b));
-                for (k, &b) in order.iter().enumerate() {
+                // render_order groups (stable: keeps opaque-before-blend + far→near inside a group)
+                let mut order: Vec<(usize, usize)> = order.into_iter().enumerate().map(|(k, b)| (k, b)).collect();
+                let ro = |b: usize| self.material_flags.get(&self.batches[b].1).map_or(0, |f| f.render_order);
+                order.sort_by_key(|&(_, b)| ro(b));
+                for &(k, b) in order.iter() {
                     let (mesh, material, range) = &self.batches[b];
                     let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
                         continue; // dangling ids: counted by caller via instance_count vs drawn
                     };
-                    let builtin = if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline };
+                    let builtin = match self.material_flags.get(material) {
+                        Some(f) if f.blend.is_some() || f.depth_write.is_some() => {
+                            let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
+                            &self.variant_pipelines[&(kind, f.depth_write.unwrap_or(kind.is_none()))]
+                        }
+                        _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
+                    };
                     pass.set_pipeline(mat.pipeline.as_ref().unwrap_or(builtin));
                     pass.set_bind_group(1, &mat.bind, &[]);
                     pass.set_vertex_buffer(0, m.vertices.slice(..));
@@ -1639,6 +1705,9 @@ pub fn load_scene_into(
         if let Some(lm) = m.lightmap {
             core.set_material_lightmap(device, i as u32, lm.image as u32, lm.fac);
         }
+        if m.flags != MaterialFlags::default() {
+            core.set_material_flags(device, i as u32, m.flags);
+        }
     }
     let identity = Mat4::IDENTITY.to_cols_array();
     for (i, d) in scene.draws.iter().enumerate() {
@@ -1658,6 +1727,9 @@ pub fn load_scene_into(
             (lo.min(Vec3::from_array(x.position)), hi.max(Vec3::from_array(x.position)))
         });
         let max_diag = core.opts.shadows.import_max_caster_diagonal;
+        if scene.materials.get(d.material).and_then(|m| m.flags.cast_shadow) == Some(false) {
+            core.set_instance_cast_shadow(i as u32, false);
+        }
         if max_diag > 0.0 && !v.is_empty() && (diag.1 - diag.0).length() > max_diag {
             core.set_instance_cast_shadow(i as u32, false);
         }
@@ -1693,6 +1765,18 @@ fn forward_pipeline(
     fs: &str,
     blend: bool,
 ) -> wgpu::RenderPipeline {
+    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend)
+}
+
+fn forward_pipeline_variant(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    vs: &str,
+    fs: &str,
+    blend: Option<BlendKind>,
+    depth_write: bool,
+) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("gaia-render forward PBR"),
             layout: Some(layout),
@@ -1724,7 +1808,17 @@ fn forward_pipeline(
                 entry_point: Some(fs),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: INTERNAL_FORMAT,
-                    blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: blend.map(|k| match k {
+                    BlendKind::Alpha => wgpu::BlendState::ALPHA_BLENDING,
+                    BlendKind::Additive => wgpu::BlendState {
+                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                    },
+                    BlendKind::Subtractive => wgpu::BlendState {
+                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },
+                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                    },
+                }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -1738,7 +1832,7 @@ fn forward_pipeline(
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 // transparent pass tests depth but does not write it (sorted back-to-front)
-                depth_write_enabled: Some(!blend),
+                depth_write_enabled: Some(depth_write),
                 depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),

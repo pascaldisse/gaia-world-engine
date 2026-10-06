@@ -39,6 +39,12 @@ fn main() {
     eprintln!("bounds {:?} .. {:?} sun {:?} camera {:?} draws {}", scene.bounds_min, scene.bounds_max, scene.sun, scene.camera.map(|c| c.world.w_axis), scene.draws.len());
     let mut core = RenderCore::new(&device, &queue, RenderOptions { render_height: hh, shadows: so, exposure: env("GAIA_EXPOSURE", 1.0), ..Default::default() });
     load_scene_into(&mut core, &device, &queue, &scene).expect("scene");
+    // GAIA_HIDE_DRAWS=lo-hi : remove static draw instances lo..=hi (pick by bisection: which draw covers a pixel)
+    if let Ok(r) = std::env::var("GAIA_HIDE_DRAWS") {
+        let (lo, hi) = r.split_once('-').map(|(a, b)| (a.parse::<u32>().unwrap(), b.parse::<u32>().unwrap())).expect("lo-hi");
+        for i in lo..=hi.min(scene.draws.len() as u32 - 1) { core.remove_instance(i); if hi - lo < 8 { let d = &scene.draws[i as usize]; eprintln!("draw {i}: material {} verts {}", d.material, d.vertex_count); } }
+        eprintln!("hid draws {lo}..={hi} of {}", scene.draws.len());
+    }
     let pct: u32 = env("GAIA_SHADOW_DYNAMIC_PCT", 0);
     if pct > 0 {
         for i in 0..scene.draws.len() as u32 {

@@ -663,11 +663,11 @@ impl RenderCore {
         id: u32,
         desc: &ShaderMaterialDesc,
     ) -> Result<(), String> {
-        let module = wgpu::naga::front::wgsl::parse_str(&desc.wgsl)
+        let module = naga::front::wgsl::parse_str(&desc.wgsl)
             .map_err(|e| format!("material {id} WGSL parse: {}", e.emit_to_string(&desc.wgsl)))?;
-        wgpu::naga::valid::Validator::new(
-            wgpu::naga::valid::ValidationFlags::all(),
-            wgpu::naga::valid::Capabilities::empty(),
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
         )
         .validate(&module)
         .map_err(|e| format!("material {id} WGSL validate: {e:?}"))?;

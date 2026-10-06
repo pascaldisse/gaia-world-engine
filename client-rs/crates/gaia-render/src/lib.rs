@@ -37,6 +37,8 @@ pub struct RenderOptions {
     pub clear_color: [f64; 4],
     /// Scale applied to KHR_lights_punctual intensities (lux / candela → shader units).
     pub light_intensity_scale: f32,
+    /// Material sampler anisotropy (1 = off, max 16).
+    pub anisotropy: u16,
     /// Camera fit when the glb has no camera: fraction of half-extent behind center,
     /// and fraction of half-height below center.
     pub fit_eye_back: f32,
@@ -56,6 +58,7 @@ impl Default for RenderOptions {
             default_fov_y_degrees: 60.0,
             clear_color: [0.45, 0.55, 0.7, 1.0],
             light_intensity_scale: 1.0,
+            anisotropy: 8,
             fit_eye_back: 0.6,
             fit_height_bias: 0.5,
         }
@@ -206,6 +209,41 @@ impl BilinearBlit {
     }
 }
 
+impl BilinearBlit {
+    /// Blit `src` view → `dst` view (also used for GPU mip generation).
+    fn encode_view(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
+    ) {
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit bind"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("mip blit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dst,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}
 impl Upscaler for BilinearBlit {
     fn name(&self) -> &str {
         "bilinear"
@@ -451,6 +489,8 @@ pub struct RenderCore {
     targets: Option<Targets>,
     upscaler: Box<dyn Upscaler>,
     timing: Option<Timing>,
+    /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
+    mipgen: BilinearBlit,
 }
 
 impl RenderCore {
@@ -492,9 +532,12 @@ impl RenderCore {
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: opts.anisotropy.clamp(1, 16),
             ..Default::default()
         });
-        let white = upload_rgba8(device, queue, 1, 1, &[255; 4]);
+        let mipgen = BilinearBlit::new(device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let white = upload_rgba8(device, queue, None, 1, 1, &[255; 4]);
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
         frame.ambient = [opts.ambient[0], opts.ambient[1], opts.ambient[2], opts.exposure];
         frame.sun_dir = Vec3::from_array(opts.default_sun_direction)
@@ -548,6 +591,7 @@ impl RenderCore {
                 zfar: None,
             },
             upscaler: Box::new(BilinearBlit::new(device, opts.output_format)),
+            mipgen,
             opts,
             pipeline,
             material_layout,
@@ -675,7 +719,7 @@ impl RenderCore {
             return Err(format!("texture {id}: {} bytes != {width}x{height}x4", rgba.len()));
         }
         self.textures
-            .insert(id, upload_rgba8(device, queue, width, height, rgba));
+            .insert(id, upload_rgba8(device, queue, Some(&self.mipgen), width, height, rgba));
         // materials referencing it must rebind
         let ids: Vec<u32> = self
             .materials
@@ -1237,6 +1281,7 @@ fn nonempty(bytes: &[u8]) -> &[u8] {
 fn upload_rgba8(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    mipgen: Option<&BilinearBlit>,
     width: u32,
     height: u32,
     pixels: &[u8],
@@ -1246,14 +1291,21 @@ fn upload_rgba8(
         height,
         depth_or_array_layers: 1,
     };
+    // Full chain, generated on the GPU right after upload (None = single level).
+    let levels = match mipgen {
+        Some(_) => 32 - width.max(height).max(1).leading_zeros(),
+        None => 1,
+    };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("base color"),
         size,
-        mip_level_count: 1,
+        mip_level_count: levels,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | if levels > 1 { wgpu::TextureUsages::RENDER_ATTACHMENT } else { wgpu::TextureUsages::empty() },
         view_formats: &[],
     });
     queue.write_texture(
@@ -1271,6 +1323,22 @@ fn upload_rgba8(
         },
         size,
     );
+    if let Some(blit) = mipgen.filter(|_| levels > 1) {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("mipgen") });
+        let level_view = |l: u32| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: l,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        for l in 1..levels {
+            let src = level_view(l - 1);
+            let dst = level_view(l);
+            blit.encode_view(device, &mut encoder, &src, &dst);
+        }
+        queue.submit(Some(encoder.finish()));
+    }
     texture.create_view(&Default::default())
 }
 

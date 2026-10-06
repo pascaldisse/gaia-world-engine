@@ -8,6 +8,7 @@
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
 import { materialToParams } from './material-map.js';
+import { IDENTITY_MAT4 } from './interface.js';
 
 const MAT_EPS = 0;
 export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {} } = {}) {
@@ -171,13 +172,49 @@ return;
 stats.unsupported.add(`light:${o.type}`); // Ambient/Hemisphere/Spot/RectArea: no interface call yet
 }
 
+// ---- SkinnedMesh: skin (IBM = boneInverse x bindMatrix) + skinned mesh (JOINTS/WEIGHTS) + identity instance;
+// per frame joint matrices = matrixWorld x bindMatrixInverse x bone.matrixWorld (backend skins to WORLD space,
+// == three's skinning + modelMatrix), uploaded via updateSkin ONLY when the palette changed.
+const skinRecs = new Map();
+const skinCapable = () => typeof backend.createSkin === 'function' && typeof backend.updateSkin === 'function' && typeof backend.createSkinnedMesh === 'function';
+function mul4(a, b, out = new Float64Array(16)) { for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + r] * b[c * 4 + k]; out[c * 4 + r] = v; } return out; }
+const attrVer = (g) => `${g.index?.version ?? -1}|${['position', 'normal', 'uv', 'skinIndex', 'skinWeight'].map(k => g.attributes[k]?.version ?? -1)}`;
+function syncSkinned(o, vis) {
+const g = o.geometry, sk = o.skeleton, nb = sk?.bones?.length ?? 0;
+if (!g?.attributes?.position || !g.attributes.skinIndex || !g.attributes.skinWeight || !nb) { stats.unsupported.add('SkinnedMesh:no-skin-attributes'); return; }
+let r = skinRecs.get(o);
+if (r && (r.geo !== g || r.ver !== attrVer(g) || r.nb !== nb || r.mref !== o.material)) { destroySkinned(r); r = null; }
+if (!r) {
+const n = g.attributes.position.count, a = (k, w) => g.attributes[k] ? Float32Array.from({ length: n * w }, (_, i) => g.attributes[k].getComponent(Math.floor(i / w), i % w)) : null;
+const positions = a('position', 3), normals = a('normal', 3) ?? new Float32Array(n * 3), uvs = a('uv', 2) ?? new Float32Array(n * 2);
+const joints = Uint32Array.from(a('skinIndex', 4)), weights = a('skinWeight', 4);
+const indices = g.index ? Uint32Array.from(g.index.array) : Uint32Array.from({ length: n }, (_, i) => i);
+const ibm = new Float32Array(nb * 16);
+for (let i = 0; i < nb; i++) ibm.set(mul4(sk.boneInverses[i].elements, o.bindMatrix.elements), i * 16);
+const skin = backend.createSkin(ibm, nb);
+const mesh = backend.createSkinnedMesh({ positions, normals, uvs, joints, weights, indices }, skin);
+const me = ensureMaterial(Array.isArray(o.material) ? o.material[0] : o.material);
+const node = backend.createInstance(mesh, me.id, IDENTITY_MAT4.slice(), nodeFlags(o, vis));
+const rr = {}; me.users.add(rr);
+r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: Array.isArray(o.material) ? o.material[0] : o.material, pal: new Float32Array(nb * 16), last: new Float32Array(nb * 16).fill(NaN), flagsSig: flagSig(nodeFlags(o, vis)) });
+skinRecs.set(o, r); stats.created++; stats.uploadsGeometry++;
+}
+const pre = mul4(o.matrixWorld.elements, o.bindMatrixInverse.elements), tmp = new Float64Array(16);
+for (let i = 0; i < nb; i++) r.pal.set(mul4(pre, sk.bones[i].matrixWorld.elements, tmp), i * 16);
+let changed = false; for (let i = 0; i < r.pal.length; i++) if (r.pal[i] !== r.last[i]) { changed = true; break; }
+if (changed) { backend.updateSkin(r.skin, r.pal); r.last.set(r.pal); stats.updated++; stats.skinUploads = (stats.skinUploads ?? 0) + 1; }
+const f = nodeFlags(o, vis), fs = flagSig(f); if (fs !== r.flagsSig) { backend.updateNode(r.node, f); r.flagsSig = fs; stats.updated++; }
+ensureMaterial(r.mat);
+}
+function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNode(r.node); backend.destroySkinnedMesh?.(r.mesh); backend.destroySkin?.(r.skin); stats.removed++; }
 function visit(o, parentVis, seen) {
 const vis = parentVis && o.visible !== false;
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) stats.unsupported.add('BatchedMesh'); // needs createBatched (per-instance geometry ids + indirect draw) — not in interface
 else {
-if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // createSkin/updateBones TODO
+if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (const c of o.children) visit(c, vis, seen); return; }
+if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // backend lacks createSkin/updateSkin/createSkinnedMesh
 seen.add(o);
 let rec = recs.get(o);
 if (!rec) { rec = { parts: [], matrix: new Float64Array(16), flagsSig: '', matSig: '', dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.flagsSig = flagSig(nodeFlags(o, vis)); rec.mref = o.material; rec.geoRef = o.geometry; }
@@ -223,6 +260,7 @@ if (updateMatrices) scene.updateMatrixWorld(true);
 const seen = new Set();
 visit(scene, true, seen);
 for (const [o, rec] of recs) if (!seen.has(o) || (o.isInstancedMesh && !backend.updateInstances && !backend.createInstanced && false)) { destroyParts(rec); recs.delete(o); }
+for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
 if (camera) {
@@ -232,6 +270,6 @@ const sig = `${view}|${proj}`;
 if (view.length === 16 && proj.length === 16 && sig !== cameraSig) { backend.setCamera(view, proj); cameraSig = sig; stats.updated++; }
 }
 },
-dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
+dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
 };
 }

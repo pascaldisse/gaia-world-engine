@@ -146,6 +146,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
         else {
           if (node.rid) gpu.removeInstance(node.rid);
           node.rid = gpu.createInstance(node.mesh, node.material, w);
+if (node.instAttrs) for (const [k, v] of Object.entries(node.instAttrs)) gpu.setInstanceAttribute(node.rid, k, v.length, v);
           node.ridMat = node.material; node.ridMesh = node.mesh;
           applyShadowFlags(node);
         }
@@ -188,7 +189,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'shader-vertex-attributes', 'skinning', 'sun-shadows', 'webgpu', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {
@@ -200,6 +201,10 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
       return gpu.createMesh(positions, normals, uvs, indices);
     },
     destroyMesh(id) { gpu.destroyMesh(id); },
+// r6-tsl: extra named per-vertex attribute (uv1, vertex colour, custom, `node:<uuid>`) for TSL shader materials; f32 x itemSize per vertex.
+setMeshAttribute(mesh, key, itemSize, data) { gpu.setMeshAttribute(mesh, key, itemSize, data instanceof Float32Array ? data : Float32Array.from(data)); },
+// r6-tsl: backend-side count of three draws skipped last frame because a material's vertex attribute was missing (loud counter).
+threeSkipped() { return gpu.threeSkipped(); },
     // ---- skinning (gaia-render skin.rs: one compute pre-pass for all skinned meshes) ----
     // ibm = jointCount col-major mat4s; updateSkin = joint WORLD matrices; skinned instances use identity mat4.
     createSkin(inverseBind, jointCount) { return gpu.createSkin(jointCount, Float32Array.from(inverseBind)); },
@@ -266,7 +271,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static, instAttrs: flags.instAttrs ?? null };
       nodes.set(node.id, node); link(node, flags.parent);
       const [pw, pv] = parentState(node); sync(node, pw, pv);
       return node.id;

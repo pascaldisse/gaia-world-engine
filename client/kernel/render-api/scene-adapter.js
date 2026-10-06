@@ -18,6 +18,53 @@ const geos = new Map();        // geometry → { id, sig, users:Set<rec> }  (key
 const mats = new Map();        // material → { id, sig, epoch, params, users:Set }
 const lights = new Map();      // Light → { id, kind, sig }
 const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 0, degraded: new Set(), unsupported: new Set() };
+// r6-tsl: every TSL NodeMaterial is accounted: ok (shader material created) | refused (stage + normalised reason; material drawn as PBR) | attribute gaps (draw skipped by the core).
+const tsl = stats.tsl = { ok: 0, refused: 0, byReason: {}, samples: {}, missingAttr: {}, attrUploads: 0, instAttrRows: 0 };
+const normReason = (r) => String(r).replace(/\s+/g, ' ').replace(/0x[0-9a-f]+|\b\d+\b/gi, 'N').slice(0, 160);
+function tslRefuse(m, stage, reason) {
+  const key = `${stage}: ${normReason(reason)}`;
+  tsl.refused++; tsl.byReason[key] = (tsl.byReason[key] ?? 0) + 1;
+  if (!(key in tsl.samples)) { tsl.samples[key] = `${m.name || m.type || '?'} (${m.uuid.slice(0, 8)})`; console.warn(`[render-api] TSL material REFUSED → PBR fallback (${key}) first: ${tsl.samples[key]}`); }
+}
+// geometry/node attribute feed for a material's non-core vertex attributes (uv1, colour, custom, node buffers). Core attrs (position/normal/uv) ride the mesh.
+const CORE_ATTRS = new Set(['position', 'normal', 'uv']);
+function attrFloats(at, items) {
+  if (!at.isInterleavedBufferAttribute && at.itemSize === items && at.array instanceof Float32Array) return at.array;
+  const out = new Float32Array(at.count * items);
+  for (let i = 0; i < at.count; i++) { out[i * items] = at.getX(i); if (items > 1) out[i * items + 1] = at.getY(i); if (items > 2) out[i * items + 2] = at.getZ(i); if (items > 3) out[i * items + 3] = at.getW(i); }
+  return out;
+}
+const TYPE_ITEMS = { float: 1, vec2: 2, vec3: 3, vec4: 4 };
+function feedMeshAttrs(gp, g, me, m) {
+  const pkg = me.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null;
+  if (!pkg || !backend.setMeshAttribute) return;
+  gp.attrVer ??= new Map();
+  for (const a of pkg.attributes) {
+    if (a.instanced || (a.source === 'geometry' && CORE_ATTRS.has(a.name))) continue;
+    const at = a.source === 'node' ? pkg.attributeSources?.[a.key] : g.attributes?.[a.name];
+    if (!at) { const k = `${m.name || m.type}:${a.name}`; if (!(k in tsl.missingAttr)) { tsl.missingAttr[k] = 'geometry lacks attribute'; console.warn(`[render-api] TSL attribute missing → draws SKIPPED: material ${k}`); } continue; }
+    const ver = `${at.version}:${at.count}`;
+    if (gp.attrVer.get(a.key) === ver) continue;
+    try { backend.setMeshAttribute(gp.id, a.key, TYPE_ITEMS[a.type] ?? at.itemSize, attrFloats(at, TYPE_ITEMS[a.type] ?? at.itemSize)); gp.attrVer.set(a.key, ver); tsl.attrUploads++; }
+    catch (e) { const k = `${m.name || m.type}:${a.name}`; tsl.missingAttr[k] = String(e.message ?? e).slice(0, 120); console.warn(`[render-api] TSL attribute upload FAILED: ${k}: ${tsl.missingAttr[k]}`); gp.attrVer.set(a.key, ver); }
+  }
+}
+// per-INSTANCE rows (instancedBufferAttribute of an InstancedMesh, expanded to one backend instance each): { key: Float32Array(items) } for row i
+function instAttrRow(me, i) {
+  const pkg = me.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null;
+  if (!pkg) return null;
+  let out = null;
+  for (const a of pkg.attributes) {
+    if (!a.instanced) continue;
+    const at = pkg.attributeSources?.[a.key]; if (!at) continue;
+    const items = TYPE_ITEMS[a.type] ?? at.itemSize, row = new Float32Array(items);
+    if (!at.isInterleavedBufferAttribute && at.array) for (let k = 0; k < items; k++) row[k] = at.array[i * at.itemSize + k] ?? 0;
+    else { row[0] = at.getX(i); if (items > 1) row[1] = at.getY(i); if (items > 2) row[2] = at.getZ(i); if (items > 3) row[3] = at.getW(i); }
+    (out ??= {})[a.key] = row; tsl.instAttrRows++;
+  }
+  return out;
+}
+const instAttrSig = (me) => { const pkg = me.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; let s = ''; if (pkg) for (const a of pkg.attributes) if (a.instanced) s += `${pkg.attributeSources?.[a.key]?.version ?? ''},`; return s; };
 let epoch = 0, cameraSig = '';
 
 const eqArr = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
@@ -74,7 +121,7 @@ const arrays = geometryArrays(g, start, count);
 if (backend.updateMesh) { backend.updateMesh(p.id, arrays); p.sig = sig; stats.uploadsGeometry++; stats.updated++; }
 else { // degrade: new mesh, users re-created by caller (flag)
 stats.degraded.add('updateMesh-missing:recreate');
-const old = p.id; p.id = backend.createMesh(arrays); p.sig = sig; p.stale = old; stats.uploadsGeometry++;
+const old = p.id; p.id = backend.createMesh(arrays); p.sig = sig; p.stale = old; p.attrVer = null; stats.uploadsGeometry++;
 for (const u of p.users) u.dirtyGeo = true;
 }
 }
@@ -87,7 +134,7 @@ return p;
 let frameScene = null, frameCamera = null;
 function syncLiveUniforms() {
   for (const [, e] of mats) {
-    const live = e.conv?.kind === 'wgsl' && e.epoch === epoch ? e.conv.package?.live : null;
+    const live = e.conv?.kind === 'wgsl' && !e.fellBack && e.epoch === epoch ? e.conv.package?.live : null;
     if (!live) continue;
     const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined });
     if (!changed.length) continue;
@@ -95,20 +142,23 @@ function syncLiveUniforms() {
     else stats.degraded.add('setShaderUniforms-missing:tsl-values-frozen');
   }
 }
-function ensureMaterial(m) {
+function ensureMaterial(m, o = null) {
 let e = mats.get(m);
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
 const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
-const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
+const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh ? { geometry: o.geometry } : { object: o }) : {};
+const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
+if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (!e) {
-const id = createMat(conv);
+const id = createMat(conv, m);
 e = { id, sig: conv.sig, conv, users: new Set(), epoch, degraded: conv.degraded };
+e.fellBack = !!conv.fellBack;
 mats.set(m, e); stats.created++;
 } else {
 if (conv.kind === 'pbr' && e.conv.kind === 'pbr' && backend.updateMaterial) { backend.updateMaterial(e.id, conv.params, conv.textures); }
 else { // swap handle on every user
-const old = e.id; e.id = createMat(conv);
+const old = e.id; e.id = createMat(conv, m); e.fellBack = !!conv.fellBack;
 for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); }
 backend.destroyMaterial(old);
 }
@@ -117,11 +167,15 @@ e.sig = conv.sig; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; st
 if (conv.degraded) stats.degraded.add(conv.degraded);
 return e;
 }
-function createMat(conv) {
+function createMat(conv, m) {
 if (conv.kind === 'wgsl') {
-if (backend.createShaderMaterial) return backend.createShaderMaterial(conv.package);
-stats.degraded.add('createShaderMaterial-missing:pbr-fallback');
-return backend.createMaterial(conv.fallbackParams ?? {}, null);
+  if (backend.createShaderMaterial) {
+    try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; return id; }
+    catch (e) { tslRefuse(m, 'backend', e?.message ?? e); stats.degraded.add('tsl-backend-refused:pbr-fallback'); conv.fellBack = true; return backend.createMaterial(conv.fallbackParams ?? {}, conv.fallbackTextures ?? null); }
+  }
+  stats.degraded.add('createShaderMaterial-missing:pbr-fallback');
+  conv.fellBack = true;
+  return backend.createMaterial(conv.fallbackParams ?? {}, null);
 }
 return backend.createMaterial(conv.params, conv.textures);
 }
@@ -142,13 +196,14 @@ if (!m) continue;
 const start = grp.start + (dr.start ?? 0) * 0, count = grp.count === Infinity ? (dr.count ?? Infinity) : grp.count;
 const gp = ensureGeometry(rec, g, start, count);
 if (!gp) continue;
-const me = ensureMaterial(m);
+const me = ensureMaterial(m, o);
 me.users.add(rec);
+feedMeshAttrs(gp, g, me, m);
 const flags = nodeFlags(o, vis);
 const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: m, flags, node: 0 };
 if (o.isInstancedMesh) {
 if (backend.createInstanced) { part.node = backend.createInstanced(gp.id, me.id, instanceMats(o), o.count, { ...flags, matrix: Array.from(o.matrixWorld.elements) }); part.instV = o.instanceMatrix.version; part.instCount = o.count; }
-else { stats.degraded.add('createInstanced-missing:expanded-per-instance'); part.expanded = []; for (let i = 0; i < o.count; i++) part.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), flags)); part.instV = o.instanceMatrix.version; part.instCount = o.count; }
+else { stats.degraded.add('createInstanced-missing:expanded-per-instance'); part.expanded = []; for (let i = 0; i < o.count; i++) part.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...flags, instAttrs: instAttrRow(me, i) })); part.instV = o.instanceMatrix.version; part.instCount = o.count; part.instSig = instAttrSig(me); }
 } else part.node = backend.createInstance(gp.id, me.id, Array.from(o.matrixWorld.elements), flags);
 rec.parts.push(part); stats.created++;
 }
@@ -275,7 +330,7 @@ const single = rec.parts.length === 1 && !Array.isArray(o.material);
 let swapped = single && rec.parts[0].mat !== o.material;
 for (const p of rec.parts) {
 if (p.expanded) { // instanced fallback
-if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), f)); p.instV = o.instanceMatrix.version; p.instCount = o.count; stats.updated++; }
+const isg = instAttrSig(mats.get(p.mat)); if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instSig !== isg) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...f, instAttrs: instAttrRow(me, i) })); p.instV = o.instanceMatrix.version; p.instCount = o.count; p.instSig = isg; stats.updated++; }
 continue;
 }
 ensureGeometry(rec, p.geo, p.start, p.count); // version-compare only (no upload unless attribute/index version moved)
@@ -288,7 +343,7 @@ if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count) { 
 }
 if (Object.keys(u).length) { backend.updateNode(p.node, u); stats.updated++; }
 // refresh material conversion (property edits) — cheap, once per material per frame (epoch-gated inside)
-ensureMaterial(p.mat);
+{ const me = ensureMaterial(p.mat, o); const gpp = geos.get(p.geo)?.parts.get(p.geoKey); if (gpp) feedMeshAttrs(gpp, p.geo, me, p.mat); }
 }
 if (moved) rec.matrix.set(o.matrixWorld.elements);
 rec.fbits = fb; rec.fro = fro;

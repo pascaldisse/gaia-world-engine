@@ -19,6 +19,8 @@ export const SHADOW_DEFAULTS = {
 filter: 'smooth',   // PORT: r180 WebGPU maps renderer.shadowMap.type -> filter fn (Basic 1 tap | PCF 17 nearest taps, radius=shadow.radius | PCFSoft 9-tap | VSM). Nearest compare = stair-stepped edges. 'smooth' = ENGINE filter: hardware-bilinear compare (depth tex LinearFilter) x Vogel-disk taps x tent weights, radius = filterRadius texels. docs/LIGHTING-OPENWORLD.md S1
 filterRadius: 1.5,  // texels (pcf + smooth) -> LightShadow.radius per cascade (live). ASSUMED: tuned on BP pose B, docs/lanes/bw-shadow.md
 filterTaps: 12,     // smooth only; each tap = one 2x2 bilinear compare (GPU only, 0 CPU). ASSUMED
+staticCache: false, // ENGINE option (default off): far cascades 1..N-1 are CACHED — re-rendered only when the sun moved, the guard says the camera left the last-rendered map, or every `cacheRefresh` frames (dynamic casters in far cascades lag <= cacheRefresh frames). Cascade 0 renders every frame. Supersedes stagger rotation when on
+cacheRefresh: 30,   // frames between forced refreshes of a cached far cascade (cascade i is offset by i so they never coincide)
 guard: true,        // stagger safety net: a skipped far cascade whose frustum slice left its last-rendered map is rendered NOW (max 1 per frame; teleport/hitch pop). 0 cost unless coverage is actually lost
 };
 export const SHADOW_FILTERS = ['basic', 'pcf', 'pcfsoft', 'vsm', 'smooth'];
@@ -96,6 +98,7 @@ export class SunShadows {
 
   enable(cfg = {}, renderer = null) {
     const c = { ...SHADOW_DEFAULTS, ...cfg };
+    if (typeof location !== 'undefined') { const q = new URLSearchParams(location.search).get('shadowCache'); if (q !== null) { c.staticCache = q !== '0'; if (Number(q) > 1) c.cacheRefresh = Number(q); } } // perf tooling: ?shadowCache=1|<refreshFrames>|0
     const light = this.sun;
     const prev = this.config;
     // cascades / mapSize / maxFar / mode / lightMargin are baked into the node
@@ -169,6 +172,8 @@ export class SunShadows {
   tick() {
     const n = this.node, ls = n?.lights;
     if (!ls?.length) return;
+    if (this.config?.staticCache) return this._tickCached(ls);
+    if (this._cached) { this._cached = false; ls.forEach((l) => { l.shadow.autoUpdate = true; }); }
     const on = this.config?.stagger !== false;
     if (!on) { if (this._staggered) { ls.forEach((l) => { l.shadow.autoUpdate = true; }); this._staggered = false; } return; }
     this._staggered = true;
@@ -179,6 +184,22 @@ export class SunShadows {
     const go = this._fc % every === 0;
     if (go) this._rr = ((this._rr ?? 0) % (ls.length - 1)) + 1; // 1..N-1
     for (let i = 1; i < ls.length; i++) { ls[i].shadow.autoUpdate = false; if (go && i === this._rr) ls[i].shadow.needsUpdate = true; }
+    this._guard(ls);
+  }
+  // staticCache: cascade 0 every frame; far cascades only on sun change / guard / periodic refresh (cacheRefresh), offset per cascade
+  _tickCached(ls) {
+    this._cached = true; this._staggered = false;
+    const sp = this.sun.position, key = `${sp.x.toFixed(2)},${sp.y.toFixed(2)},${sp.z.toFixed(2)}|${this.sun.target?.position.x.toFixed(1)},${this.sun.target?.position.z.toFixed(1)}`;
+    const sunMoved = key !== this._sunKey; this._sunKey = key;
+    this._fc = (this._fc ?? 0) + 1;
+    const every = Math.max(1, Math.round(Number(this.config?.cacheRefresh) || 30));
+    ls[0].shadow.autoUpdate = true;
+    this.cacheRenders = 0;
+    for (let i = 1; i < ls.length; i++) {
+      const sh = ls[i].shadow; sh.autoUpdate = false;
+      const never = this._lastRender?.[i] === undefined;
+      if (never || sunMoved || (this._fc + i) % every === 0) { sh.needsUpdate = true; (this._lastRender ??= [])[i] = this._fc; this.cacheRenders++; }
+    }
     this._guard(ls);
   }
   // stagger safety net (cfg.guard): a skipped far cascade whose frustum slice is no longer inside its LAST-RENDERED map would show a pop (unshadowed band) until its turn -> render the worst one now. Max 1 forced per frame (never above stagger-1 cost); 0 CPU render cost while coverage holds.

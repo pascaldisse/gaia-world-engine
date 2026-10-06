@@ -19,12 +19,13 @@ const mats = new Map();        // material → { id, sig, epoch, params, users:S
 const lights = new Map();      // Light → { id, kind, sig }
 const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 0, degraded: new Set(), unsupported: new Set() };
 // r6-tsl: every TSL NodeMaterial is accounted: ok (shader material created) | refused (stage + normalised reason; material drawn as PBR) | attribute gaps (draw skipped by the core).
-const tsl = stats.tsl = { ok: 0, refused: 0, byReason: {}, samples: {}, missingAttr: {}, attrUploads: 0, instAttrRows: 0 };
+const tsl = stats.tsl = { ok: 0, refused: 0, byReason: {}, samples: {}, detail: {}, missingAttr: {}, attrUploads: 0, instAttrRows: 0 };
 const normReason = (r) => String(r).replace(/\s+/g, ' ').replace(/0x[0-9a-f]+|\b\d+\b/gi, 'N').slice(0, 160);
-function tslRefuse(m, stage, reason) {
+function tslRefuse(m, stage, reason, pkg = null) {
   const key = `${stage}: ${normReason(reason)}`;
   tsl.refused++; tsl.byReason[key] = (tsl.byReason[key] ?? 0) + 1;
-  if (!(key in tsl.samples)) { tsl.samples[key] = `${m.name || m.type || '?'} (${m.uuid.slice(0, 8)})`; console.warn(`[render-api] TSL material REFUSED → PBR fallback (${key}) first: ${tsl.samples[key]}`); }
+  if (pkg && !(key in tsl.detail)) tsl.detail[key] = { bindings: pkg.bindGroups.map((g) => ({ g: g.group, b: g.bindings.map((b) => `${b.kind}:${b.name}:${b.stage}`) })), attrs: pkg.attributes.map((a) => `${a.name}:${a.type}:${a.source}${a.instanced ? ':inst' : ''}`), storageSrc: (pkg.fragment.match(/.*var<storage.*/g) ?? []).concat(pkg.vertex.match(/.*var<storage.*/g) ?? []).slice(0, 4) };
+if (!(key in tsl.samples)) { tsl.samples[key] = `${m.name || m.type || '?'} (${m.uuid.slice(0, 8)})`; console.warn(`[render-api] TSL material REFUSED → PBR fallback (${key}) first: ${tsl.samples[key]}`); }
 }
 // geometry/node attribute feed for a material's non-core vertex attributes (uv1, colour, custom, node buffers). Core attrs (position/normal/uv) ride the mesh.
 const CORE_ATTRS = new Set(['position', 'normal', 'uv']);
@@ -171,7 +172,7 @@ function createMat(conv, m) {
 if (conv.kind === 'wgsl') {
   if (backend.createShaderMaterial) {
     try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; return id; }
-    catch (e) { tslRefuse(m, 'backend', e?.message ?? e); stats.degraded.add('tsl-backend-refused:pbr-fallback'); conv.fellBack = true; return backend.createMaterial(conv.fallbackParams ?? {}, conv.fallbackTextures ?? null); }
+    catch (e) { tslRefuse(m, 'backend', e?.message ?? e, conv.package); stats.degraded.add('tsl-backend-refused:pbr-fallback'); conv.fellBack = true; return backend.createMaterial(conv.fallbackParams ?? {}, conv.fallbackTextures ?? null); }
   }
   stats.degraded.add('createShaderMaterial-missing:pbr-fallback');
   conv.fellBack = true;

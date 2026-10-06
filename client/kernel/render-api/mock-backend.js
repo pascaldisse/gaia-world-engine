@@ -19,6 +19,7 @@ renderFrame: rec('renderFrame'), resize: rec('resize'), dispose: rec('dispose'),
 };
 const opt = { updateMesh: rec('updateMesh'), updateMaterial: rec('updateMaterial'), createInstanced: rec('createInstanced', true), updateInstances: rec('updateInstances'),
 setActiveGroups: rec('setActiveGroups'), createSkin: rec('createSkin', true), updateSkin: rec('updateSkin'), createSkinnedMesh: rec('createSkinnedMesh', true), destroySkin: rec('destroySkin'), destroySkinnedMesh: rec('destroySkinnedMesh'),
+setAmbient: rec('setAmbient'), setBackground: rec('setBackground'), setBackgroundTexture: rec('setBackgroundTexture'), setFog: rec('setFog'), setEnvironment: rec('setEnvironment'),
 createShaderMaterial: (pkg) => { log.push(['createShaderMaterial', { vertexBytes: pkg.vertex.length, fragmentBytes: pkg.fragment.length, groups: pkg.bindGroups.length }]); return next++; } };
 for (const k of optional) b[k] = opt[k];
 b.take = () => log.splice(0); // drain

@@ -35,6 +35,8 @@ try {
   if (!res) throw new Error('timeout waiting for window.__result');
   const shot = await send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(out, Buffer.from(shot.result.data, 'base64'));
-  writeFileSync(out.replace(/\.png$/, '.json'), JSON.stringify({ ...res, console: logs.slice(-40) }, null, 1));
-  console.log(JSON.stringify(res, null, 1)); console.log('screenshot', out);
+  const { pngs, ...rest } = res; // r6: pages may return { pngs: { name: dataURL } } → <out>.<name>.png
+  for (const [k, v] of Object.entries(pngs ?? {})) writeFileSync(out.replace(/\.png$/, `.${k}.png`), Buffer.from(String(v).split(',')[1], 'base64'));
+  writeFileSync(out.replace(/\.png$/, '.json'), JSON.stringify({ ...rest, console: logs.slice(-40) }, null, 1));
+  console.log(JSON.stringify(rest, null, 1)); console.log('screenshot', out);
 } finally { try { ws.close(); } catch {} proc.kill(); server.stop(true); }

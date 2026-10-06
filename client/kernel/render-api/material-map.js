@@ -80,6 +80,8 @@ const customCache = new WeakMap(); // NodeMaterial → { version, v }
 function customNode(m) { let c = customCache.get(m); if (!c || c.version !== m.version) { c = { version: m.version, v: isCustomNode(m) }; customCache.set(m, c); } return c.v; }
 export function materialToParams(m, { exportNodeMaterial = null, three = null, tslOptions = {} } = {}) {
   const params = pbrParams(m);
+  // r6: legacy GLSL ShaderMaterial/RawShaderMaterial (bp-sky dome) — WebGPURenderer rejects it ('Material "ShaderMaterial" is not compatible'), so three draws NOTHING; match it (never a default-PBR sphere) + say so loudly. GLSL->WGSL translation REFUSED (see docs §10).
+  if (m.isShaderMaterial || m.isRawShaderMaterial) return { kind: 'pbr', params: { ...params, visible: false }, textures: null, sig: materialSig(m), degraded: 'ShaderMaterial-GLSL-unsupported:not-drawn(three-parity)' };
   const textures = {};
   for (const slot of TEX_SLOTS) { const t = m[slot]; if (!t) continue; const d = textureData(t); if (d) textures[slot] = d; }
   const hasTex = Object.keys(textures).length > 0;

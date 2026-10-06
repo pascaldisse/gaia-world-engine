@@ -487,6 +487,72 @@ o.into()
         self.core.set_sun([direction[0], direction[1], direction[2]], [color[0], color[1], color[2]], intensity);
         Ok(())
     }
+    /// hemisphere (+ folded ambient) irradiance E in three units (colour x intensity, linear): sky = up-facing, ground = down-facing. 3 floats each.
+    #[wasm_bindgen(js_name = setHemisphereIrradiance)]
+    pub fn set_hemisphere_irradiance(&mut self, sky: &[f32], ground: &[f32]) -> Result<(), JsError> {
+        if sky.len() != 3 || ground.len() != 3 {
+            return Err(err("setHemisphereIrradiance: sky/ground need 3 floats"));
+        }
+        self.core.set_hemisphere_irradiance([sky[0], sky[1], sky[2]], [ground[0], ground[1], ground[2]]);
+        Ok(())
+    }
+    /// r6 probe GI: host readback of three's GI atlases. irradiance = 4 f32/texel (vec3 storage padded to vec4), depth = 2 f32/texel (mean, mean^2),
+    /// params = [cascadeCount, blendCells, irradianceRes, depthRes, mode(0 add|1 replace), 0,0,0, then per cascade 8: baseCell.xyz, spacing, dims.xyz, baseIndex].
+    #[wasm_bindgen(js_name = setGiProbes)]
+    pub fn set_gi_probes(&mut self, irradiance: &[f32], depth: &[f32], params: &[f32]) -> Result<(), JsError> {
+        self.core.set_gi_probes(&self.device, &self.queue, irradiance, depth, params).map_err(err)
+    }
+    /// GI off.
+    #[wasm_bindgen(js_name = clearGiProbes)]
+    pub fn clear_gi_probes(&mut self) {
+        self.core.clear_gi_probes(&self.queue);
+    }
+    /// three scene.background Color (linear rgb): tone-mapped like three does (Reinhard x exposure) → clear colour.
+    #[wasm_bindgen(js_name = setFog)]
+    pub fn set_fog(&mut self, mode: u32, color: &[f32], near: f32, far: f32, density: f32) -> Result<(), JsError> {
+        if color.len() != 3 {
+            return Err(err("setFog: color needs 3 floats"));
+        }
+        self.core.set_fog(mode, [color[0], color[1], color[2]], near, far, density);
+        Ok(())
+    }
+    #[wasm_bindgen(js_name = setEnvironmentSh)]
+    pub fn set_environment_sh(&mut self, sh: &[f32], intensity: f32) -> Result<(), JsError> {
+        self.core.set_environment_sh(sh, intensity).map_err(err)
+    }
+    #[wasm_bindgen(js_name = clearEnvironment)]
+    pub fn clear_environment(&mut self) {
+        self.core.clear_environment();
+    }
+    #[wasm_bindgen(js_name = setBackgroundCube)]
+    pub fn set_background_cube(&mut self, size: u32, faces: &[u8], srgb: bool, intensity: f32) -> Result<(), JsError> {
+        self.core.set_background_cube(&self.device, &self.queue, size, faces, srgb, intensity).map_err(err)
+    }
+    #[wasm_bindgen(js_name = setBackgroundTexture)]
+    pub fn set_background_texture(&mut self, width: u32, height: u32, rgba: &[u8], srgb: bool, equirect: bool, intensity: f32) -> Result<(), JsError> {
+        self.core.set_background_texture(&self.device, &self.queue, width, height, rgba, srgb, equirect, intensity).map_err(err)
+    }
+    #[wasm_bindgen(js_name = clearBackgroundTexture)]
+    pub fn clear_background_texture(&mut self) {
+        self.core.clear_background_texture();
+    }
+    #[wasm_bindgen(js_name = setBackgroundColor)]
+    pub fn set_background_color(&mut self, rgb: &[f32]) -> Result<(), JsError> {
+    if rgb.len() != 3 {
+    return Err(err("setBackgroundColor: needs 3 floats"));
+    }
+    self.core.set_background_color([rgb[0], rgb[1], rgb[2]]);
+    Ok(())
+    }
+    /// raw frame clear colour (linear rgb + a), not tone-mapped.
+    #[wasm_bindgen(js_name = setClearColor)]
+    pub fn set_clear_color(&mut self, rgba: &[f32]) -> Result<(), JsError> {
+        if rgba.len() != 4 {
+            return Err(err("setClearColor: needs 4 floats"));
+        }
+        self.core.set_clear_color([rgba[0] as f64, rgba[1] as f64, rgba[2] as f64, rgba[3] as f64]);
+        Ok(())
+    }
     /// packed 8 f32 / light: x y z range r g b intensity (index 7). Returns lights drawn (max 64).
     #[wasm_bindgen(js_name = setPointLights)]
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {

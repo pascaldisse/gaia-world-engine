@@ -34,7 +34,7 @@ try {
   const renderer = new THREE.WebGPURenderer({ canvas: mkCanvas(), antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
   renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1; renderer.shadowMap.enabled = q.get('shadows') !== '0'; await renderer.init();
   const cW = mkCanvas(); const backend = await createWgpuBackend({ canvas: cW, wasm, renderHeight: H, options: q.get('shadows') === '0' ? { shadows: { enabled: false } } : {} }); const adapter = createSceneAdapter(backend, { three: THREE });
-  renderer.render(scene, cam); await raf(); await raf(); const a = snap(renderer.domElement);
+  for (let i = 0; i < 4; i++) { renderer.render(scene, cam); await raf(); await raf(); } /* r9: three WebGPU shadow maps need >1 frame to appear */ const a = snap(renderer.domElement);
   adapter.sync(scene, cam); backend.renderFrame(0); await raf(); await raf(); const b = snap(cW);
   // luminance profile along 3 horizontal scanlines on the wall region (right half)
   const rows = [Math.floor(H * 0.25), Math.floor(H * 0.4), Math.floor(H * 0.55)];

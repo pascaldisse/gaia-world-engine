@@ -1,0 +1,62 @@
+// r5-adapter: texture/material caching. idle frame = 0 texture work; GPU textures shared+refcounted by descriptor key (uuid:version); one CPU read per (texture,version).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as THREE from 'three/webgpu';
+import { createSceneAdapter } from '../client/kernel/render-api/scene-adapter.js';
+import { createMockBackend } from '../client/kernel/render-api/mock-backend.js';
+import { materialSig, materialToParams, textureReads } from '../client/kernel/render-api/material-map.js';
+import { createWgpuBackend } from '../client/kernel/render-api/wgpu-backend.js';
+
+const tri = () => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3)); return g; };
+const dataTex = () => { const t = new THREE.DataTexture(new Uint8Array(4 * 4 * 4).fill(200), 4, 4); t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; return t; };
+// fake canvas image: counts getImageData reads (the old adapter did this per mesh per frame)
+const fakeCanvas = (reads) => ({ width: 2, height: 2, getContext: () => ({ getImageData: () => { reads.n++; return { data: new Uint8ClampedArray(16).fill(9) }; } }) });
+
+test('materialSig: stable across frames, moves on edit; descriptor key = uuid:version, data lazy + read once', () => {
+  const reads = { n: 0 }; const t = new THREE.Texture(fakeCanvas(reads)); t.needsUpdate = true;
+  const m = new THREE.MeshStandardMaterial({ map: t });
+  const s0 = materialSig(m), a = materialToParams(m).textures.map, b = materialToParams(m).textures.map;
+  assert.equal(materialSig(m), s0);
+  assert.equal(a, b, 'same descriptor object while version unchanged');
+  assert.equal(a.key, `${t.uuid}:${t.version}`);
+  assert.equal(reads.n, 0, 'no read until .data is touched');
+  a.data; a.data; assert.equal(reads.n, 1, 'one read, memoised');
+  m.color.set(0x123456); assert.notEqual(materialSig(m), s0);
+  t.needsUpdate = true; const c = materialToParams(m).textures.map; assert.notEqual(c.key, a.key); c.data; assert.equal(reads.n, 2, 're-read only after version bump');
+});
+
+test('adapter: N meshes sharing a canvas-textured material → idle frames do 0 texture reads and 0 material calls', () => {
+  const reads = { n: 0 }; const t = new THREE.Texture(fakeCanvas(reads)); t.needsUpdate = true;
+  const scene = new THREE.Scene(); const mat = new THREE.MeshStandardMaterial({ map: t }); const g = tri();
+  for (let i = 0; i < 20; i++) { const m = new THREE.Mesh(g, mat); m.position.set(i, 0, 0); scene.add(m); }
+  const be = createMockBackend(); const ad = createSceneAdapter(be);
+  const origCreate = be.createMaterial; let mc = 0, tr = 0;
+  be.createMaterial = (p, tx) => { mc++; if (tx?.map) tx.map.data; return origCreate(p, tx); };
+  ad.sync(scene); assert.equal(mc, 1); assert.equal(reads.n, 1);
+  const r0 = textureReads.count, n0 = be.log.length;
+  for (let f = 0; f < 5; f++) ad.sync(scene);
+  assert.equal(reads.n, 1); assert.equal(textureReads.count, r0); assert.equal(mc, 1); assert.equal(be.log.length, n0, 'idle frames: zero backend calls');
+  t.needsUpdate = true; ad.sync(scene);
+  assert.equal(be.log.slice(n0).filter((c) => /Material/.test(c[0])).length >= 1, true, 'texture version bump → material re-described');
+});
+
+async function fakeWgpu() {
+  const c = { tex: 0, destroyTex: 0, mat: 0, updMat: 0, destroyMat: 0 }; let id = 0;
+  const gpu = { hasTimestamps: () => false, createTexture: () => { c.tex++; return ++id; }, destroyTexture: () => { c.destroyTex++; }, createMaterial: () => { c.mat++; return ++id; }, updateMaterial: () => { c.updMat++; }, destroyMaterial: () => { c.destroyMat++; } };
+  const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
+  Object.defineProperty(globalThis, 'navigator', { value: { gpu: {} }, configurable: true });
+  return { c, backend: await createWgpuBackend({ canvas: {}, wasm }) };
+}
+
+test('wgpu-backend: one GPU texture per key (refcounted), updateMaterial in place, release on destroy', async () => {
+  const { c, backend } = await fakeWgpu();
+  const px = new Uint8Array(16); let dataReads = 0;
+  const desc = (key) => ({ width: 2, height: 2, key, get data() { dataReads++; return px; } });
+  const m1 = backend.createMaterial({}, { map: desc('u:1') }), m2 = backend.createMaterial({}, { map: desc('u:1') });
+  assert.equal(c.tex, 1, 'shared'); assert.equal(dataReads, 1, 'data read only on the miss');
+  backend.updateMaterial(m2, {}, { map: desc('u:2') });
+  assert.equal(c.tex, 2); assert.equal(c.updMat, 1); assert.equal(c.destroyTex, 0, 'u:1 still held by m1');
+  backend.destroyMaterial(m1); assert.equal(c.destroyTex, 1, 'u:1 released at refcount 0');
+  backend.destroyMaterial(m2); assert.equal(c.destroyTex, 2);
+  assert.equal(backend.textureStats().live, 0);
+});

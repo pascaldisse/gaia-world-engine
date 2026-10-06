@@ -21,10 +21,11 @@ impl RenderCore {
                 let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 * period / 1e6;
                 let shadow_ms = if shadow_timed { ms(ts[4], ts[5]) } else { 0.0 };
                 Some(if queue_mode {
-                    GpuTimings { scene_ms: ms(ts[0], ts[1]), upscale_ms: f64::NAN, total_ms: f64::NAN, shadow_ms }
+                    GpuTimings { scene_ms: ms(ts[0], ts[1]), upscale_ms: f64::NAN, total_ms: f64::NAN, shadow_ms, span_ms: f64::NAN }
                 } else {
                     let (scene_ms, upscale_ms) = (ms(ts[0], ts[1]), ms(ts[2], ts[3]));
-                    GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms + shadow_ms, shadow_ms }
+                    let (b, e) = if shadow_timed { (ts[0].min(ts[2]).min(ts[4]), ts[1].max(ts[3]).max(ts[5])) } else { (ts[0].min(ts[2]), ts[1].max(ts[3])) };
+                    GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms + shadow_ms, shadow_ms, span_ms: e.saturating_sub(b) as f64 * period / 1e6 }
                 })
             });
             b2.unmap();

@@ -102,7 +102,33 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   const nodes = new Map();      // NodeId → { id, kind, parent, children:Set, local, world, visible, mesh, material, rid }
   const lights = new Map();     // LightId → { kind:'sun'|'point', ... }
   const skinnedMeshes = new Set(); // wasm mesh ids that are skinned (always dynamic casters)
-  const matTextures = new Map(); // MaterialId → [wasm texture ids] owned by that material
+const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owned by that material
+  const texByKey = new Map();    // texture descriptor key (uuid:version, material-map) → { id, refs } — one GPU texture shared by every material using it
+  const texStats = { uploads: 0, hits: 0 };
+  // textures[slot] = {width,height,data,key?}. With a `key` the GPU texture is shared + refcounted and `data` (lazy getter in material-map) is only
+  // read on a MISS → an idle frame / a second material on the same image does 0 pixel reads and 0 uploads.
+  function acquireTexture(t) {
+    if (t.key) { const c = texByKey.get(t.key); if (c) { c.refs++; texStats.hits++; return { id: c.id, key: t.key }; } }
+    const data = t.data;
+    if (!data || !(t.width > 0) || !(t.height > 0)) throw new Error('createMaterial: texture map needs { width, height, data }');
+    const id = gpu.createTexture(t.width, t.height, data instanceof Uint8Array ? data : new Uint8Array(data.buffer ?? data));
+    texStats.uploads++;
+    if (t.key) texByKey.set(t.key, { id, refs: 1 });
+    return { id, key: t.key ?? null };
+  }
+  function releaseTexture(h) {
+    if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
+    else gpu.destroyTexture(h.id);
+  }
+  function matArgs(params, textures) {
+    const [r, g, b] = colorOf(params.color);
+    const e = colorOf(params.emissive, [0, 0, 0]);
+    const k = params.emissiveIntensity ?? 1;
+    const owned = [];
+    let tex = 0;
+    if (textures?.map) { const h = acquireTexture(textures.map); owned.push(h); tex = h.id; }
+    return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, tex, params.alphaTest > 0 ? params.alphaTest : -1, Float32Array.of(e[0] * k, e[1] * k, e[2] * k)] };
+  }
   let lightsDirty = false;
   let sunId = 0;
 
@@ -192,22 +218,20 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
 
     // params = three-style; preset → degrades to pbr; opacity/doubleSide/fog/flatShading not in the core yet (drawn opaque, no cull).
     createMaterial(params = {}, textures = null) {
-      const [r, g, b] = colorOf(params.color);
-      const e = colorOf(params.emissive, [0, 0, 0]);
-      const k = params.emissiveIntensity ?? 1;
-      const owned = [];
-      let tex = 0;
-      if (textures?.map) {
-        const t = textures.map;
-        if (!t.data || !(t.width > 0) || !(t.height > 0)) throw new Error('createMaterial: texture map needs { width, height, data }');
-        tex = gpu.createTexture(t.width, t.height, t.data instanceof Uint8Array ? t.data : new Uint8Array(t.data.buffer ?? t.data));
-        owned.push(tex);
-      }
-      const id = gpu.createMaterial(Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, tex,
-        params.alphaTest > 0 ? params.alphaTest : -1, Float32Array.of(e[0] * k, e[1] * k, e[2] * k));
+      const { owned, args } = matArgs(params, textures);
+      const id = gpu.createMaterial(...args);
       if (owned.length) matTextures.set(id, owned);
       return id;
     },
+    // in-place re-description (same MaterialId; users keep their handle). New texture handles are acquired BEFORE the old ones are released.
+    updateMaterial(id, params = {}, textures = null) {
+      const { owned, args } = matArgs(params, textures);
+      const old = matTextures.get(id) || [];
+      gpu.updateMaterial(id, ...args);
+      for (const h of old) releaseTexture(h);
+      if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
+    },
+    textureStats() { return { ...texStats, live: texByKey.size }; },
     // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the
     // package's non-enumerable textureSources (uuid → three Texture); a texture binding without readable pixels = loud Error.
     createShaderMaterial(pkg) {
@@ -219,7 +243,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
         const px = t && texturePixels(t);
         if (!px) throw new Error(`createShaderMaterial: texture binding '${b.name}' (uuid ${b.textureUuid}) has no readable pixels`);
         // three samples non-sRGB textures (DataTexture default NoColorSpace) without decode → linear upload (r4)
-        const id = t.colorSpace === 'srgb' ? gpu.createTexture(px.width, px.height, px.data) : gpu.createTextureLinear(px.width, px.height, px.data); owned.push(id); names.push(b.name); ids.push(id);
+        const id = t.colorSpace === 'srgb' ? gpu.createTexture(px.width, px.height, px.data) : gpu.createTextureLinear(px.width, px.height, px.data); owned.push({ id, key: null }); names.push(b.name); ids.push(id);
       }
       const id = gpu.createThreeMaterial(JSON.stringify(pkg), names, Uint32Array.from(ids));
       if (owned.length) matTextures.set(id, owned);
@@ -230,7 +254,7 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
     setShaderUniforms(id, changed) { if (changed.length) gpu.setThreeUniforms(id, JSON.stringify(changed)); },
     destroyMaterial(id) {
       gpu.destroyMaterial(id);
-      for (const t of matTextures.get(id) || []) gpu.destroyTexture(t);
+      for (const h of matTextures.get(id) || []) releaseTexture(h);
       matTextures.delete(id);
     },
 
@@ -305,7 +329,9 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
     // wgpu-only: render + Promise<{scene,upscale,total} GPU-timestamp ms | null> (null: no timestamp-query / sample in flight)
     renderFrameGpuTimed() {
       if (lightsDirty) pushLights();
-      return gpu.renderGpuTimed();
+      const frame = gpu.renderGpuTimed(), skin = gpu.skinGpuMs?.() ?? Promise.resolve(null);
+      // per-pass GPU ms: scene / upscale / shadow (timestamp-pairs, sum = total) + skin compute (own pair; total excludes it, totalAll adds it) + span (earliest begin → latest end of the timed passes: includes GPU idle gaps / overlap)
+      return Promise.all([frame, skin]).then(([t, sk]) => (t ? { ...t, skin: sk ?? 0, totalAll: t.total + (sk ?? 0) } : null));
     },
     resize(renderHeight) { gpu.setRenderHeight(renderHeight); },
     // wgpu-only (r4-browser): last frame's shadow work (passes/draws/cache hits) + runtime option change (re-creates the shadow system)

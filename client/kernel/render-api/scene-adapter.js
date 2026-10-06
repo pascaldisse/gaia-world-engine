@@ -157,6 +157,7 @@ if (!live) continue;
     sub.setShaderUniforms += now() - ts;
   }
 }
+const hashStr = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
 function ensureMaterial(m, o = null) {
 let e = mats.get(m);
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
@@ -164,7 +165,11 @@ const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh ? { geometry: o.geometry } : { object: o }) : {};
 sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
-sub.materialToParams += now() - tmp;
+{ const dt = now() - tmp; sub.materialToParams += dt; // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
+ const x = stats.exportWhy ??= { newMat: 0, versionBump: 0, sigChange: 0, ms: { newMat: 0, versionBump: 0, sigChange: 0 }, keys: new Map(), log: [] };
+ const why = !e ? 'newMat' : (conv.kind === 'wgsl' && e.conv?.kind === 'wgsl' ? 'versionBump' : 'sigChange'); x[why]++; x.ms[why] += dt;
+ if (conv.package) { const k = conv.package.vertex.length + ':' + conv.package.fragment.length + ':' + hashStr(conv.package.vertex + conv.package.fragment); const r = x.keys.get(k) ?? { n: 0, ms: 0, name: m.name || m.type }; r.n++; r.ms += dt; x.keys.set(k, r); }
+ if (x.log.length < 40) x.log.push({ why, ms: +dt.toFixed(1), name: m.name || m.type, ver: m.version }); }
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (!e) {
 const id = createMat(conv, m);

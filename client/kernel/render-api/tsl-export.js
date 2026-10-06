@@ -75,7 +75,7 @@ Object.defineProperty(pkg, 'attributeSources', { value: attributeSources, enumer
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over builder.updateNodes — reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
 const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r;
-const last = new Map(liveUniforms.map(({ key, u }) => [key, JSON.stringify(toPlain(u.getValue?.()))]));
+const last = new Map(liveUniforms.map(({ key, u }) => [key, toPlain(u.getValue?.())])); // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
   keys: liveUniforms.map((x) => x.key),
@@ -87,8 +87,9 @@ Object.defineProperty(pkg, 'live', { enumerable: false, value: {
     for (const n of b.updateNodes) frame.updateNode(n);
     const changed = [];
     for (const { key, u } of liveUniforms) {
-      const v = toPlain(u.getValue?.()), j = JSON.stringify(v);
-      if (j !== last.get(key)) { last.set(key, j); changed.push({ key, value: v }); }
+      const raw = u.getValue?.();
+      if (sameValue(raw, last.get(key))) continue;
+      const v = toPlain(raw); last.set(key, v); changed.push({ key, value: v });
     }
     if (changed.length) version++;
     return changed;
@@ -109,6 +110,19 @@ function sourceOf(node, refs, lightUuids) {
   const ref = refs.get(node.uuid);
   if (ref) return { kind: (ref.material ?? ref.reference)?.isMaterial || ref.type === 'MaterialReferenceNode' ? 'material' : 'reference', property: ref.property };
   return { kind: lightUuids.get(node.uuid) ? 'light' : 'uniform', uuid: node.uuid, name: node.name || null, update: node.updateType ?? 'none', light: lightUuids.get(node.uuid) ?? undefined };
+}
+// true when raw three value `v` equals the plain snapshot `p` (= toPlain(v) at last change) - no allocation.
+function sameValue(v, p) {
+  if (v == null) return p == null;
+  if (typeof v === 'number' || typeof v === 'boolean') return v === p || (v !== v && p !== p);
+  if (p == null) return !(v.isColor || v.isVector2 || v.isVector3 || v.isVector4 || v.elements); // toPlain(unknown) === null
+  if (typeof p !== 'object') return false;
+  if (v.isColor) return p.length === 3 && v.r === p[0] && v.g === p[1] && v.b === p[2];
+  if (v.isVector2) return p.length === 2 && v.x === p[0] && v.y === p[1];
+  if (v.isVector3) return p.length === 3 && v.x === p[0] && v.y === p[1] && v.z === p[2];
+  if (v.isVector4) return p.length === 4 && v.x === p[0] && v.y === p[1] && v.z === p[2] && v.w === p[3];
+  if (v.elements) { const e = v.elements; if (p.length !== e.length) return false; for (let i = 0; i < e.length; i++) if (e[i] !== p[i] && !(e[i] !== e[i] && p[i] !== p[i])) return false; return true; }
+  return false;
 }
 function toPlain(v) {
 if (v == null) return null;

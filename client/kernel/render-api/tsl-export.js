@@ -180,6 +180,7 @@ const primSig = (o, skipValue, fnBySource) => { let s = ''; for (const k of Obje
 function structWalk(THREE, material, { object = null, geometry = null, scene = null } = {}) {
 const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
 const parts = [], nodes = [], ids = new Map();
+if (THREE[material.constructor?.name] !== material.constructor) return { refuse: 'custom-material-class:' + material.constructor?.name }; // subclass setup*() builds its graph at build time -> invisible to a pre-build walk
 // material level
 for (const k of Object.keys(material).sort()) { const v = material[k]; if (v && v.isTexture) parts.push(`S:${k}:${v.constructor?.name}:${v.format}:${v.type}:${v.colorSpace}:${+!!v.isDepthTexture}:${+!!v.isArrayTexture}:${+!!v.isCubeTexture}:${v.image?.depth ?? ''}`); }
 parts.push(`M:${material.type}:${material.constructor?.name}:${primSig(material, false, true).replace(/(opacity|roughness|metalness|ior|thickness|clearcoat\w*|sheen\w*|iridescence\w*|emissiveIntensity|envMapIntensity|reflectivity|specularIntensity|dispersion|anisotropy\w*|attenuationDistance|lightMapIntensity|aoMapIntensity|bumpScale|displacementScale|displacementBias|shininess|linewidth|size|dashSize|gapSize|scale|polygonOffsetFactor|polygonOffsetUnits|alphaTest|blendAlpha|stencilRef|depthFunc)=[^;]*;/g, (m, k2) => (k2 === 'alphaTest' ? `alphaTest=${material.alphaTest > 0 ? 1 : 0};` : ''))}`);

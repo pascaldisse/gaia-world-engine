@@ -993,6 +993,7 @@ dependencies = [
 name = "gaia-metalfx"
 version = "0.1.0"
 dependencies = [
+ "gaia-render",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -2856,6 +2857,7 @@ dependencies = [
  "block2",
  "bytemuck",
  "gaia-core",
+ "gaia-metalfx",
  "gaia-render",
  "glam",
  "objc2-app-kit",

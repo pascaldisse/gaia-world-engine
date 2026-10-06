@@ -403,6 +403,32 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn remove_instance(&mut self, id: u32) {
         self.core.remove_instance(id);
     }
+    // ---- native instance blocks (InstancedMesh): mats = count×16 local mat4s, colors = count×colorStride (0/3/4; empty = white), world = node matrixWorld (premultiplied in core) ----
+    #[wasm_bindgen(js_name = createInstanceBlock)]
+    pub fn create_instance_block(&mut self, mesh: u32, material: u32, mats: &[f32], colors: &[f32], color_stride: u32, count: u32, world: &[f32]) -> Result<u32, JsError> {
+        let w = mat16(world)?;
+        let id = self.id("instance block");
+        self.core.create_instance_block(id, mesh, material, mats, colors, color_stride as usize, count as usize, w);
+        Ok(id)
+    }
+    #[wasm_bindgen(js_name = updateInstanceBlock)]
+    pub fn update_instance_block(&mut self, id: u32, mats: &[f32], colors: &[f32], color_stride: u32, count: u32, world: &[f32]) -> Result<(), JsError> {
+        let w = mat16(world)?;
+        self.core.update_instance_block(id, mats, colors, color_stride as usize, count as usize, w);
+        Ok(())
+    }
+    #[wasm_bindgen(js_name = setInstanceBlockFlags)]
+    pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
+        self.core.set_instance_block_flags(id, cast_shadow, is_static);
+    }
+    #[wasm_bindgen(js_name = removeInstanceBlock)]
+    pub fn remove_instance_block(&mut self, id: u32) {
+        self.core.remove_instance_block(id);
+    }
+    #[wasm_bindgen(js_name = drawnInstanceCount)]
+    pub fn drawn_instance_count(&self) -> usize {
+        self.core.drawn_instance_count()
+    }
     #[wasm_bindgen(js_name = instanceCount)]
     pub fn instance_count(&self) -> usize {
         self.core.instance_count()

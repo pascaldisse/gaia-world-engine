@@ -17,7 +17,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, para
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' } } });
-  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE } });
+  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE }, nativeInstancing: params.get('wgpuInst') !== '0' });
   addEventListener('resize', size);
   // WORKAROUND (r5-adapter lane owns the real fix): material-map reads only {data}/canvas images; decode ImageBitmap/HTMLImage `map`s ONCE into {width,height,data}.
   const prepped = new WeakSet(); let c2d = null;

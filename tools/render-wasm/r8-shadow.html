@@ -1,0 +1,48 @@
+<!doctype html><meta charset=utf-8><title>r8 shadow: three vs wgpu (tall wall, low sun)</title>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r8 S2 repro: street canyon. Ground + long tall wall on the right (receiver) + tall tower on the left (caster) + low sun from the left-behind: the tower's shadow must
+// land on the wall as a bounded patch. ?sunel=<deg elevation> ?az=<deg> ?shadows=0|1 ?wallh ?far ; result: shadow-patch lit/shadowed luminance on the wall in both renderers.
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+const q = new URLSearchParams(location.search);
+const W = Number(q.get('w') ?? 640), H = Number(q.get('h') ?? 480);
+const R = window.__result = { done: false, log: [], pngs: {} };
+const raf = () => new Promise(requestAnimationFrame);
+const mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.cssText = `position:absolute;left:-9000px`; document.body.appendChild(c); return c; };
+function snap(canvas) { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0); return x.getImageData(0, 0, W, H); }
+function png(img) { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(img, 0, 0); return c.toDataURL('image/png'); }
+const lum = (img, x, y) => { const i = (y * W + x) * 4; return (img.data[i] + img.data[i + 1] + img.data[i + 2]) / 3; };
+try {
+  const sunEl = Number(q.get('sunel') ?? 20) * Math.PI / 180, az = Number(q.get('az') ?? 235) * Math.PI / 180, wallH = Number(q.get('wallh') ?? 24);
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x303840);
+  const std = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1, metalness: 0 });
+  const mesh = (g, m, x, y, z, cast, recv) => { const o = new THREE.Mesh(g, m); o.position.set(x, y, z); o.castShadow = cast; o.receiveShadow = recv; scene.add(o); return o; };
+  mesh(new THREE.BoxGeometry(200, 0.2, 200), std(0x707070), 0, -0.1, 0, false, true);                         // street
+  mesh(new THREE.BoxGeometry(1, wallH, 120), std(0xa09080), 9, wallH / 2, -40, true, q.get('wallrecv') !== '0');                   // wall (receiver, also caster)
+  const th = Number(q.get('th') ?? 40); mesh(new THREE.BoxGeometry(6, th, 6), std(0x909090), -9, th / 2, -30, true, true);                              // tower (caster)
+  mesh(new THREE.BoxGeometry(6, 30, 6), std(0x909090), -9, 15, -60, true, true);
+  scene.add(new THREE.HemisphereLight(new THREE.Color(0.41, 0.66, 1.0), new THREE.Color(0.13, 0.16, 0.17), 0.3));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+  const d = [Math.cos(sunEl) * Math.sin(az), Math.sin(sunEl), Math.cos(sunEl) * Math.cos(az)];
+  sun.position.set(d[0] * 100, d[1] * 100, d[2] * 100); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+  Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, near: 1, far: 400 }); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.05; sun.shadow.camera.updateProjectionMatrix();
+  scene.add(sun); scene.add(sun.target);
+  const cam = new THREE.PerspectiveCamera(60, W / H, 0.1, 400); cam.position.set(0, 1.7, 8); cam.lookAt(5, 8, -40); cam.updateMatrixWorld(true);
+  const renderer = new THREE.WebGPURenderer({ canvas: mkCanvas(), antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1; renderer.shadowMap.enabled = q.get('shadows') !== '0'; await renderer.init();
+  const cW = mkCanvas(); const backend = await createWgpuBackend({ canvas: cW, wasm, renderHeight: H, options: q.get('shadows') === '0' ? { shadows: { enabled: false } } : {} }); const adapter = createSceneAdapter(backend, { three: THREE });
+  renderer.render(scene, cam); await raf(); await raf(); const a = snap(renderer.domElement);
+  adapter.sync(scene, cam); backend.renderFrame(0); await raf(); await raf(); const b = snap(cW);
+  // luminance profile along 3 horizontal scanlines on the wall region (right half)
+  const rows = [Math.floor(H * 0.25), Math.floor(H * 0.4), Math.floor(H * 0.55)];
+  R.profile = rows.map((y) => { const o = { y, three: [], wgpu: [] }; for (let x = Math.floor(W * 0.5); x < W; x += 40) { o.three.push(Math.round(lum(a, x, y))); o.wgpu.push(Math.round(lum(b, x, y))); } return o; });
+  let sum = 0, n = 0; for (let i = 0; i < a.data.length; i += 4) { for (let k = 0; k < 3; k++) sum += Math.abs(a.data[i + k] - b.data[i + k]); n += 3; }
+  R.meanAbs = +(sum / n).toFixed(2);
+  R.pngs.three = png(a); R.pngs.wgpu = png(b);
+  R.adapter = { unsupported: [...adapter.stats.unsupported], degraded: [...adapter.stats.degraded] };
+} catch (e) { R.log.push('EXC ' + (e.stack || e)); }
+R.done = true;
+</script>

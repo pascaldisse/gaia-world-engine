@@ -18,7 +18,7 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
-    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic)
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic), w 1 = sun shadow NOT sampled (three receiveShadow:false)
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 // ---- r6 probe GI (gi.rs): atlases read back from three's GI compute, sampled with the SAME math as client/kernel/gi/gi-open-nodes.js ----
@@ -289,7 +289,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let rough = clamp(material.params.y, 0.04, 1.0);
     let sun_l = -frame.sun_dir.xyz;
 var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
-* sun_shadow(in.world, frame.camera_pos.xyz, n, max(dot(n, sun_l), 0.0));
+* select(sun_shadow(in.world, frame.camera_pos.xyz, n, max(dot(n, sun_l), 0.0)), 1.0, material.flags.w > 0.5);
     for (var i = 0u; i < min(frame.counts.x, MAX_POINT_LIGHTS); i = i + 1u) {
         let pl = frame.points[i];
         let d = pl.position_range.xyz - in.world;

@@ -371,6 +371,8 @@ pub struct MaterialFlags {
     pub unlit: bool,
     /// With `unlit`: still apply exposure + Reinhard (three `toneMapped: true` on a MeshBasicMaterial). false = authored colour as-is (three `toneMapped: false`).
     pub unlit_tone_mapped: bool,
+    /// true = the sun shadow map is NOT sampled for this material (three `receiveShadow: false`). Per MATERIAL (the instance buffer has no spare lane); default false = receives.
+    pub no_receive_shadow: bool,
     /// None = default (opaque writes, blended does not).
     pub depth_write: Option<bool>,
     /// Lower draws first (sky = negative → everything else over it). Blended sort far→near inside a group.
@@ -875,6 +877,19 @@ impl RenderCore {
         }
     }
 
+    /// three `receiveShadow: false` for every user of this material. Call AFTER `set_material_flags` (which resets it). Works for built-in materials only (shader materials sample no sun shadow here).
+    pub fn set_material_no_receive_shadow(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.no_receive_shadow == on {
+            return;
+        }
+        f.no_receive_shadow = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+
     pub fn material_flags(&self, id: u32) -> MaterialFlags {
         self.material_flags.get(&id).copied().unwrap_or_default()
     }
@@ -951,7 +966,7 @@ impl RenderCore {
                 has_tex,
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
-            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, 0.0],
+            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.no_receive_shadow) { 1.0 } else { 0.0 }],
         };
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),

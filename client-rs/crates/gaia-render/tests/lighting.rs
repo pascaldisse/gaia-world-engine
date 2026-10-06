@@ -281,3 +281,30 @@ fn render_order_draws_lower_first() {
         assert_eq!(red, want_red, "render_order red={ro_red}: got {got:?}");
     }
 }
+
+#[test]
+fn no_receive_shadow_flag_skips_sun_shadow_sampling() {
+    // receiver plane y=0, caster plane y=2 straight above (same footprint), sun straight down: centre is in shadow unless the receiver material opts out (three receiveShadow:false)
+    let (device, queue) = device();
+    let mut got = vec![];
+    for no_recv in [false, true] {
+        let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+        core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 3.0);
+        core.set_hemisphere_irradiance([0.0; 3], [0.0; 3]);
+        core.create_material(&device, 2, MaterialDesc { base_color: [0.1, 0.1, 0.1, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        let s = 1.0; // small caster: centre of the view only, camera sees past it? it is ABOVE: camera at y=6 sees the caster on top → put camera below-side instead
+        let pos = [-s, 2.0, -s, s, 2.0, -s, s, 2.0, s, -s, 2.0, s];
+        let n = [0., -1., 0., 0., -1., 0., 0., -1., 0., 0., -1., 0.];
+        core.create_mesh(&device, 2, &pos, &n, &[0.0; 8], &[0, 1, 2, 0, 2, 3]).unwrap();
+        core.create_instance(2, 2, 2, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        core.set_instance_cast_shadow(2, true);
+        core.set_instance_cast_shadow(1, false);
+        core.set_material_flags(&device, 1, MaterialFlags::default());
+        core.set_material_no_receive_shadow(&device, 1, no_recv);
+        // look from a grazing angle so the caster (y=2, |x|<1) does not hide the receiver centre: eye off to the side, low
+        core.set_camera(glam::Mat4::look_at_rh(glam::Vec3::new(5.0, 1.0, 0.0), glam::Vec3::ZERO, glam::Vec3::Y).inverse().to_cols_array(), 40f32.to_radians(), 0.1, Some(100.0));
+        got.push(centre(&shoot(&device, &queue, &mut core)));
+    }
+    eprintln!("no_receive: shadowed {:?} vs opt-out {:?}", got[0], got[1]);
+    assert!(got[0][0] < got[1][0] / 2, "shadowed {:?} vs no-receive {:?}", got[0], got[1]);
+}

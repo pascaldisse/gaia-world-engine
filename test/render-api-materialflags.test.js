@@ -10,7 +10,7 @@ async function fakeWgpu() {
   const calls = []; let id = 0;
   const rec = (n) => (...a) => { calls.push([n, ...a]); return ++id; };
   const gpu = new Proxy({ hasTimestamps: () => false, createMaterial: rec('createMaterial'), updateMaterial: rec('updateMaterial'), destroyMaterial: rec('destroyMaterial'), createMesh: rec('createMesh'),
-    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped') },
+    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
     { get: (t, k) => (k === 'then' ? undefined : t[k] ?? (() => 0)) });
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -45,9 +45,23 @@ test('wgpu-backend: sky-style material → setMaterialFlags(blend alpha|additive
   assert.equal(calls.filter((c) => c[0] === 'setMaterialUnlitToneMapped').length >= 2, true);
 });
 
-test('wgpu-backend: opaque lit material pushes NO flags (default path untouched)', async () => {
+test('wgpu-backend: opaque lit receiveShadow material pushes NO flags (default path untouched)', async () => {
   const { calls, backend } = await fakeWgpu();
-  const scene = new THREE.Scene(); scene.add(new THREE.Mesh(tri(), new THREE.MeshStandardMaterial()));
+  const scene = new THREE.Scene(); const o = new THREE.Mesh(tri(), new THREE.MeshStandardMaterial()); o.receiveShadow = true; scene.add(o);
   createSceneAdapter(backend, { three: THREE }).sync(scene);
   assert.equal(calls.filter((c) => c[0] === 'setMaterialFlags').length, 0);
+  assert.equal(calls.filter((c) => c[0] === 'setMaterialNoReceiveShadow').length, 0);
+});
+
+test('wgpu-backend: receiveShadow:false on EVERY user of a material → setMaterialNoReceiveShadow(id,true); one receiving user keeps it receiving', async () => {
+  for (const mixed of [false, true]) {
+    const { calls, backend } = await fakeWgpu();
+    const scene = new THREE.Scene(); const g = tri(), mat = new THREE.MeshStandardMaterial();
+    const a = new THREE.Mesh(g, mat), b = new THREE.Mesh(g, mat); b.receiveShadow = mixed; scene.add(a, b);
+    const ad = createSceneAdapter(backend, { three: THREE }); ad.sync(scene);
+    const last = calls.filter((c) => c[0] === 'setMaterialNoReceiveShadow' || c[0] === 'setMaterialFlags').at(-1);
+    if (mixed) assert.notEqual(last?.[0], 'setMaterialNoReceiveShadow', 'a receiving user wins (old behaviour)');
+    else assert.deepEqual([last[0], last[2]], ['setMaterialNoReceiveShadow', true]);
+    if (!mixed) { b.receiveShadow = true; ad.sync(scene); assert.notEqual(calls.at(-1)[0], 'setMaterialNoReceiveShadow'); } // flip one user back → flags re-pushed without the opt-out
+  }
 });

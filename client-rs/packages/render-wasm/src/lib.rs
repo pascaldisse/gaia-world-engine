@@ -267,6 +267,11 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_material_unlit_tone_mapped(&mut self, id: u32, on: bool) {
         self.core.set_material_unlit_tone_mapped(&self.device, id, on);
     }
+    /// three receiveShadow:false (per material): sun shadow map not sampled. Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialNoReceiveShadow)]
+    pub fn set_material_no_receive_shadow(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_receive_shadow(&self.device, id, on);
+    }
 #[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);

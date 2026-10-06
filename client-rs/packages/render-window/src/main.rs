@@ -770,10 +770,26 @@ impl Renderer {
                     gaia_render::RenderOptions {
                         render_height,
                         output_format: format,
+                        // GAIA_SHADOWS=0|1 (default 1): sun cascaded shadow maps
+                        shadows: gaia_render::ShadowOptions {
+                            enabled: std::env::var("GAIA_SHADOWS").map_or(true, |v| v != "0"),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                 );
                 gaia_render::load_scene_into(&mut core, &device, &queue, data)?;
+                // GAIA_CAMERA=x,y,z,yaw_deg,pitch_deg overrides the glb camera (glTF Y-up, looks down -Z).
+                if let Ok(v) = std::env::var("GAIA_CAMERA") {
+                    let c: Vec<f32> = v.split(',').map(|x| x.trim().parse().map_err(|_| format!("GAIA_CAMERA must be x,y,z,yaw,pitch degrees, got {v:?}"))).collect::<Result<_, _>>()?;
+                    if c.len() != 5 {
+                        return Err(format!("GAIA_CAMERA must be x,y,z,yaw,pitch degrees, got {v:?}"));
+                    }
+                    let m = glam::Mat4::from_translation(glam::Vec3::new(c[0], c[1], c[2]))
+                        * glam::Mat4::from_rotation_y(c[3].to_radians())
+                        * glam::Mat4::from_rotation_x(c[4].to_radians());
+                    core.set_camera(m.to_cols_array(), 60f32.to_radians(), 0.1, None);
+                }
                 install_upscaler(&mut core, &device, &queue, format, upscaler)?;
                 eprintln!(
                     "[gaia-render] instances={} tris={} render_height={render_height} timestamps={}",

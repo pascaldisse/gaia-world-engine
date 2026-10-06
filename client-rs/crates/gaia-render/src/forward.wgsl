@@ -24,6 +24,57 @@ struct Material {
 @group(1) @binding(2) var base_samp: sampler;
 // Baked lightmap at TEXCOORD_1; material.emissive.w = overlay fac (0 = none).
 @group(1) @binding(3) var lightmap_tex: texture_2d<f32>;
+// Sun cascaded shadow maps (shadow.rs). params.x = cascade count (0 = shadows off).
+struct Shadow {
+vp: array<mat4x4<f32>, 4>,
+splits: vec4<f32>,       // cascade far distances (view depth)
+texel: vec4<f32>,        // world size of one shadow texel, per cascade
+range: vec4<f32>,        // light-space depth range, per cascade
+cam_fwd: vec4<f32>,
+params: vec4<f32>,       // x cascades, y normal bias (texels), z depth bias (texels), w pcf radius
+info: vec4<f32>,         // x 1/resolution, y cascade blend fraction
+};
+@group(2) @binding(0) var<uniform> shadow: Shadow;
+@group(2) @binding(1) var shadow_map: texture_depth_2d_array;
+@group(2) @binding(2) var shadow_samp: sampler_comparison;
+fn shadow_cascade(c: i32, world: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 {
+let texel = shadow.texel[c];
+let p = world + n * (shadow.params.y * texel * (1.0 - nl));
+let clip = shadow.vp[c] * vec4<f32>(p, 1.0);
+let uv = vec2<f32>(clip.x * 0.5 + 0.5, 0.5 - clip.y * 0.5);
+let z = clip.z - shadow.params.z * texel / shadow.range[c];
+if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z > 1.0) {
+return 1.0;
+}
+let r = i32(shadow.params.w);
+var sum = 0.0;
+for (var y = -r; y <= r; y = y + 1) {
+for (var x = -r; x <= r; x = x + 1) {
+sum = sum + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(f32(x), f32(y)) * shadow.info.x, c, z);
+}
+}
+let w = f32(2 * r + 1);
+return sum / (w * w);
+}
+// 1 = lit. Beyond the last cascade = lit.
+fn sun_shadow(world: vec3<f32>, cam: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 {
+let count = i32(shadow.params.x);
+if (count == 0 || nl <= 0.0) { return 1.0; }
+let vd = dot(world - cam, shadow.cam_fwd.xyz);
+var c = 0;
+for (var i = 0; i < count - 1; i = i + 1) {
+if (vd > shadow.splits[i]) { c = i + 1; }
+}
+if (vd > shadow.splits[c]) { return 1.0; }
+var s = shadow_cascade(c, world, n, nl);
+let prev = select(0.0, shadow.splits[max(c - 1, 0)], c > 0);
+let band = (shadow.splits[c] - prev) * shadow.info.y;
+let t = (vd - (shadow.splits[c] - band)) / max(band, 1e-4);
+if (t > 0.0 && c < count - 1) {
+s = mix(s, shadow_cascade(c + 1, world, n, nl), clamp(t, 0.0, 1.0));
+}
+return s;
+}
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -97,7 +148,9 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let v = normalize(frame.camera_pos.xyz - in.world);
     let metallic = clamp(material.params.x, 0.0, 1.0);
     let rough = clamp(material.params.y, 0.04, 1.0);
-    var color = brdf(n, v, -frame.sun_dir.xyz, base.rgb, metallic, rough) * frame.sun_color.rgb;
+    let sun_l = -frame.sun_dir.xyz;
+var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
+* sun_shadow(in.world, frame.camera_pos.xyz, n, max(dot(n, sun_l), 0.0));
     for (var i = 0u; i < min(frame.counts.x, MAX_POINT_LIGHTS); i = i + 1u) {
         let pl = frame.points[i];
         let d = pl.position_range.xyz - in.world;

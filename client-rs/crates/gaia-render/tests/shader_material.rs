@@ -24,6 +24,7 @@ fn external_wgsl_material_renders_and_bad_wgsl_is_err() {
             MaterialBinding::Uniform { binding: 0, data: ubo, visibility_vertex: false },
             MaterialBinding::Texture { binding: 1, texture: 999 },
             MaterialBinding::Sampler { binding: 2 },
+            MaterialBinding::Texture { binding: 3, texture: 999 }, // lightmap (round 2 added it to forward.wgsl; test predates)
         ],
     };
     core.create_shader_material(&device, 7, &desc).expect("valid external material");

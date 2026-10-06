@@ -3,10 +3,12 @@
 //! resolution (`render_height`) and scales to the output through an `Upscaler`.
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
 pub mod scene;
+pub mod shadow;
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 pub use scene::{CameraData, SceneData};
+pub use shadow::{ShadowOptions, ShadowStats};
 use wgpu::util::DeviceExt;
 
 pub const MAX_POINT_LIGHTS: usize = 64;
@@ -43,6 +45,8 @@ pub struct RenderOptions {
     /// and fraction of half-height below center.
     pub fit_eye_back: f32,
     pub fit_height_bias: f32,
+    /// Sun cascaded shadow maps (see `shadow.rs`). Point-light shadows: not implemented.
+    pub shadows: ShadowOptions,
 }
 
 impl Default for RenderOptions {
@@ -61,6 +65,7 @@ impl Default for RenderOptions {
             anisotropy: 8,
             fit_eye_back: 0.6,
             fit_height_bias: 0.5,
+            shadows: ShadowOptions::default(),
         }
     }
 }
@@ -402,6 +407,8 @@ pub struct GpuTimings {
     pub upscale_ms: f64,
     /// scene-begin → upscale-end span (passes may overlap on tile GPUs).
     pub total_ms: f64,
+    /// Shadow passes begin→end (0 when shadows off / nothing re-encoded). Included in `total_ms`.
+    pub shadow_ms: f64,
 }
 
 /// Data-only resource API (mirrors the JS render-api lane: meshes/materials/
@@ -420,6 +427,9 @@ pub struct MaterialDesc {
 struct GpuMesh {
     /// Object-space AABB center (transparent sort key).
     center: [f32; 3],
+    /// Object-space AABB (shadow caster culling).
+    lo: [f32; 3],
+    hi: [f32; 3],
     vertices: wgpu::Buffer,
     /// TEXCOORD_1 (vertex slot 2, @location(7)); zeros until `set_mesh_uv1`.
     uv1: wgpu::Buffer,
@@ -463,6 +473,10 @@ struct Instance {
     mesh: u32,
     material: u32,
     transform: [f32; 16],
+    /// Static casters are cached per shadow cascade (see `set_instance_static`).
+    is_static: bool,
+    /// false = never rendered into shadow maps (sky domes, huge backdrops).
+    cast_shadow: bool,
 }
 
 pub struct RenderCore {
@@ -498,6 +512,14 @@ pub struct RenderCore {
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
     mipgen: BilinearBlit,
+    shadow: shadow::ShadowSystem,
+    shadow_receiver_layout: wgpu::BindGroupLayout,
+    /// World-space shadow casters, rebuilt with the instance batches.
+    casters: Vec<shadow::Caster>,
+    /// Bumped on any change that invalidates cached static shadow maps.
+    static_gen: u64,
+    /// Last frame had a timed shadow span (timestamp slots 4,5).
+    shadow_timed: bool,
 }
 
 impl RenderCore {
@@ -523,13 +545,15 @@ impl RenderCore {
                 texture_entry(3),
             ],
         });
+        let shadow_receiver_layout = shadow::receiver_layout(device);
+        let shadow = shadow::ShadowSystem::new(device, opts.shadows.clone(), &shadow_receiver_layout, &material_layout);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gaia-render forward"),
             source: wgpu::ShaderSource::Wgsl(FORWARD_WGSL.into()),
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gaia-render forward layout"),
-            bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
+            bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&shadow_receiver_layout)],
             immediate_size: 0,
         });
         let pipeline = forward_pipeline(device, &pl, &module, "vs_main", "fs_main", false);
@@ -575,17 +599,17 @@ impl RenderCore {
                 set: device.create_query_set(&wgpu::QuerySetDescriptor {
                     label: Some("gaia-render timestamps"),
                     ty: wgpu::QueryType::Timestamp,
-                    count: 4,
+                    count: 6,
                 }),
                 resolve: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("timestamp resolve"),
-                    size: 32,
+                    size: 272, // slots 0..4 at 0, shadow slots 4..6 at 256 (resolve alignment)
                     usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 }),
                 readback: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("timestamp readback"),
-                    size: 32,
+                    size: 48,
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
@@ -600,6 +624,11 @@ impl RenderCore {
             },
             upscaler: Box::new(BilinearBlit::new(device, opts.output_format)),
             mipgen,
+            shadow,
+            shadow_receiver_layout,
+            casters: Vec::new(),
+            static_gen: 0,
+            shadow_timed: false,
             blend_pipeline,
             blend_materials: Default::default(),
             opts,
@@ -673,6 +702,8 @@ impl RenderCore {
         }
         let mesh = GpuMesh {
             center: if vertices.is_empty() { [0.0; 3] } else { ((lo + hi) * 0.5).to_array() },
+            lo: if vertices.is_empty() { [0.0; 3] } else { lo.to_array() },
+            hi: if vertices.is_empty() { [0.0; 3] } else { hi.to_array() },
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("mesh vertices"),
                 contents: nonempty(bytemuck::cast_slice(vertices)),
@@ -691,6 +722,7 @@ impl RenderCore {
             }),
             vertex_count: vertices.len() as u32,
         };
+        self.static_gen += 1;
         self.meshes.insert(id, mesh);
     }
 
@@ -702,6 +734,7 @@ impl RenderCore {
             self.blend_materials.remove(&id);
         }
         self.instances_dirty = true;
+        self.static_gen += 1;
     }
 
     /// Second UV set (TEXCOORD_1, lightmap UVs): flat u,v pairs, one per vertex.
@@ -821,6 +854,7 @@ impl RenderCore {
                 },
             ],
         });
+        self.static_gen += 1;
         self.materials.insert(
             id,
             GpuMaterial {
@@ -923,7 +957,8 @@ impl RenderCore {
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("external material pipeline layout"),
-            bind_group_layouts: &[Some(&self.frame_layout), Some(&layout)],
+            // group(2) = shadow receiver (optional for external WGSL: declare it to sample the sun CSM)
+            bind_group_layouts: &[Some(&self.frame_layout), Some(&layout), Some(&self.shadow_receiver_layout)],
             immediate_size: 0,
         });
         let pipeline = forward_pipeline(
@@ -957,20 +992,62 @@ impl RenderCore {
                 mesh,
                 material,
                 transform,
+                is_static: false,
+                cast_shadow: true,
             },
         );
         self.instances_dirty = true;
+    }
+
+    /// Mark an instance as a STATIC shadow caster (cached per cascade, re-rendered only
+    /// when the sun/cascade bounds move or a static instance changes) or DYNAMIC (default:
+    /// redrawn every frame). Moving a static instance invalidates the static cache.
+    pub fn set_instance_static(&mut self, id: u32, is_static: bool) {
+        if let Some(inst) = self.instances.get_mut(&id) {
+            inst.is_static = is_static;
+            self.instances_dirty = true;
+            self.static_gen += 1;
+        }
+    }
+
+    /// Per-instance shadow-caster opt-out (default true). Sky domes / backdrops must be
+    /// false: they would otherwise shadow the whole scene and blow up the cascade depth range.
+    pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {
+        if let Some(inst) = self.instances.get_mut(&id) {
+            inst.cast_shadow = cast;
+            self.instances_dirty = true;
+            self.static_gen += 1;
+        }
+    }
+
+    pub fn shadow_stats(&self) -> &ShadowStats {
+        &self.shadow.stats
+    }
+
+    pub fn shadow_options(&self) -> &ShadowOptions {
+        &self.shadow.opts
+    }
+
+    /// Rebuild the shadow system with new options (drops the cache; reallocates maps).
+    pub fn set_shadow_options(&mut self, device: &wgpu::Device, opts: ShadowOptions) {
+        self.opts.shadows = opts.clone();
+        self.shadow = shadow::ShadowSystem::new(device, opts, &self.shadow_receiver_layout, &self.material_layout);
     }
 
     pub fn update_instance(&mut self, id: u32, transform: [f32; 16]) {
         if let Some(inst) = self.instances.get_mut(&id) {
             inst.transform = transform;
             self.instances_dirty = true;
+            if inst.is_static {
+                self.static_gen += 1;
+            }
         }
     }
 
     pub fn remove_instance(&mut self, id: u32) {
-        self.instances.remove(&id);
+        if self.instances.remove(&id).is_some_and(|i| i.is_static) {
+            self.static_gen += 1;
+        }
         self.instances_dirty = true;
     }
 
@@ -1045,6 +1122,39 @@ impl RenderCore {
             }
         }
         self.instance_transforms = data.clone();
+        // world-space AABBs for shadow caster culling (same order as `data`)
+        let casters: Vec<shadow::Caster> = list
+            .iter()
+            .filter(|inst| inst.cast_shadow)
+            .map(|inst| {
+                let (lo, hi) = self
+                    .meshes
+                    .get(&inst.mesh)
+                    .map(|m| (Vec3::from_array(m.lo), Vec3::from_array(m.hi)))
+                    .unwrap_or((Vec3::ZERO, Vec3::ZERO));
+                let t = Mat4::from_cols_array(&inst.transform);
+                let (mut wlo, mut whi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+                for i in 0..8 {
+                    let c = Vec3::new(
+                        if i & 1 == 0 { lo.x } else { hi.x },
+                        if i & 2 == 0 { lo.y } else { hi.y },
+                        if i & 4 == 0 { lo.z } else { hi.z },
+                    );
+                    let w = t.transform_point3(c);
+                    wlo = wlo.min(w);
+                    whi = whi.max(w);
+                }
+                shadow::Caster {
+                    mesh: inst.mesh,
+                    material: inst.material,
+                    transform: inst.transform,
+                    is_static: inst.is_static,
+                    lo: wlo,
+                    hi: whi,
+                }
+            })
+            .collect();
+        self.casters = casters;
         self.instance_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instance transforms"),
             contents: nonempty(bytemuck::cast_slice(&data)),
@@ -1118,6 +1228,24 @@ impl RenderCore {
         let eye = self.camera.world.transform_point3(Vec3::ZERO);
         self.frame.camera_pos = eye.extend(1.0).to_array();
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&self.frame));
+        // sun shadow cascades first (own passes, before the forward pass samples them)
+        self.shadow_timed = self.shadow.encode(
+            device,
+            queue,
+            encoder,
+            self.camera.world,
+            self.camera.yfov,
+            aspect,
+            self.camera.znear,
+            self.camera.zfar,
+            Vec3::new(self.frame.sun_dir[0], self.frame.sun_dir[1], self.frame.sun_dir[2]),
+            &self.casters,
+            self.static_gen,
+            &self.meshes,
+            &self.materials,
+            &self.blend_materials,
+            self.timing.as_ref().map(|tm| (&tm.set, 4, 5)),
+        );
         let c = self.opts.clear_color;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1154,6 +1282,7 @@ impl RenderCore {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.frame_bind, &[]);
+            pass.set_bind_group(2, self.shadow.receiver_bind(), &[]);
             let mut draws = 0u32;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
@@ -1223,6 +1352,9 @@ impl RenderCore {
         );
         if let Some(tm) = &self.timing {
             encoder.resolve_query_set(&tm.set, 0..4, &tm.resolve, 0);
+            if self.shadow_timed {
+                encoder.resolve_query_set(&tm.set, 4..6, &tm.resolve, 256);
+            }
         }
     }
 
@@ -1254,6 +1386,9 @@ impl RenderCore {
                 self.encode_forward(device, queue, &mut encoder, output_size);
                 if let Some(tm) = &self.timing {
                     encoder.resolve_query_set(&tm.set, 0..2, &tm.resolve, 0);
+                    if self.shadow_timed {
+                        encoder.resolve_query_set(&tm.set, 4..6, &tm.resolve, 256);
+                    }
                 }
                 queue.submit(Some(encoder.finish()));
                 let t = self.targets.as_ref().expect("targets");
@@ -1282,6 +1417,9 @@ impl RenderCore {
         match &self.timing {
             Some(tm) => {
                 encoder.copy_buffer_to_buffer(&tm.resolve, 0, &tm.readback, 0, 32);
+                if self.shadow_timed {
+                    encoder.copy_buffer_to_buffer(&tm.resolve, 256, &tm.readback, 32, 16);
+                }
                 true
             }
             None => false,
@@ -1301,23 +1439,25 @@ impl RenderCore {
         if !rx.recv().ok()? {
             return None;
         }
-        let ts: [u64; 4] = {
+        let ts: [u64; 6] = {
             let data = slice.get_mapped_range().ok()?;
-            *bytemuck::from_bytes(&data[..32])
+            *bytemuck::from_bytes(&data[..48])
         };
         tm.readback.unmap();
         let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 * tm.period_ns as f64 / 1e6;
+        let shadow_ms = if self.shadow_timed { ms(ts[4], ts[5]) } else { 0.0 };
         if self.upscaler.submit_mode() == UpscaleSubmit::Queue {
             // Upscale ran in the scaler's own command buffer: its GPU time comes from
             // the backend; total = scene + upscale (sum, not one clock span).
             let scene_ms = ms(ts[0], ts[1]);
             let upscale_ms = self.upscaler.last_gpu_ms_blocking().unwrap_or(f64::NAN);
-            return Some(GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms });
+            return Some(GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms + shadow_ms, shadow_ms });
         }
         Some(GpuTimings {
             scene_ms: ms(ts[0], ts[1]),
             upscale_ms: ms(ts[2], ts[3]),
-            total_ms: ms(ts[0], ts[3]),
+            total_ms: ms(if self.shadow_timed { ts[4] } else { ts[0] }, ts[3]),
+            shadow_ms,
         })
     }
 }
@@ -1451,6 +1591,14 @@ pub fn load_scene_into(
             core.set_mesh_uv1(device, i as u32, bytemuck::cast_slice(uv1))?;
         }
         core.create_instance(i as u32, i as u32, d.material as u32, identity);
+        core.set_instance_static(i as u32, true); // glb nodes are baked: never move
+        let diag = v.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), x| {
+            (lo.min(Vec3::from_array(x.position)), hi.max(Vec3::from_array(x.position)))
+        });
+        let max_diag = core.opts.shadows.import_max_caster_diagonal;
+        if max_diag > 0.0 && !v.is_empty() && (diag.1 - diag.0).length() > max_diag {
+            core.set_instance_cast_shadow(i as u32, false);
+        }
     }
     let cam = Camera::from_scene(scene, &core.opts);
     core.camera = cam;

@@ -381,6 +381,9 @@ pub struct MaterialDesc {
 
 struct GpuMesh {
     vertices: wgpu::Buffer,
+    /// TEXCOORD_1 (vertex slot 2, @location(7)); zeros until `set_mesh_uv1`.
+    uv1: wgpu::Buffer,
+    vertex_count: u32,
     indices: wgpu::Buffer,
     index_count: u32,
 }
@@ -440,6 +443,8 @@ pub struct RenderCore {
     instance_buffer: Option<wgpu::Buffer>,
     batches: Vec<(u32, u32, std::ops::Range<u32>)>,
     instances_dirty: bool,
+    /// material id -> (lightmap texture id, overlay fac)
+    material_lightmaps: HashMap<u32, (u32, f32)>,
     /// draw_indexed calls issued by the last `render` (one per mesh+material batch).
     pub last_draw_calls: u32,
     frame: FrameUniform,
@@ -468,6 +473,7 @@ impl RenderCore {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                texture_entry(3),
             ],
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -551,6 +557,7 @@ impl RenderCore {
             frame_buffer,
             frame_bind,
             meshes: HashMap::new(),
+            material_lightmaps: HashMap::new(),
             textures: HashMap::new(),
             materials: HashMap::new(),
             instances: HashMap::new(),
@@ -616,8 +623,38 @@ impl RenderCore {
                 usage: wgpu::BufferUsages::INDEX,
             }),
             index_count: indices.len() as u32,
+            uv1: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh uv1 (zero)"),
+                contents: nonempty(&vec![0u8; vertices.len() * 8]),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            vertex_count: vertices.len() as u32,
         };
         self.meshes.insert(id, mesh);
+    }
+
+    /// Second UV set (TEXCOORD_1, lightmap UVs): flat u,v pairs, one per vertex.
+    pub fn set_mesh_uv1(&mut self, device: &wgpu::Device, id: u32, uv1: &[f32]) -> Result<(), String> {
+        let m = self.meshes.get_mut(&id).ok_or_else(|| format!("set_mesh_uv1: no mesh {id}"))?;
+        if uv1.len() != m.vertex_count as usize * 2 {
+            return Err(format!("mesh {id}: uv1 {} floats != 2 x {} vertices", uv1.len(), m.vertex_count));
+        }
+        m.uv1 = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mesh uv1"),
+            contents: nonempty(bytemuck::cast_slice(uv1)),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        Ok(())
+    }
+
+    /// Baked lightmap for a built-in material: texture sampled at TEXCOORD_1, combined
+    /// as Blender OVERLAY(albedo, lightmap, fac) before lighting (DS client rule,
+    /// nari-world-companion ds-world/lightmap.mjs). Rebinds the material if it exists.
+    pub fn set_material_lightmap(&mut self, device: &wgpu::Device, id: u32, texture: u32, fac: f32) {
+        self.material_lightmaps.insert(id, (texture, fac));
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
     }
 
     pub fn remove_mesh(&mut self, id: u32) {
@@ -643,7 +680,10 @@ impl RenderCore {
         let ids: Vec<u32> = self
             .materials
             .iter()
-            .filter(|(_, m)| m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id)))
+            .filter(|(k, m)| {
+                m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id))
+                    || self.material_lightmaps.get(k).is_some_and(|l| l.0 == id)
+            })
             .map(|(k, _)| *k)
             .collect();
         for mid in ids {
@@ -664,6 +704,15 @@ impl RenderCore {
             Some(v) => (v, 1.0),
             None => (&self.white, 0.0),
         };
+        // emissive.w > 0 = lightmap present (overlay fac); white + 0 otherwise.
+        let (lm_view, lm_fac) = match self
+            .material_lightmaps
+            .get(&id)
+            .and_then(|(t, f)| self.textures.get(t).map(|v| (v, *f)))
+        {
+            Some((v, f)) => (v, f.max(1e-6)),
+            None => (&self.white, 0.0),
+        };
         let u = MaterialUniform {
             base_color: desc.base_color,
             params: [
@@ -672,7 +721,7 @@ impl RenderCore {
                 desc.alpha_cutoff.unwrap_or(-1.0),
                 has_tex,
             ],
-            emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], 0.0],
+            emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
         };
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
@@ -694,6 +743,10 @@ impl RenderCore {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(lm_view),
                 },
             ],
         });
@@ -1038,6 +1091,7 @@ impl RenderCore {
                     pass.set_pipeline(mat.pipeline.as_ref().unwrap_or(&self.pipeline));
                     pass.set_bind_group(1, &mat.bind, &[]);
                     pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(2, m.uv1.slice(..));
                     pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..m.index_count, 0, range.clone());
                     draws += 1;
@@ -1261,6 +1315,9 @@ pub fn load_scene_into(
                 emissive: m.emissive,
             },
         );
+        if let Some(lm) = m.lightmap {
+            core.set_material_lightmap(device, i as u32, lm.image as u32, lm.fac);
+        }
     }
     let identity = Mat4::IDENTITY.to_cols_array();
     for (i, d) in scene.draws.iter().enumerate() {
@@ -1271,6 +1328,9 @@ pub fn load_scene_into(
             .map(|&x| x - d.first_vertex)
             .collect();
         core.create_mesh_interleaved(device, i as u32, v, &idx);
+        if let Some(uv1) = scene.uv1.get(d.first_vertex as usize..(d.first_vertex + d.vertex_count) as usize) {
+            core.set_mesh_uv1(device, i as u32, bytemuck::cast_slice(uv1))?;
+        }
         core.create_instance(i as u32, i as u32, d.material as u32, identity);
     }
     let cam = Camera::from_scene(scene, &core.opts);
@@ -1316,6 +1376,12 @@ fn forward_pipeline(
                         array_stride: 64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4],
+                    }),
+                    // slot 2 = TEXCOORD_1 (lightmap UV); external WGSL may ignore @location(7).
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 8,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![7 => Float32x2],
                     }),
                 ],
                 compilation_options: Default::default(),

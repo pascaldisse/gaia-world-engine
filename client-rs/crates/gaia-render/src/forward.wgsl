@@ -22,17 +22,21 @@ struct Material {
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var base_samp: sampler;
+// Baked lightmap at TEXCOORD_1; material.emissive.w = overlay fac (0 = none).
+@group(1) @binding(3) var lightmap_tex: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) uv1: vec2<f32>,
 };
 
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>,
-           @location(3) m0: vec4<f32>, @location(4) m1: vec4<f32>, @location(5) m2: vec4<f32>, @location(6) m3: vec4<f32>) -> VsOut {
+           @location(3) m0: vec4<f32>, @location(4) m1: vec4<f32>, @location(5) m2: vec4<f32>, @location(6) m3: vec4<f32>,
+           @location(7) uv1: vec2<f32>) -> VsOut {
     // per-instance model matrix (instance-step vertex buffer: no storage buffers needed)
     let model = mat4x4<f32>(m0, m1, m2, m3);
     let world = model * vec4<f32>(pos, 1.0);
@@ -42,6 +46,7 @@ fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locatio
     // uniform-scale assumption: normal via model 3x3 (non-uniform scale = NOTES open item)
     o.normal = (model * vec4<f32>(normal, 0.0)).xyz;
     o.uv = uv;
+    o.uv1 = uv1;
     return o;
 }
 
@@ -73,6 +78,16 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     var base = material.base_color;
     if (material.params.w > 0.5) {
         base = base * textureSample(base_tex, base_samp, in.uv);
+    }
+    // DS client rule (lightmap.mjs overlayNode): Blender OVERLAY, linear inputs.
+    let fac = material.emissive.w;
+    if (fac > 0.0) {
+        let l = textureSample(lightmap_tex, base_samp, in.uv1).rgb;
+        let a = base.rgb;
+        let tm = 1.0 - fac;
+        let lo = a * (tm + 2.0 * fac * l);
+        let hi = vec3<f32>(1.0) - (tm + 2.0 * fac * (vec3<f32>(1.0) - l)) * (vec3<f32>(1.0) - a);
+        base = vec4<f32>(select(lo, hi, a >= vec3<f32>(0.5)), base.a);
     }
     if (material.params.z >= 0.0 && base.a < material.params.z) {
         discard;

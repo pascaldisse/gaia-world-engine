@@ -39,6 +39,18 @@ pub struct Material {
     pub base_color_texture: Option<usize>,
     pub alpha: AlphaMode,
     pub emissive: [f32; 3],
+    /// Baked light from `material.extras.lightmap` (scene-export): image index, texCoord, fac.
+    pub lightmap: Option<Lightmap>,
+}
+
+/// DS1 baked lightmap, applied as the DS client does (nari-world-companion
+/// client/ds-world/lightmap.mjs `overlayNode`, default path): albedo := Blender
+/// OVERLAY(albedo, lightmap, fac) in linear, then normal scene lighting on top.
+#[derive(Clone, Copy, Debug)]
+pub struct Lightmap {
+    pub image: usize,
+    pub tex_coord: u32,
+    pub fac: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +90,8 @@ pub struct PointLight {
 #[derive(Clone, Debug, Default)]
 pub struct SceneData {
     pub vertices: Vec<Vertex>,
+    /// TEXCOORD_1 per vertex (parallel to `vertices`; zero when absent).
+    pub uv1: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
     pub draws: Vec<Draw>,
     pub materials: Vec<Material>,
@@ -139,6 +153,7 @@ impl SceneData {
                     gltf::material::AlphaMode::Blend => AlphaMode::Blend,
                 },
                 emissive: material.emissive_factor(),
+                lightmap: parse_lightmap(&doc, material.extras()),
             });
         }
         // glTF default material for primitives without one.
@@ -150,6 +165,7 @@ impl SceneData {
             base_color_texture: None,
             alpha: AlphaMode::Opaque,
             emissive: [0.0; 3],
+            lightmap: None,
         });
         let scene = doc
             .default_scene()
@@ -261,6 +277,11 @@ fn visit(
                 .read_tex_coords(0)
                 .map(|t| t.into_f32().collect())
                 .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+            let uv1: Vec<[f32; 2]> = reader
+                .read_tex_coords(1)
+                .map(|t| t.into_f32().collect())
+                .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+            out.uv1.extend_from_slice(&uv1);
             let base = out.vertices.len() as u32;
             for i in 0..positions.len() {
                 let p = world.transform_point3(Vec3::from_array(positions[i]));
@@ -332,5 +353,19 @@ fn to_rgba8(image: &gltf::image::Data) -> Result<Rgba8Image, LoadError> {
         width: image.width,
         height: image.height,
         pixels,
+    })
+}
+
+/// `extras.lightmap = {texture, texCoord, fac, blend:"overlay"}` → Lightmap (image index).
+fn parse_lightmap(doc: &gltf::Document, extras: &gltf::json::Extras) -> Option<Lightmap> {
+    let raw = extras.as_ref()?;
+    let v: serde_json::Value = serde_json::from_str(raw.get()).ok()?;
+    let lm = v.get("lightmap")?;
+    let tex = lm.get("texture")?.as_u64()? as usize;
+    let image = doc.textures().nth(tex)?.source().index();
+    Some(Lightmap {
+        image,
+        tex_coord: lm.get("texCoord").and_then(|t| t.as_u64()).unwrap_or(1) as u32,
+        fac: lm.get("fac").and_then(|f| f.as_f64()).unwrap_or(0.5) as f32,
     })
 }

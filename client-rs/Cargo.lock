@@ -1013,6 +1013,7 @@ dependencies = [
  "gltf",
  "naga",
  "pollster",
+ "serde_json",
  "wgpu",
 ]
 

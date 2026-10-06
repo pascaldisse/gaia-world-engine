@@ -308,3 +308,29 @@ fn no_receive_shadow_flag_skips_sun_shadow_sampling() {
     eprintln!("no_receive: shadowed {:?} vs opt-out {:?}", got[0], got[1]);
     assert!(got[0][0] < got[1][0] / 2, "shadowed {:?} vs no-receive {:?}", got[0], got[1]);
 }
+
+/// r8 S3: a SKINNED draw (identity palette) must be lit exactly like the same static quad: sun + hemisphere + emissive + GI all reach the skinned path.
+#[test]
+fn skinned_draw_is_lit_like_static_draw() {
+    let (device, queue) = device();
+    let mut px = vec![];
+    for skinned in [false, true] {
+        let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+        core.set_sun([0.3, -1.0, 0.2], [1.0, 0.9, 0.8], 2.0);
+        core.set_hemisphere_irradiance([1.5, 1.8, 2.4], [0.3, 0.2, 0.1]);
+        core.create_material(&device, 1, MaterialDesc { base_color: [0.6, 0.5, 0.4, 1.0], metallic: 0.0, roughness: 0.8, base_color_texture: None, alpha_cutoff: None, emissive: [0.05, 0.02, 0.0], emissive_from_base: false });
+        if skinned {
+            core.remove_instance(1);
+            let s = 4.0;
+            let pos = [-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s];
+            let n = [0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.];
+            core.create_skin(5, 1, &glam::Mat4::IDENTITY.to_cols_array()).unwrap();
+            core.set_skin_pose(5, &glam::Mat4::IDENTITY.to_cols_array()).unwrap();
+            core.create_skinned_mesh(9, 5, &pos, &n, &[0.0; 8], &[0; 16], &[1.0, 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0.], &[0, 2, 1, 0, 3, 2]).unwrap();
+            core.create_instance(9, 9, 1, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        }
+        px.push(centre(&shoot(&device, &queue, &mut core)));
+    }
+    eprintln!("skinned parity: static {:?} skinned {:?}", px[0], px[1]);
+    assert!(close(px[0], px[1], 1), "static {:?} vs skinned {:?}", px[0], px[1]);
+}

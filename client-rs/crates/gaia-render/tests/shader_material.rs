@@ -1,5 +1,5 @@
 //! External WGSL material path on a real device (Metal here). The built-in
-//! forward.wgsl is fed back in AS an external material = the TSL contract.
+//! tests/data/external_contract.wgsl (frozen r5 forward.wgsl) is fed in AS an external material = the TSL contract.
 use gaia_render::*;
 
 fn device() -> (wgpu::Device, wgpu::Queue) {
@@ -18,7 +18,7 @@ fn external_wgsl_material_renders_and_bad_wgsl_is_err() {
         ubo.extend_from_slice(&f.to_le_bytes());
     }
     let desc = ShaderMaterialDesc {
-        wgsl: include_str!("../src/forward.wgsl").into(),
+        wgsl: include_str!("data/external_contract.wgsl").into(),
         vertex_entry: "vs_main".into(),
         fragment_entry: "fs_main".into(),
         bindings: vec![

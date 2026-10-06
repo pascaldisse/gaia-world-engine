@@ -285,16 +285,6 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
 
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
 /// Single mip level (core mipgen blit is sRGB-format only) → minified linear textures alias = NEXT.
-pub(crate) fn upload_linear(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, px: &[u8]) -> wgpu::TextureView {
-    device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
-        label: Some("three linear texture"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    }, wgpu::util::TextureDataOrder::LayerMajor, px).create_view(&Default::default())
-}
 fn json_f32(v: &serde_json::Value) -> Vec<f32> {
     match v {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],

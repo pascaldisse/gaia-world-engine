@@ -6,7 +6,7 @@
 //  - loop-index-derived `dir` is .toVar()-materialised; validCount guard wraps each kernel body
 //  - storage buffers: irradiance kernel = irradiance + depth + voxels (+touched) = 3..4; depth kernel = depth + voxels = 2 (≤ 8)
 import {
-  Fn, storage, uniform, vec2, vec3, vec4, float, int, uint, bool, Loop, If, dot, max, min, normalize, mix, clamp, abs, select, floor, length, instanceIndex,
+  Fn, storage, uniform, vec2, vec3, vec4, float, int, uint, Loop, If, dot, max, min, normalize, mix, clamp, abs, select, floor, length, instanceIndex,
 } from 'three/tsl';
 import { StorageInstancedBufferAttribute } from 'three/webgpu';
 import { FIB_PHI, createProbeAtlases } from './gi-nodes.js';
@@ -231,26 +231,6 @@ return { value: result, coverage };
 }
 /** finest-containing cascade + border blend + fall-through, mirrors referenceQueryCascades. @returns vec3 irradiance E */
 export function queryCascadesTSL(args) { return queryCascadesCoverageTSL(args).value; }
-/** EARLY-OUT value-only query (parameter `queryEarlyOut`, default on). Same result as queryCascadesTSL (value): a coarser cascade is only evaluated when the finer one is unusable or
-* inside its blend band (border < blendCells) -- everywhere else the coarse term would be mixed with weight 0 (wFine = 1) and is dead. 8 corners x 2 atlas reads x (n-1) skipped per pixel.
-* No coverage output (coverage feeds only ambient:'replace', which keeps the full query). */
-export function queryCascadesEarlyOutTSL({ atlases, cascades, baseCellU, worldPos, normal, blendCells = 1.5, tag = 'm' }) {
-  const n = cascades.length;
-  const evalFrom = (k) => { // -> {f: vec3 var = value of the stack k..n-1, usable: bool var}
-    const q = queryCascadeTSL({ atlases, cascade: cascades[k], baseCell: baseCellU[k], worldPos, normal, tag: `${tag}${k}` });
-    const cb = containsAndBorder(cascades[k], baseCellU[k], worldPos);
-    const usable = cb.inside.and(q.weight.greaterThan(COVERAGE_WEIGHT_EPS)).toVar();
-    const f = vec3(0, 0, 0).toVar(); const nextUsable = bool(false).toVar();
-    if (k === n - 1) { f.assign(select(usable, q.value, vec3(0, 0, 0))); return { f, usable }; }
-    const need = usable.not().or(cb.border.lessThan(blendCells));
-    const nextF = vec3(0, 0, 0).toVar();
-    If(need, () => { const nx = evalFrom(k + 1); nextF.assign(nx.f); nextUsable.assign(nx.usable); });
-    const wFine = select(nextUsable, smooth01(cb.border.div(blendCells)), float(1));
-    f.assign(select(usable, mix(nextF, q.value, wFine), nextF));
-    return { f, usable };
-  };
-  return evalFrom(0).f;
-}
 /** AMBIENT-REPLACE uniforms: the scene HemisphereLight's irradiance premultiplied by intensity (what three's HemisphereLightNode adds to context.irradiance) */
 export function createAmbientUniforms(a = {}) { return { sky: uniform(vec3(...(a.sky ?? [0, 0, 0]))), ground: uniform(vec3(...(a.ground ?? [0, 0, 0]))) }; }
 /** hemi irradiance for normal n: mix(ground, sky, 0.5*n.y+0.5) - mirror of three r180 HemisphereLightNode.setup (light direction = +Y) */
@@ -258,12 +238,12 @@ export const hemiIrradianceTSL = (n, amb) => mix(amb.ground, amb.sky, n.y.mul(0.
 /** 'replace' mode term: c*(gi - hemi(n)). Added next to the hemi light's own contribution -> net irradiance = mix(hemi, gi, c) */
 export const ambientReplaceTSL = (gi, coverage, n, amb) => coverage.mul(gi.sub(hemiIrradianceTSL(n, amb)));
 /** material-side query node (probe GI -> three IrradianceNode). ambient 'add' (default) = raw GI; 'replace' = c*(gi - hemi(n)) so GI substitutes the hemi sky ambient where it has coverage */
-export function createOpenQueryNode({ atlases, cascades, baseCellU, worldPositionNode, normalNode, blendCells, ambient = 'add', ambientU = null, earlyOut = true }) {
+export function createOpenQueryNode({ atlases, cascades, baseCellU, worldPositionNode, normalNode, blendCells, ambient = 'add', ambientU = null }) {
 if (ambient === 'replace') {
 if (!ambientU) throw new Error("createOpenQueryNode: ambient 'replace' needs ambientU (createAmbientUniforms)");
 return Fn(() => { const q = queryCascadesCoverageTSL({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }); return ambientReplaceTSL(q.value, q.coverage, normalNode, ambientU); })();
 }
-return Fn(() => (earlyOut ? queryCascadesEarlyOutTSL : queryCascadesTSL)({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }))();
+return Fn(() => queryCascadesTSL({ atlases, cascades, baseCellU, worldPos: worldPositionNode, normal: normalNode, blendCells, tag: 'mat' }))();
 }
 
 // ------------------------------------------------------------------ per-cascade round-robin batch → global probe id (ONE dispatch for all cascades)

@@ -461,6 +461,24 @@ o.into()
         self.core.set_sun([direction[0], direction[1], direction[2]], [color[0], color[1], color[2]], intensity);
         Ok(())
     }
+    /// hemisphere (+ folded ambient) irradiance E in three units (colour x intensity, linear): sky = up-facing, ground = down-facing. 3 floats each.
+    #[wasm_bindgen(js_name = setHemisphereIrradiance)]
+    pub fn set_hemisphere_irradiance(&mut self, sky: &[f32], ground: &[f32]) -> Result<(), JsError> {
+        if sky.len() != 3 || ground.len() != 3 {
+            return Err(err("setHemisphereIrradiance: sky/ground need 3 floats"));
+        }
+        self.core.set_hemisphere_irradiance([sky[0], sky[1], sky[2]], [ground[0], ground[1], ground[2]]);
+        Ok(())
+    }
+    /// frame clear colour (linear rgb + a) = three scene.background Color.
+    #[wasm_bindgen(js_name = setClearColor)]
+    pub fn set_clear_color(&mut self, rgba: &[f32]) -> Result<(), JsError> {
+        if rgba.len() != 4 {
+            return Err(err("setClearColor: needs 4 floats"));
+        }
+        self.core.set_clear_color([rgba[0] as f64, rgba[1] as f64, rgba[2] as f64, rgba[3] as f64]);
+        Ok(())
+    }
     /// packed 8 f32 / light: x y z range r g b intensity (index 7). Returns lights drawn (max 64).
     #[wasm_bindgen(js_name = setPointLights)]
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {

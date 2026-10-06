@@ -44,7 +44,7 @@ export const RENDER_API_METHODS = Object.freeze([
 //   updateMesh(MeshId, arrays) · updateMaterial(MaterialId, params, textures) · createInstanced(MeshId, MaterialId, mat4s:Float32Array(16n), count, flags{...,matrix}) → NodeId
 //   updateInstances(NodeId, mat4s, count, matrixWorld) · createShaderMaterial(pkg from tsl-export.js: {vertex,fragment,bindGroups,attributes,…}) → MaterialId
 //   setShaderUniforms(MaterialId, [{key,value}]) — r4: changed live TSL uniform values (tsl-export pkg.live.update()); keys = package uniform `key`
-export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh']);
+export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh', 'setAmbient', 'setBackground', 'setGiProbes']);
 export function assertRenderBackend(backend) {
   const missing = RENDER_API_METHODS.filter((m) => typeof backend?.[m] !== 'function');
   if (missing.length) throw new Error(`render backend missing: ${missing.join(', ')}`);

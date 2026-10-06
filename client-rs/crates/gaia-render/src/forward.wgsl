@@ -174,7 +174,8 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     }
     // hemisphere ambient: lerp(ground, sky, 0.5 n.y + 0.5) x albedo (flat when sky == ground)
     let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));
-    color = color + hemi * base.rgb + material.emissive.rgb;
+    // three PhysicalLightingModel.indirect: diffuseColor = albedo * (1 - metalness); hemi/ambient E/PI is pre-divided CPU-side.
+color = color + hemi * base.rgb * (1.0 - metallic) + material.emissive.rgb;
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     let e = color * frame.ambient.w;
     // alpha out: blend pipeline uses it; opaque pipeline has blend off (ignored).

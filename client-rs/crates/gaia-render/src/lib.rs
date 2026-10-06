@@ -1215,6 +1215,19 @@ impl RenderCore {
         self.frame.ambient_ground = [ground[0], ground[1], ground[2], 0.0];
     }
 
+    /// Hemisphere + ambient light in THREE r180 units: `sky`/`ground` = irradiance E (light colour x intensity, linear; an AmbientLight
+    /// is folded in by the caller: sky += a, ground += a). three: HemisphereLightNode.setup mixes E by 0.5*n.y+0.5 into context.irradiance,
+    /// PhysicalLightingModel.indirect (:665) adds `E * BRDF_Lambert(diffuseColor)` = E * albedo / PI. forward.wgsl stores that /PI here.
+    pub fn set_hemisphere_irradiance(&mut self, sky: [f32; 3], ground: [f32; 3]) {
+        let k = std::f32::consts::FRAC_1_PI;
+        self.set_hemisphere_ambient([sky[0] * k, sky[1] * k, sky[2] * k], [ground[0] * k, ground[1] * k, ground[2] * k]);
+    }
+
+    /// Frame clear colour = three `scene.background` Color (linear working space; the *Srgb target encodes it, as three's output does).
+    pub fn set_clear_color(&mut self, rgba: [f64; 4]) {
+        self.opts.clear_color = rgba;
+    }
+
     /// Packed 8 floats/light: x y z range r g b intensity. Extra lights beyond
     /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn.
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {

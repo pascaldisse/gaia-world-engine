@@ -19,6 +19,8 @@ const mats = new Map();        // material → { id, sig, epoch, params, users:S
 const lights = new Map();      // Light → { id, kind, sig }
 const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 0, degraded: new Set(), unsupported: new Set() };
 let epoch = 0, cameraSig = '';
+// r6: HemisphereLight/AmbientLight accumulate per frame into one irradiance pair (sum = three: every light node `+=` into context.irradiance); scene.background -> setBackground
+const amb = { sky: [0, 0, 0], ground: [0, 0, 0], n: 0, sig: null, bgSig: null };
 
 const eqArr = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
 function geometryArrays(g, start = 0, count = Infinity) {
@@ -194,7 +196,16 @@ if (!r) { lights.set(o, { id: backend.addPointLight(p), kind: 'point', sig }); s
 else if (r.sig !== sig) { backend.updatePointLight(r.id, p); r.sig = sig; stats.updated++; }
 return;
 }
-stats.unsupported.add(`light:${o.type}`); // Ambient/Hemisphere/Spot/RectArea: no interface call yet
+if ((o.isHemisphereLight || o.isAmbientLight) && backend.setAmbient) { // r6: three HemisphereLightNode/AmbientLightNode: E = colour x intensity (linear), hemi mixes ground->sky by 0.5 n.y + 0.5 (light dir +Y)
+if (!vis) return;
+const k = o.intensity ?? 1, s = o.color ? [o.color.r * k, o.color.g * k, o.color.b * k] : [k, k, k];
+const g = o.isHemisphereLight && o.groundColor ? [o.groundColor.r * k, o.groundColor.g * k, o.groundColor.b * k] : s;
+for (let i = 0; i < 3; i++) { amb.sky[i] += s[i]; amb.ground[i] += g[i]; }
+amb.n++;
+if (o.isHemisphereLight && o.position && (o.position.x || o.position.z || !(o.position.y > 0))) stats.degraded.add('HemisphereLight-direction-not-+Y:assumed-+Y');
+return;
+}
+stats.unsupported.add(`light:${o.type}`); // Spot/RectArea (and Ambient/Hemisphere on a backend without setAmbient)
 }
 
 // ---- SkinnedMesh: skin (IBM = boneInverse x bindMatrix) + skinned mesh (JOINTS/WEIGHTS) + identity instance;
@@ -266,6 +277,20 @@ else updateMesh(o, rec, vis);
 }
 for (const c of o.children) visit(c, vis, seen);
 }
+// background: Color -> setBackground (linear, as three's clear colour); Texture/CubeTexture/other -> loud unsupported, clear colour kept. Never throws.
+function syncEnvironment(scene) {
+if (backend.setAmbient) {
+const sig = `${amb.sky}|${amb.ground}`;
+if (sig !== amb.sig) { backend.setAmbient({ sky: amb.sky.slice(), ground: amb.ground.slice() }); amb.sig = sig; stats.updated++; }
+}
+const bg = scene.background;
+if (!backend.setBackground) { if (bg) stats.unsupported.add('background'); return; }
+let sig, rgb = null;
+if (bg && bg.isColor) { rgb = [bg.r, bg.g, bg.b]; sig = `c${rgb}`; }
+else if (bg) { sig = 'x'; stats.unsupported.add(bg.isCubeTexture ? 'background:CubeTexture' : bg.isTexture ? 'background:Texture' : `background:${bg.constructor?.name ?? typeof bg}`); }
+else sig = 'null';
+if (sig !== amb.bgSig) { if (sig !== 'x') backend.setBackground(rgb); amb.bgSig = sig; stats.updated++; }
+}
 function updateMesh(o, rec, vis) {
 const gone = rec.geoRef !== o.geometry || rec.dirtyGeo || (rec.mref !== o.material && (Array.isArray(o.material) || Array.isArray(rec.mref)));
 if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; stats.updated++; return; }
@@ -305,7 +330,9 @@ epoch++; stats.frames++; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();
 const seen = new Set();
+amb.sky.fill(0); amb.ground.fill(0); amb.n = 0;
 visit(scene, true, seen);
+syncEnvironment(scene);
 const t2 = now();
 for (const [o, rec] of recs) if (!seen.has(o)) { destroyParts(rec); recs.delete(o); }
 for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }

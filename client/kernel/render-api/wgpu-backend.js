@@ -258,10 +258,12 @@ function pushBlock(node, flagsDirty = false) {
   if (flagsDirty) {
     const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
     gpu.setInstanceBlockFlags(node.rid, node.castShadow !== false, !!st);
+    if (gpu.setInstanceBlockShadowOnly) gpu.setInstanceBlockShadowOnly(node.rid, !!node.shadowOnly);
   }
 }
 function applyShadowFlags(node) {
   if (node.castShadow !== undefined) gpu.setInstanceCastShadow(node.rid, node.castShadow);
+  if (node.shadowOnly && gpu.setInstanceShadowOnly) gpu.setInstanceShadowOnly(node.rid, true); // r10: depth-only caster (main camera's layers exclude it)
   const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
   if (st) gpu.setInstanceStatic(node.rid, true);
   }
@@ -411,7 +413,7 @@ createNode(mat4, parent = 0) {
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static, groups: flags.groups ? normalizeGroups(flags.groups) : undefined, instAttrs: flags.instAttrs ?? null, renderOrder: flags.renderOrder || 0, receiveShadow: flags.receiveShadow };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, groups: flags.groups ? normalizeGroups(flags.groups) : undefined, instAttrs: flags.instAttrs ?? null, renderOrder: flags.renderOrder || 0, receiveShadow: flags.receiveShadow };
       nodes.set(node.id, node); link(node, flags.parent);
       if (node.renderOrder) setMatOrder(material, node.renderOrder);
       trackReceive(node);
@@ -422,7 +424,7 @@ createNode(mat4, parent = 0) {
     // mats = count×16 local mat4s (three instanceMatrix.array), flags.matrix = node matrixWorld (premultiplied in the core), flags.colors = count×stride rgb(a) (three instanceColor.array; stride 3|4).
     createInstanced(mesh, material, mats, count, flags = {}) {
       const node = { id: next++, kind: 'instanced', parent: 0, children: new Set(), mesh, material, rid: 0, mats, count, world: Float32Array.from(flags.matrix ?? IDENTITY_MAT4),
-        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, static: flags.static, ridMat: 0, ridMesh: 0 };
+        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, ridMat: 0, ridMesh: 0 };
       nodes.set(node.id, node); pushBlock(node); return node.id;
     },
     updateInstances(id, mats, count, matrixWorld, colors = null, colorStride = 3) {
@@ -436,6 +438,7 @@ createNode(mat4, parent = 0) {
         if (patch.visible !== undefined) node.visible = !!patch.visible;
         if (patch.material !== undefined) node.material = patch.material;
         if (patch.castShadow !== undefined) node.castShadow = !!patch.castShadow;
+        if (patch.castShadow !== undefined) node.shadowOnly = !!patch.shadowOnly;
         if (patch.static !== undefined) node.static = !!patch.static;
         if (patch.mat4) node.world = Float32Array.from(patch.mat4);
         pushBlock(node, true); return;
@@ -447,6 +450,7 @@ createNode(mat4, parent = 0) {
       if (node.kind === 'instance' && (patch.renderOrder !== undefined || (patch.material !== undefined && node.renderOrder))) { if (patch.renderOrder !== undefined) node.renderOrder = patch.renderOrder || 0; setMatOrder(node.material, node.renderOrder); } // r8: core sorts per material
       if (node.kind === 'instance') {
       if (patch.castShadow !== undefined && patch.castShadow !== node.castShadow) { node.castShadow = !!patch.castShadow; if (node.rid) gpu.setInstanceCastShadow(node.rid, node.castShadow); }
+      if (patch.castShadow !== undefined && !!patch.shadowOnly !== !!node.shadowOnly) { node.shadowOnly = !!patch.shadowOnly; /* adapter flags are always the full set: absent = false */ if (node.rid && gpu.setInstanceShadowOnly) gpu.setInstanceShadowOnly(node.rid, node.shadowOnly); }
       if (patch.groups !== undefined) { node.groups = patch.groups ? normalizeGroups(patch.groups) : { words: new Uint32Array(0) }; if (node.rid) { applyGroups(node); relinkGroupChildren(node); } }
       if (patch.static !== undefined && patch.static !== node.static) { node.static = !!patch.static; if (node.rid) gpu.setInstanceStatic(node.rid, node.static); }
       }

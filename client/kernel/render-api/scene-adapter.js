@@ -190,8 +190,12 @@ if (conv.kind === 'wgsl') {
 return backend.createMaterial(conv.params, conv.textures);
 }
 
-const nodeFlags = (o, vis) => ({ castShadow: !!o.castShadow, receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0 });
-const flagBits = (o, vis) => (o.castShadow ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0); // + renderOrder compared separately (no string alloc)
+// r10: an object the MAIN camera's layers exclude but that casts (three: it renders only in the shadow pass, when a shadow camera's layers include it) = SHADOW-ONLY caster: sent visible + shadowOnly (depth-only, never in the main passes).
+// shadowMask = OR of the sun's cascade-camera layer masks when three has built them (a mask of exactly layer 0 adopts the main camera's mask, as ShadowNode does); null = unknown -> a layer-gated caster is assumed to be meant for the shadow pass.
+let shadowMask = null;
+const isShadowOnly = (o) => !!o.castShadow && !!frameCamera?.layers && !!o.layers && !o.layers.test(frameCamera.layers) && (shadowMask === null || (o.layers.mask & shadowMask) !== 0);
+const nodeFlags = (o, vis) => ({ castShadow: !!o.castShadow, receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null) });
+const flagBits = (o, vis) => (o.castShadow ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0); // + renderOrder compared separately (no string alloc)
 
 function buildParts(o, rec, vis) {
 // returns false when nothing renderable
@@ -247,6 +251,7 @@ function syncLight(o, vis) {
 let r = lights.get(o);
 const c = o.color ? [o.color.r, o.color.g, o.color.b] : [1, 1, 1];
 if (o.isDirectionalLight) {
+{ const sl = o.shadow?.shadowNode?.lights; if (sl?.length && o.castShadow) { let m = 0; const cm0 = frameCamera?.layers?.mask ?? 1; for (const l of sl) { const cm = l.shadow?.camera?.layers?.mask ?? 1; m |= cm === 1 ? cm0 : cm; } shadowMask = m; } else shadowMask = null; }
 const d = [o.position.x - (o.target?.position.x ?? 0), o.position.y - (o.target?.position.y ?? 0), o.position.z - (o.target?.position.z ?? 0)];
 const len = Math.hypot(...d) || 1; const dir = d.map((v) => v / len);
 const sig = `${dir}|${c}|${o.intensity}|${o.castShadow}|${vis}`;
@@ -377,7 +382,7 @@ function destroyBatched(r) { for (const gr of r.groups.values()) { if (gr.node) 
 function visit(o, parentVis, seen) {
 const treeVis = parentVis && o.visible !== false; // children inherit this; layers are per OBJECT (three Renderer.js: object.layers.test(camera.layers), no inheritance)
 // r10: three draws (main pass AND shadow pass — ShadowNode adopts camera.layers.mask when the shadow camera sits on layer 0 only) only objects whose layers intersect the camera's. Honour it, else layer-gated helpers (depth-only proxies) draw in the main view.
-const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frameCamera.layers));
+const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frameCamera.layers) || ((o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) && isShadowOnly(o)));
 if (!vis && treeVis && (o.isMesh || o.isLight)) stats.layerCulled = (stats.layerCulled ?? 0) + 1;
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {

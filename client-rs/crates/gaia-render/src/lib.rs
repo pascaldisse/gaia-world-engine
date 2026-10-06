@@ -578,6 +578,8 @@ struct Instance {
     is_static: bool,
     /// false = never rendered into shadow maps (sky domes, huge backdrops).
     cast_shadow: bool,
+    /// true = depth-only shadow caster: never drawn in the main passes, still rendered into the shadow maps (three: an object on a layer the main camera lacks but a shadow camera has).
+    shadow_only: bool,
 }
 
 /// Native instanced draw (three InstancedMesh / one BatchedMesh geometry): ONE mesh+material, N world transforms + optional per-instance RGBA,
@@ -590,6 +592,7 @@ struct InstanceBlock {
     colors: Vec<[f32; 4]>,
     is_static: bool,
     cast_shadow: bool,
+    shadow_only: bool,
 }
 pub struct RenderCore {
     opts: RenderOptions,
@@ -1386,6 +1389,7 @@ impl RenderCore {
                 transform,
                 is_static: false,
                 cast_shadow: true,
+                shadow_only: false,
             },
         );
         self.instances_dirty = true;
@@ -1404,6 +1408,14 @@ impl RenderCore {
 
     /// Per-instance shadow-caster opt-out (default true). Sky domes / backdrops must be
     /// false: they would otherwise shadow the whole scene and blow up the cascade depth range.
+    pub fn set_instance_shadow_only(&mut self, id: u32, only: bool) {
+        if let Some(inst) = self.instances.get_mut(&id) {
+            inst.shadow_only = only;
+            self.instances_dirty = true;
+            self.static_gen += 1;
+        }
+    }
+
     pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
             inst.cast_shadow = cast;
@@ -1516,7 +1528,7 @@ impl RenderCore {
         }
     }
     pub fn create_instance_block(&mut self, id: u32, mesh: u32, material: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
-        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), is_static: false, cast_shadow: true };
+        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), is_static: false, cast_shadow: true, shadow_only: false };
         Self::fill_block(&mut b, mats, colors, color_stride, count, &world);
         self.blocks.insert(id, b);
         self.instances_dirty = true;
@@ -1534,6 +1546,14 @@ impl RenderCore {
         if let Some(b) = self.blocks.get_mut(&id) {
             b.cast_shadow = cast_shadow;
             b.is_static = is_static;
+            self.instances_dirty = true;
+            self.static_gen += 1;
+        }
+    }
+    /// Block counterpart of `set_instance_shadow_only`: members are never drawn in the main passes, still cast.
+    pub fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) {
+        if let Some(b) = self.blocks.get_mut(&id) {
+            b.shadow_only = only;
             self.instances_dirty = true;
             self.static_gen += 1;
         }
@@ -1672,14 +1692,14 @@ impl RenderCore {
     }
 
     fn rebuild_instances(&mut self, device: &wgpu::Device) {
-        struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], is_static: bool, cast_shadow: bool }
+        struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], is_static: bool, cast_shadow: bool, shadow_only: bool }
         let mut all: Vec<Ent> = Vec::with_capacity(self.instances.len());
         for (id, i) in self.instances.iter() {
-            all.push(Ent { id: Some(*id), mesh: i.mesh, material: i.material, transform: i.transform, color: [1.0; 4], is_static: i.is_static, cast_shadow: i.cast_shadow });
+            all.push(Ent { id: Some(*id), mesh: i.mesh, material: i.material, transform: i.transform, color: [1.0; 4], is_static: i.is_static, cast_shadow: i.cast_shadow, shadow_only: i.shadow_only });
         }
         for b in self.blocks.values() {
             for (k, t) in b.transforms.iter().enumerate() {
-                all.push(Ent { id: None, mesh: b.mesh, material: b.material, transform: *t, color: b.colors.get(k).copied().unwrap_or([1.0; 4]), is_static: b.is_static, cast_shadow: b.cast_shadow });
+                all.push(Ent { id: None, mesh: b.mesh, material: b.material, transform: *t, color: b.colors.get(k).copied().unwrap_or([1.0; 4]), is_static: b.is_static, cast_shadow: b.cast_shadow, shadow_only: b.shadow_only });
             }
         }
         all.sort_by_key(|i| (i.mesh, i.material));
@@ -1693,7 +1713,7 @@ impl RenderCore {
         self.last_group_hidden = hidden.len() as u32;
         let cull_shadows = self.opts.groups_cull_shadows;
         let is_hidden = |e: &Ent| e.id.is_some_and(|id| hidden.contains(&id));
-        let list: Vec<&Ent> = all.iter().filter(|e| !is_hidden(e)).collect();
+        let list: Vec<&Ent> = all.iter().filter(|e| !is_hidden(e) && !e.shadow_only).collect();
         let mut data: Vec<[f32; 16]> = Vec::with_capacity(list.len());
         let mut cols: Vec<[f32; 4]> = Vec::with_capacity(list.len());
         self.batches.clear();

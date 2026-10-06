@@ -515,6 +515,10 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
         self.core.set_instance_block_flags(id, cast_shadow, is_static);
     }
+    #[wasm_bindgen(js_name = setInstanceBlockShadowOnly)]
+    pub fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) {
+        self.core.set_instance_block_shadow_only(id, only);
+    }
     #[wasm_bindgen(js_name = removeInstanceBlock)]
     pub fn remove_instance_block(&mut self, id: u32) {
         self.core.remove_instance_block(id);
@@ -559,6 +563,10 @@ self.core.clear_active_groups();
 #[wasm_bindgen(js_name = lastGroupHidden)]
 pub fn last_group_hidden(&self) -> u32 {
 self.core.last_group_hidden
+}
+#[wasm_bindgen(js_name = setInstanceShadowOnly)]
+pub fn set_instance_shadow_only(&mut self, id: u32, only: bool) {
+self.core.set_instance_shadow_only(id, only);
 }
 #[wasm_bindgen(js_name = setInstanceCastShadow)]
 pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {

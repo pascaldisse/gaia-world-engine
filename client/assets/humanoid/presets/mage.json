@@ -1,0 +1,41 @@
+{
+  "name": "mage",
+  "extends": "/assets/humanoid/presets/mannequin.json",
+  "params": {
+    "height": 1.04,
+    "build": 0.9,
+    "neckLength": 1.1,
+    "handScale": 1.1
+  },
+  "costume": {
+    "torso": "/assets/humanoid/costume/torso/robe.glb",
+    "hair": "/assets/humanoid/costume/hair/long.glb",
+    "back": "/assets/humanoid/costume/back/cape.glb"
+  },
+  "colors": {
+    "primary": "#43357a",
+    "secondary": "#2c2352",
+    "trim": "#d4af37",
+    "team": "#5b2a86",
+    "hair": "#d9d4c7"
+  },
+  "vary": {
+    "params": {
+      "height": 0.06,
+      "build": 0.08
+    },
+    "palettes": {
+      "primary": [
+        "#43357a",
+        "#2f5a7a",
+        "#7a3550",
+        "#2f6a4a"
+      ],
+      "hair": [
+        "#d9d4c7",
+        "#20130f",
+        "#8a4a2a"
+      ]
+    }
+  }
+}

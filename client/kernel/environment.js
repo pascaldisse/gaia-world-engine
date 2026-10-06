@@ -1,15 +1,26 @@
 import * as THREE from 'three/webgpu';
+import { GIController, GI_DEFAULTS } from './gi/gi-controller.js';
+import { LightingController, LIGHTING_DEFAULTS } from './lighting/index.js';
 
 // World mood as data: fog, sky, sun, exposure, bloom — all patchable live.
 // Falls back to the kernel defaults when the component is removed.
 export class Environment {
-  constructor({ renderer, scene, hemi, sun, post, audio }) {
+  constructor({ renderer, scene, hemi, sun, post, audio, camera = null }) {
     this.renderer = renderer;
     this.scene = scene;
     this.hemi = hemi;
     this.sun = sun;
     this.post = post;
     this.audio = audio;
+    // probe-based dynamic GI (docs/GI-PROBES.md) — opt-in, default off; the
+    // controller allocates zero GPU resources until apply({gi:{enabled:true}})
+    this.gi = new GIController({ renderer, scene });
+    // open-world sun/sky/CSM/GTAO rig (docs/LIGHTING-OPENWORLD.md) — opt-in,
+    // default off; while off it allocates nothing and touches no scene object.
+    // GI reads environment.lighting.skySummary {zenith,horizon,ground}.
+    this.camera = camera;
+    this.lighting = new LightingController({ renderer, scene, sun, hemi, camera, post });
+    this.lighting.onSkyChange(() => this._syncCurrent());
     this.flashLevel = 0;
     this.flashColor = new THREE.Color('#b9c4ee');
     this.exposure = renderer.toneMappingExposure;
@@ -51,6 +62,8 @@ export class Environment {
       bloom: { strength: 0.35, radius: 0.4, threshold: 0.85 },
       ambient: { color: '#b8c6e6', intensity: 0 },
       lightScale: 1,
+      gi: { ...GI_DEFAULTS },
+      lighting: { ...LIGHTING_DEFAULTS },
     };
     this.current.ambientIntensity = 0;
   }
@@ -93,6 +106,19 @@ export class Environment {
     // remembered so the editor's post toggle can hand bloom back exactly
     this.currentBloom = { ...this.defaults.bloom, ...(p.bloom ?? {}) };
     this.post?.setBloom(this.currentBloom);
+    // gated in GIController.configure(): enabled:false (the default) never
+    // allocates a probe grid, storage buffer, or compute kernel
+    this.gi?.configure({ ...GI_DEFAULTS, ...(p.gi ?? {}) });
+    // lighting:{enabled:true,…} takes ownership of sun/hemi/background/fog/exposure
+    // (written above from params, then overridden here and kept — see update()).
+    // restoreLights:false → a disable must NOT paste stale pre-enable values over
+    // the params apply() just wrote.
+    if (this.lighting) {
+      this.lighting.camera = this.camera ?? this.lighting.camera;
+      this.lighting.bloomParams = this.currentBloom;
+      this.lighting.configure({ ...LIGHTING_DEFAULTS, ...(p.lighting ?? {}) }, { restoreLights: false });
+      if (this.lighting.enabled) this.exposure = this.lighting.exposure;
+    }
     if (p.audio) this.audio?.applyBus(p.audio);
     this.current = {
       sunIntensity: sun.intensity,
@@ -138,7 +164,20 @@ export class Environment {
     this.dipDur = seconds;
   }
 
+  // snapshot of what flash/fade code treats as the resting scene
+  _syncCurrent() {
+    this.current.sunIntensity = this.sun.intensity;
+    this.current.hemiIntensity = this.hemi.intensity;
+    if (this.scene.background?.isColor) this.current.background.copy(this.scene.background);
+    if (this.scene.fog) this.current.fogColor.copy(this.scene.fog.color);
+  }
   update(dt) {
+    if (this.lighting?.enabled) {
+      // lighting owns the lights: no crossfade toward stale params, exposure from config
+      this.fadeState = null;
+      this.exposure = this.lighting.exposure;
+      this.lighting.update(dt, this.camera ?? undefined);
+    }
     const fade = this.fadeState;
     if (fade) {
       fade.t = Math.min(1, fade.t + dt / fade.seconds);

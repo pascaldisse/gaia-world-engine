@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>GI open: ray-parallel A/B (parity + GPU time)</title>
+<style>body{background:#111;color:#ddd;font:13px/1.5 ui-monospace,Menlo,monospace;padding:2em;white-space:pre-wrap}h1{color:#8fb3ff;font-size:14px}</style></head>
+<body><h1>running…</h1>
+<!-- Serve from WORKTREE root: python3 -m http.server 15490 ; open http://localhost:15490/tools/gi-raypar-bench.html (?secs=5&reps=3). Result -> window.__giRaypar -->
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/webgpu":"/node_modules/three/build/three.webgpu.js","three/tsl":"/node_modules/three/build/three.tsl.js","three/addons/":"/node_modules/three/examples/jsm/"}}</script>
+<script type="module">
+import { runRayparBench } from './gi-raypar-bench.mjs';
+const h1 = document.querySelector('h1'); const q = new URLSearchParams(location.search);
+try { const r = await runRayparBench({ secs: Number(q.get('secs') ?? 5), reps: Number(q.get('reps') ?? 3) }); window.__giRaypar = r; h1.textContent = r.pass ? 'PASS' : 'FAIL'; document.body.append(JSON.stringify(r, null, 1)); }
+catch (e) { window.__giRaypar = { pass: false, error: String(e?.stack ?? e) }; h1.textContent = 'ERROR'; document.body.append(String(e?.stack ?? e)); }
+</script></body></html>

@@ -6,6 +6,10 @@ import { buildScatter } from './scatter.js';
 import { buildParticles } from './particles.js';
 import { inArea } from '../../shared/scenes.js';
 import { loadVRM, applyVrmEdits, liveVrms, playClip } from './vrm.js';
+import { loadModel } from './model.js';
+import { mountGltf, releaseGltf } from './gltf.js';
+import { mountHumanoid, releaseHumanoid, tickHumanoidLod, patchHumanoidClip, humanoidSig } from './humanoid.js';
+import { tickHumanoidClips } from './humanoid-clip.js';
 
 // nebula-cull scratch (see cullFadedClouds)
 const _cullPos = new THREE.Vector3();
@@ -28,6 +32,29 @@ const _cullAt = new THREE.Vector3();
 // Worlds keep within it by FAKING small sources (emissive glow cards +
 // flicker), Cyberpunk-style: real lights are for the player and heroes.
 const LIGHT_POOL_SIZE = 16;
+// player.js steps onto any mesh surface <= feet + 0.65 (walk); blockers honour the same reach
+export const STEP_REACH = 0.65;
+const STEP_TOP_TOLERANCE = 0.1;
+
+// a blocker whose top the body can step onto is a step, not a wall: player.js
+// climbs any mesh surface <= feet + STEP_REACH, so a blocker only skipped at
+// feet >= top - 0.05 made invisible walls at low lips. Skip it iff its top is
+// within step reach AND a solid surface actually lies on that top (probed at
+// the box point nearest the body) — rails over drops have no floor on top.
+// Module function, not a method: resolveBlockers is called with plain fixture
+// `this` (colliderIds/store/groups); no surfaceAt there = no step = old wall rule.
+function blockerIsStep(view, group, box, lx, lz, top, feet, cos, sin) {
+  if (top - feet > STEP_REACH) return false;
+  const [bx, , bz] = box.position ?? [0, 0, 0];
+  const [sx, , sz] = box.size ?? [1, 1, 1];
+  const cx = Math.min(Math.max(lx, bx - sx / 2), bx + sx / 2);
+  const cz = Math.min(Math.max(lz, bz - sz / 2), bz + sz / 2);
+  const x = group.position.x + cx * cos + cz * sin;
+  const z = group.position.z - cx * sin + cz * cos;
+  const surface = view.surfaceAt?.(x, z, top + STEP_TOP_TOLERANCE);
+  return surface !== null && surface !== undefined && Math.abs(surface - top) <= STEP_TOP_TOLERANCE;
+}
+
 const _lightPos = new THREE.Vector3();
 const _lightDir = new THREE.Vector3();
 const _probeGeometry = new THREE.BoxGeometry(0.01, 0.01, 0.01);
@@ -132,8 +159,10 @@ export class View {
   // time-sliced streaming: a scene coming in never drops a frame — builds
   // run against a per-frame millisecond deadline, weighted by mesh-part
   // count (pipelines were all warmed at load; first-draw setup wasn't)
-  update() {
+  update(dt) {
     this.cullFadedClouds();
+    tickHumanoidLod(this.camera); // humanoid-kit LOD level switch by camera distance
+    tickHumanoidClips(dt); // humanoid-kit clip mixers (dt omitted ⇒ own clock)
     const deadline = performance.now() + 3;
     while (this.hideQueue.length && performance.now() < deadline) {
       this.hide(this.hideQueue.shift());
@@ -477,6 +506,9 @@ export class View {
   }
 
   applyMesh(group, recipe) {
+    if (recipe?.humanoid && patchHumanoidClip(group, recipe)) return; // only humanoid.clip changed ⇒ crossfade in place, no remount
+    group.userData.gltfToken = (group.userData.gltfToken ?? 0) + 1;
+    group.userData.humanoidToken = (group.userData.humanoidToken ?? 0) + 1;
     if (this.nebulaQuads?.length) this.nebulaQuads = this.nebulaQuads.filter((q) => q.mesh.parent && q.mesh.parent !== group);
     for (const child of [...group.children]) {
       if (child.userData.kind === 'mesh-part') {
@@ -489,7 +521,21 @@ export class View {
       liveVrms.delete(group.userData.vrm);
       delete group.userData.vrm;
     }
+    delete group.userData.humanoid;
+    delete group.userData.humanoidSig;
     if (!recipe) return;
+    if (recipe.gltf?.src) {
+      mountGltf(group, recipe.gltf, group.userData.gltfToken, () => this.buildVersion++);
+      if (!recipe.parts) return;
+    }
+    // Humanoid kit: `mesh.humanoid = { preset, base, params, costume, colors, seed }` — one base GLB +
+    // costume pieces rebound by bone name + param bone scales + shared tinted materials
+    // (docs/HUMANOID-KIT-SPEC.md). Same async/token-guarded mesh-part shape as gltf/vrm.
+    if (recipe.humanoid) {
+      group.userData.humanoidSig = humanoidSig(recipe);
+      mountHumanoid(group, recipe.humanoid, group.userData.humanoidToken, () => this.buildVersion++);
+      if (!recipe.parts && !recipe.model) return;
+    }
     // VRM avatar source: `mesh.vrm = { src, edits }` — the whole avatar mounts
     // as one mesh-part child so the primitive dispose/rebuild path owns it.
     // Async: the loaded scene attaches when ready, guarded against a newer
@@ -523,7 +569,33 @@ export class View {
           this.buildVersion++;
         })
         .catch((err) => console.warn('[gaia] vrm load failed', spec.src, err));
-      if (!recipe.parts) return; // pure-VRM recipe: no primitive parts to build
+      if (!recipe.parts && !recipe.model) return; // pure-VRM recipe: no primitive parts to build
+    }
+    // Static prop/architecture model source: `mesh.model = { src, materialPart?,
+    // position?, rotation?, scale? }` -- one real (e.g. FLVER->OBJ converted)
+    // mesh mounted as one mesh-part child, same async/token-guard shape as VRM.
+    if (recipe.model?.src) {
+      const spec = recipe.model;
+      group.userData.modelToken = (group.userData.modelToken ?? 0) + 1;
+      const token = group.userData.modelToken;
+      loadModel(spec.src, spec.materialPart)
+        .then((obj) => {
+          if (group.userData.modelToken !== token) {
+            disposeObject(obj);
+            return;
+          }
+          obj.position.set(...(spec.position ?? [0, 0, 0]));
+          obj.rotation.set(...(spec.rotation ?? [0, 0, 0]));
+          if (spec.scale) {
+            if (Array.isArray(spec.scale)) obj.scale.set(...spec.scale);
+            else obj.scale.setScalar(spec.scale);
+          }
+          obj.userData.kind = 'mesh-part';
+          group.add(obj);
+          this.buildVersion++;
+        })
+        .catch((err) => console.warn('[gaia] model load failed', spec.src, err));
+      if (!recipe.parts) return; // pure-model recipe: no primitive parts to build
     }
     for (const part of partsOf(recipe)) {
       const mesh = new THREE.Mesh(makeGeometry(part), makePartMaterial(part));
@@ -798,6 +870,7 @@ export class View {
         const px = sx / 2 + r - Math.abs(lx - bx);
         const pz = sz / 2 + r - Math.abs(lz - bz);
         if (px <= 0 || pz <= 0) continue;
+        if (blockerIsStep(this, group, box, lx, lz, top, feet, cos, sin)) continue;
         let ox = 0;
         let oz = 0;
         if (px < pz) ox = lx > bx ? px : -px;
@@ -861,5 +934,9 @@ export class View {
 }
 
 function disposeObject(object) {
-  object.traverse((node) => disposeOwn(node));
+  releaseGltf(object); // glTF template refcount: last instance of a URL frees its shared geometry/textures (idempotent)
+  object.traverse((node) => {
+    releaseHumanoid(node); // material refcounts + skeleton textures; idempotent
+    disposeOwn(node);
+  });
 }

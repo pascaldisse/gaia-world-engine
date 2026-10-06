@@ -1,3 +1,4 @@
+import { GAIA_PORT } from './kernel/port.js';
 import { createRenderer } from './kernel/renderer.js';
 import { WorldStore } from './kernel/world.js';
 import { View } from './kernel/view.js';
@@ -19,7 +20,10 @@ import { Shading } from './kernel/shading.js';
 import { ViewFx } from './kernel/viewfx.js';
 import { CharacterCreator } from './plugins/character-creator.js';
 import { VrmEditor } from './plugins/vrm-editor.js';
+import { HumanoidEditor } from './plugins/humanoid-editor.js';
 import { loadExtensions, gateModule } from './kernel/extensions.js';
+import * as THREE from 'three/webgpu';
+import * as TSL from 'three/tsl';
 import { updateVrms } from './kernel/vrm.js';
 import { makeRain } from './kernel/rain.js';
 import { updateParticles, rainDebug } from './kernel/particles.js';
@@ -41,7 +45,7 @@ const { renderer, scene, camera, hemi, sun, post, pixels } = await createRendere
 const store = new WorldStore();
 const audio = new AudioEngine(camera);
 const effects = new Effects({ scene, audio });
-const environment = new Environment({ renderer, scene, hemi, sun, post, audio });
+const environment = new Environment({ renderer, scene, hemi, sun, post, audio, camera });
 const view = new View({ scene, store, audio, effects, environment, camera, renderer });
 const player = new Player({ camera, dom: renderer.domElement, overlay, view });
 view.player = player;
@@ -49,7 +53,9 @@ view.player = player;
 // engine's own historical wiring, so nothing here changes unless a host page
 // passes `window.__GAIA_EXTENSIONS__` — which is how the Paleblood Atlas boots
 // its OWN copies from paloptic instead of these.
-const extensions = await loadExtensions({ store, view, camera, player, dom: renderer.domElement, renderer, scene, audio, effects, environment });
+// three/tsl = the SAME module instances the renderer uses (one three, no bare-import resolution from outside the engine root).
+// Additive: extensions that ignore them are unaffected.
+const extensions = await loadExtensions({ store, view, camera, player, dom: renderer.domElement, renderer, scene, audio, effects, environment, three: THREE, tsl: TSL });
 // a scene's `camera` component drives the rig: side mode fixes the frame,
 // shows the body, and retires the crosshair (E picks by the body instead)
 const scenes = new Scenes({
@@ -112,7 +118,7 @@ const staticMode = __GAIA_STATIC__ || staticModeRequested();
 let primitives;
 
 const netConfig = {
-  url: `ws://${location.hostname}:${__GAIA_PORT__}`,
+  url: `ws://${location.hostname}:${GAIA_PORT}`,
   presence: presenceId,
   onSnapshot: (entities, time, world, game, materials) => {
     clock.offset = time - performance.now() / 1000;
@@ -573,7 +579,7 @@ function captureSnapshot() {
   pendingSnapshot = false;
   canvasToDataURL(async (image) => {
     try {
-      const res = await fetch(`http://${location.hostname}:${__GAIA_PORT__}/snapshot`, {
+      const res = await fetch(`http://${location.hostname}:${GAIA_PORT}/snapshot`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -835,6 +841,14 @@ const vrmEditor = new VrmEditor({
   editor,
   player,
 });
+const humanoidEditor = new HumanoidEditor({
+  store,
+  view,
+  send: net.sendDev,
+  history,
+  editor,
+  player,
+});
 
 function syncCrosshair() {
   crosshairEl.style.display = player.locked && !player.editorMode && !player.rig ? 'block' : 'none';
@@ -864,6 +878,7 @@ window.gaia = Object.assign(window.gaia ?? {}, {
   sim,
   characterCreator,
   vrmEditor,
+  humanoidEditor,
   ...extensions.published,          // e.g. atlasStrategy, when that extension is loaded
   setDrawMode,
   setStopped,
@@ -921,7 +936,7 @@ renderer.setAnimationLoop(() => {
   extensions.update(dt);
   scenes.update(player.position);
   player.voidY = scenes.currentVoidY;
-  view.update();
+  view.update(dt);
   if (!sim.stopped) primitives.update();
   shading.update();
   viewFx.update();

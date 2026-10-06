@@ -102,6 +102,7 @@ export async function createRenderer() {
     const bloomPass = bloom(color, 0.35, 0.4, 0.85);
     postProcessing.outputNode = color.add(bloomPass);
     post = {
+      postProcessing, // exposed for kernel/lighting/post.js (opt-in GTAO/TRAA chain)
       render: () => postProcessing.render(),
       setBloom: ({ strength, radius, threshold } = {}) => {
         if (strength !== undefined) bloomPass.strength.value = strength;

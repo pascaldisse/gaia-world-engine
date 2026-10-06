@@ -1,0 +1,7 @@
+{
+  "name": "mannequin",
+  "base": "/assets/humanoid/base.glb",
+  "colors": {
+    "skin": "#d9a784"
+  }
+}

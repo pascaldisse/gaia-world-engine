@@ -43,6 +43,9 @@ export default defineConfig({
     __GAIA_PORT__: JSON.stringify(process.env.GAIA_PORT ?? '8420'),
     __QUEST_URL__: JSON.stringify(process.env.QUEST_URL ?? 'http://localhost:4610'),
     __GAIA_STATIC__: JSON.stringify(process.env.GAIA_STATIC_BUILD === '1'),
+    // A world may provide its own presentation/editor module without the
+    // engine importing a production by name. Comma-separated URLs.
+    __GAIA_EXTENSIONS__: JSON.stringify(process.env.GAIA_EXTENSIONS ?? ''),
   },
   build: {
     // top-level await (renderer boot) + WebGPU-era three.js need a modern

@@ -1,0 +1,166 @@
+# HUMANOID KIT — spec (stage 2)
+
+survey/gaps → [`HUMANOID-KIT.md`](HUMANOID-KIT.md) · law: **model the body ONCE; everything else = data** (colors, costume pieces, params, seed).
+unit = `preset` + overrides. N units = N small JSON docs → 1 base GLB + k piece GLBs + c cached materials.
+
+## 0 · Laws
+- L1 data only: whole unit look = `mesh.humanoid` JSON. same data ⇒ same unit on every client (seeded PRNG, no `Math.random`).
+- L2 GPU once: geometry per (GLB) shared; material per (src-material, hex) shared; NEVER per-instance clone, NEVER mutate a template material (AGENTS.md perf law).
+- L3 rig-agnostic: any glTF w/ a humanoid skeleton. bone names resolve to one canonical set (VRM humanoid names) via aliases (VRM · Mixamo · VRoid `J_Bip`). VRM-file NOT required.
+- L4 pieces rebind BY BONE NAME to the base skeleton at load. piece skeleton may use a different naming scheme than the base.
+- L5 pure core (`shared/humanoid.js`, no THREE) = resolve/merge/seed/param→scale solve; THREE glue (`client/kernel/humanoid.js`) = load/rebind/apply. both node-testable.
+- L6 engine ≠ game: kit code + placeholder assets live in engine; a game ships its OWN base/pieces/presets as world assets, zero engine edits.
+
+## 1 · Component `mesh.humanoid`
+```jsonc
+{ "preset":  "humanoid/presets/soldier.json",   // optional URL (§10). preset values = defaults
+  "base":    "humanoid/base.glb",                // overrides preset.base
+  "params":  { "height":1.05, "build":0.9, "legLength":1.1 },   // §5 named body params; omitted = preset → 1
+  "bones":   { "head":1.1, "leftUpperArm":[1,1.2,1] },         // escape hatch: canonical bone → scalar|[x,y,z] (multiplies on top of params)
+  "costume": { "head":"humanoid/costume/helmet.glb", "torso":"…/armor.glb", "legs":null },  // slot → piece URL | null (explicit empty)
+  "colors":  { "skin":"#e8b894", "primary":"#2a4d8f", "team":"#d22" },  // slot → hex (incl. `team`)
+  "seed":    1234,                               // number|string; drives preset.vary for keys NOT set here
+  "scale":1, "position":[0,0,0], "rotation":[0,0,0],   // placement of the model inside the entity (as mesh.gltf)
+  "solid":false }
+```
+- everything optional; `{base}` alone = bare mannequin. no `base` after merge ⇒ nothing mounts + console warn.
+- `team` is just a color slot (convention). a game changes team by `set mesh.humanoid.colors.team` → shared-material swap, no reload.
+- facing: base faces **+Z** at rest, feet at y=0, origin between feet. (glTF convention.)
+
+## 2 · Preset file (JSON, world or engine asset)
+same shape as §1 plus:
+```jsonc
+{ "name":"soldier", "extends":"humanoid/presets/base-human.json",   // optional single parent (depth ≤4, cycles → error)
+  "base":"…", "params":{…}, "costume":{…}, "colors":{…},
+  "vary": {                                            // used ONLY when a seed is given
+    "params":   { "height":0.06, "build":0.10 },       // name → ±amplitude around merged value
+    "palettes": { "skin":["#f1c7a8","#8f5f4d"], "hair":["#20130f","#efe7d0"] },   // slot → pick one hex
+    "costume":  { "head":[null,"…/helmet.glb","…/cap.glb"] } } }          // slot → pick one (null = none)
+```
+- **merge order** (later wins): `extends` chain (parent→child) → preset → unit overrides. objects deep-merge per key; `costume.<slot>: null` clears; `vary` replaced whole by the nearest definer.
+- presets are DATA FILES. preset = recipe, unit = preset + overrides + seed. "save preset" in the editor writes this file.
+
+## 3 · Resolve (pure) — `resolveHumanoid(unit, preset)` → concrete
+```
+concrete = { base, params:{all PARAM_DEFS filled+clamped}, bones:{canon→[x,y,z]}, costume:{slot→url|null}, colors:{slot→#rrggbb}, key }
+```
+1. merge (§2). 2. if `seed` present: for every `vary.*` entry whose key was **not set by the unit itself** (unit explicit > seed > preset): draw u∈[0,1) from stream `rng(seed, "<kind>.<key>")` = `mulberry32(hash32(seed+"|"+path))()` first output (per-key streams ⇒ adding/reordering keys never reshuffles others). params: `v + (2u-1)·amp`; palettes/costume: `list[floor(u·len)]`. 3. clamp params to ranges; hex normalize `#rgb|#rrggbb` → lowercase `#rrggbb`. 4. `key` = `hash32(canonical JSON)` hex — identity for diagnostics/tests.
+- no `Math.random` anywhere in resolve. editor "🎲" = pick new integer seed → stored as data.
+
+## 4 · Rig — canonical bones + aliases
+canonical = VRM humanoid names: `hips spine chest upperChest neck head leftEye rightEye jaw {left,right}{Shoulder UpperArm LowerArm Hand UpperLeg LowerLeg Foot Toes}` + fingers `{thumb:Metacarpal|Proximal|Distal, index|middle|ring|little: Proximal|Intermediate|Distal}`.
+- `canonicalBone(name)`: lowercase, strip non-alnum (three's GLTFLoader already drops `:` from `mixamorig:Hips` → `mixamorigHips`; both normalize equal), strip `mixamorig\d*` prefix → lookup in generated table:
+  - VRM: `hips`, `leftUpperArm` … · Mixamo: `Hips Spine Spine1 Spine2 Neck Head LeftShoulder LeftArm LeftForeArm LeftHand LeftUpLeg LeftLeg LeftFoot LeftToeBase`, `LeftHandThumb1..3`, `LeftHandIndex1..3` … · VRoid: `J_Bip_C_Hips`, `J_Bip_L_UpperArm`, `J_Bip_L_Index1` …
+  - Mixamo `Spine1`→`chest`, `Spine2`→`upperChest`.
+- unresolved names are legal (cape bones, props). they never take params; on rebind they fold to nearest mapped ancestor (§6).
+- **axes**: bone-local axes differ by rig (VRM-normalized world-aligned; Mixamo-FBX rotated). `lengthAxis(bone)` = dominant component, IN THE BONE'S LOCAL FRAME, of the rest-pose direction to its designated next bone (`NEXT_BONE`: hips→spine, spine→chest→upperChest→neck→head, shoulder→upperArm→lowerArm→hand, upperLeg→lowerLeg→foot→toes; first present wins). measured ONCE per base template from world matrices. `length`/`width` rules use it.
+- scale propagates down the hierarchy (same as vrm editor). ⇒ a LENGTH rule scales ONE bone (everything below stretches with it — no compounding) and `counter` bones get the inverse on the SAME axis so they stay undistorted (foot after legLength, head after neckLength). counters assume parent/child local frames share axes (VRM-normalized / identity-rotation rigs — true for the placeholder + VRM); `uniform`/`width` rules and everything else are rig-agnostic.
+
+## 5 · Params (named, unitless, 1 = neutral)
+| param | range | rule bone · mode · counter (inverse on the rule axis) |
+|---|---|---|
+| `height` | .5–1.8 | instance root, uniform |
+| `build` | .6–1.6 | `hips` width (non-length axes) · counter `head` → body/limbs thicken, head doesn't |
+| `torsoLength` | .7–1.4 | `spine` length · counter `neck`, `*Shoulder` |
+| `shoulders` | .7–1.4 | `*Shoulder` length (clavicle → arm spacing) · counter `*UpperArm` |
+| `neckLength` | .6–1.6 | `neck` length · counter `head` |
+| `headScale` | .7–1.5 | `head` uniform |
+| `armLength` | .7–1.4 | `*UpperArm` length · counter `*Hand` |
+| `legLength` | .7–1.4 | `*UpperLeg` length · counter `*Foot` |
+| `handScale` | .6–1.6 | `*Hand` uniform |
+| `footScale` | .7–1.4 | `*Foot` uniform |
+- modes: `uniform`→[s,s,s]; `length`→s on the rule bone's length axis; `width`→s on the other two. several rules on one bone multiply; `bones` overrides multiply last. rule bone absent from the rig ⇒ rule (and its counters) skipped silently.
+- `solveBoneScales(concrete, {axes, has})` → `{root, bones:{canon→[x,y,z]}}` pure; THREE glue writes `bone.scale`.
+- **grounding**: leg/torso params move the feet relative to the hips ⇒ glue shifts `hips` so the lowest foot joint stays at its rest height (instance origin = ground). `height` scales the root about the origin (feet stay at y=0).
+- "build" via hips-only is deliberate: costume pieces skin to the SAME bones ⇒ they deform with the body automatically (armor on a heavy build just fits).
+
+## 6 · Costume pieces
+authoring contract (any DCC): export a GLB containing (a) the humanoid skeleton — any subset that includes the ancestor chain of the bones used — in the **same rest pose as the base**, (b) `SkinnedMesh`es bound to it, (c) optional **rigid** meshes parented under a bone node (weapon in hand, plume on head). materials named by color slot (§7).
+- **skinned** piece mesh → per instance: `new SkinnedMesh(sharedGeometry, sharedMaterial)`; `skeleton = new Skeleton(mappedBones, piece.boneInverses)` where `mappedBones[i]` = the INSTANCE's base bone for piece bone i: `canonicalBone(pieceBone.name)` → base canonical map; unmapped → nearest mapped ancestor in the piece hierarchy; none → `hips` (reported). **geometry is never touched** (no skinIndex rewrite) ⇒ geometry shared across all instances AND all bases that share the pose.
+- **rigid** piece mesh → cloned (shared geometry/material) and reparented under the base bone for the nearest mapped ancestor in the piece, local transform kept.
+- **drift report** (`rebind.report`): per mapped bone, max|Δ| between piece boneInverse and base boneInverse (same canonical bone). `> 1e-3` ⇒ warn `{bone, drift}`: piece authored against a different rest pose (mismatch = visible offset). v1 reports, doesn't fix.
+- slots are free strings in data. convention (kit default): `hair head torso legs feet back weaponR weaponL`. one piece per slot; layering conflicts are the author's (radii/offsets).
+- `frustumCulled=false` on kit skinned meshes (param scaling invalidates bind-pose bounds; per-instance recompute is O(verts)). perf note §8.
+
+## 7 · Color slots
+- slot of a material: `material.userData.slot` (glTF `extras.slot`) else `name` : exact slot, or slot + `[._:\- ]` or `_` suffix (`skin.001`, `primary_trim`); longest slot wins. defaults `skin hair eyes primary secondary accent trim metal team`; kit.json may declare more.
+- apply = `acquireMaterial(srcMaterial, hex)` → cache key `srcMaterial.uuid|hex` → one clone (`userData.shared=true`, `color.set(hex)`; map stays ⇒ tint multiplies texture) shared by every instance asking the same pair; **refcounted**, released on despawn/rebuild, disposed at 0.
+- slot not colored in `concrete.colors` ⇒ mesh keeps the TEMPLATE material (shared, zero clones).
+- v1 = one material per slot. mask-texture partial tint (stripes) → v2.
+- cost: distinct (material,hex) pairs, NOT instances. 500 units over 8 teams × 6 slots ≤ 48 materials. palettes (`vary.palettes`) bound the count by design. `color` is a uniform ⇒ new hex ≠ shader recompile.
+
+## 8 · Perf model (RTS)
+| thing | shared across instances | per instance |
+|---|---|---|
+| GLB fetch/parse | URL template cache (base + each piece) | — |
+| geometry, textures | yes (`userData.shared`) | — |
+| materials | (src-material, hex) cache, refcounted | — |
+| boneInverses | piece's array | — |
+| skeleton | — | `SkeletonUtils.clone` of base (~20–65 bones) + one `Skeleton` per skinned piece mesh |
+| draw calls | — | 1 per skinned mesh (base + each piece mesh). skinned meshes can't be GPU-instanced ⇒ keep pieces few, merge materials. 100 units × (1 base + 4 pieces) = 500 calls |
+- not in v1: far-LOD impostors / vertex-animation-texture instancing (needed beyond ~500 on-screen). `userData.humanoid.bones` is exposed so an animation/instancing layer can attach later.
+- unit tests prove: 100 mounts ⇒ 1 base load, 1 geometry/mesh, ≤ colors×slots materials, 0 materials cloned per instance.
+
+## 9 · `kit.json` (catalog for tools; NOT read by the renderer)
+```jsonc
+{ "name":"placeholder",
+  "bases":   { "mannequin":"/assets/humanoid/base.glb" },
+  "slots":   { "head":{"pieces":{"helmet":"/assets/humanoid/costume/helmet.glb",…}}, … },
+  "colorSlots":["skin","hair","primary",…,"team"],
+  "presets": { "soldier":"/assets/humanoid/presets/soldier.json" } }
+```
+a game ships its own kit.json (EE: its own base + pieces) — editor loads any kit URL.
+
+## 10 · URL rules
+`http(s)://…` as-is · starts with `/` → **client origin** (engine-bundled `client/assets/…`, like `/assets/vrm/`) · otherwise → **world asset** on the world server (`<GAIA_WORLD>/assets/…`, like `mesh.gltf`). unknown/failed URL ⇒ status `error`, console.error, entity renders nothing (no throw).
+
+## 11 · Engine seams
+- `shared/schema.js` `mesh.fields.humanoid` (documented in `GET /schema`).
+- `view.applyMesh`: `recipe.humanoid` → `mountHumanoid(group, spec, token, onReady)`; token-guarded (newer applyMesh supersedes), child `kind:'mesh-part'`, `userData.humanoid = {bones, params, concrete, release()}`.
+- `view.js disposeObject` calls `userData.humanoid.release()` (material refcounts, skeleton textures) — idempotent.
+- `set mesh` ops restyle live (same patch protocol as vrm).
+
+## 12 · Editor (`client/plugins/humanoid-editor.js`, **H** in creator mode)
+kit URL → base · preset dropdown · per-slot piece dropdown (+ none) · 10 param sliders · color slot pickers · seed + 🎲 · entity id · buttons: `spawn/update` (undoable op) · `load selected` · `save preset` (downloads JSON; with `extends`/`vary` untouched) · live preview = local `view.applyMesh` on the target entity group (no op per slider tick; op only on spawn/update).
+
+## 13 · Tests
+- `test/humanoid-core.test.js`: canonicalBone (3 rigs), merge/extends/cycle, seed determinism + per-key stream stability + explicit>seed>preset, clamp/hex, solveBoneScales (modes, axes), slotOfMaterialName, validate.
+- `test/humanoid-rebind.test.js`: real THREE + generated GLBs: rebind by name (cross-rig piece), geometry sharing, material cache/refcount, params applied to bones, rigid attach, drift report, 100-instance sharing, dispose.
+- live: 3 variants × 1 base in the real client, screenshots (§ stage 4).
+
+## 14 · Non-goals / open
+face morphs · far LOD/instancing · mask tint · piece auto-fit across different rest poses · client-rs port (data shape is portable) · EE base arrives from a parallel lane — swap `base` URL + kit.json, nothing else.
+## 15 · Stage 5 — merge · LOD · team slot (perf)
+- **merge** (default; `merge:false` = per-piece path §6): per LOD level, ALL skinned parts (base meshes + every costume piece) sharing ONE source material + bindMatrix → ONE `SkinnedMesh`. built once per (level base, costume set) in `mergedTemplate`; pure core `mergeSkinnedParts` (shared/humanoid.js): positions/uv/normals/index concatenated (index offset), `skinIndex` remapped onto a deduped joint table keyed `boneName|bindInverse` → per instance `Skeleton(instanceBones, inverses)`. piece→base bone mapping = §6 rules (fold to ancestor / hips). multi-material meshes stay solo. rigid pieces stay separate meshes.
+- **LOD**: `lod: true | {distances:[d1,d2], bases?:[url…], hysteresis}`; no `bases` ⇒ `<base>_lod1`, `_lod2` sibling files (EE unit-build convention); level = full merged set on the SAME instance skeleton (joints rebound by name); missing level skipped (`report.lod`). `view.update()` → `tickHumanoidLod(camera)` toggles level-group visibility (hysteresis 8%). pieces ride every level (full-res).
+- **team slot**: glTF material `extras.ee.teamMask {index}` (R channel, multiply) → `colors.team` tints masked texels. ONE shared TSL node material per source material for ALL team colours; colour = per-object uniform from `mesh.userData.teamColor` (no material clone per colour). no TSL (headless) ⇒ falls back to (material,hex).
+- render options (`merge`, `lod`) are NOT unit identity (`concrete.render`, excluded from `key`).
+- measured (200 EE clubmen, 4 colours, tools/humanoid-perf.mjs): unmerged 3649 draws / 1.98M tris / 21.5 fps → merged 449 draws / 1.98M / 60 fps → merged+LOD 449 / 0.8–1.0M. remaining open: skinning/bones 4800 nodes CPU; no instanced/baked skinning. (LOD texture ×levels → fixed §17.)
+## 16 · Stage 6 — clip playback
+- data: `mesh.humanoid.clip = string | { name, speed=1, loop=true, t0=0 }` · `clips: <url>` (optional clips glb). render state, NOT unit identity (`concrete.render.clip|clips`, excluded from `key`). `clip:null` ⇒ stop.
+- clip sources: base glb `animations` + `clips` glb (scene ignored; tracks retargeted onto base: node name exact ⇒ kept, else `canonicalBone(node)` ⇒ base's node of that bone, unmappable track dropped). same name in both ⇒ `clips` wins. per-URL template cache ⇒ parsed ONCE; retargeted set cached per (base template, clips url). `.scale` tracks stripped at parse (body params own bone scale). hips `.position` track = root motion, overrides the foot-grounding offset.
+- name resolve: exact → tail after `|` (`Armature|Walk`) → case-insensitive. unknown ⇒ `console.warn` ONCE per name, previous clip KEPT, `setClip` returns false; unknown at mount ⇒ rest pose, unit still mounts.
+- player (`client/kernel/humanoid-clip.js`): ONE `AnimationMixer` per instance on the instance root (lazy, first valid clip) driving the shared instance bones ⇒ every LOD level + per-piece meshes skin from the same pose; LOD switch keeps pose. `AnimationClip` objects shared by all mixers (never cloned/mutated per instance).
+- crossfade `CLIP_FADE=0.15 s` on clip change (`crossFadeFrom`, no warp); first clip = no fade. same clip again ⇒ speed/loop updated in place, NO restart/fade (`t0` only applies at (re)start). `loop:false` ⇒ LoopOnce + clamp at last pose (`state().finished`). stop (`null`) fades out.
+- tick: `view.update(dt)` → `tickHumanoidClips(dt)` (dt omitted ⇒ own clock, ≤ 0.1 s). only players with an active/fading action are ticked (idle/finished/stopped leave the set).
+- JS API on the instance (`group.userData.humanoid`, available once `humanoidStatus==='ready'`): `setClip(name|null, { speed, loop, t0, fade }) ⇒ boolean` · `clipState() ⇒ { name, speed, loop, time, finished, fading, from, fadeT, fadeDur, weight }` · `clipNames()` · `getClip(name)` (shared clip, read-only) · `clipInfo { requested, applied, available }`. overlays animate client-side with no ops.
+- world-data restyle: `set mesh` op that changes ONLY `humanoid.clip` ⇒ `view.applyMesh` → `patchHumanoidClip` ⇒ `setClip` in place (crossfades, no remount; `humanoidSig` = recipe minus clip). any other change ⇒ remount (§11). preset-owned clip with unit clip undefined ⇒ remount.
+- tests `test/humanoid-clip.test.js` (9): pure resolve/retarget/normalize · mount-time pose + t0 + scale strip · shared clip objects/one load/per-instance phase · LOD levels share driven bones · crossfade state machine · missing clip warn+keep · `clips` url retarget/override/bad-url · merge:false · restyle patch + release. 6 mutants killed.
+- not in v1: blend trees/layers (one clip at a time + crossfade) · events/root-motion extraction · far-LOD clip skipping/baked VAT · position/scale retarget by rig proportions · live run (stage 7).
+## 17 · Stage 7 — texture sharing across LOD levels / pieces / bases
+- problem: every glTF parse builds its OWN `Texture` per image ⇒ base + `_lod1` + `_lod2` (+ costume pieces) carrying one atlas = N Textures = N GPU uploads/memory for ONE picture.
+- fix (`client/kernel/humanoid-tex.js`, called LAST in `prepareBase`/`preparePiece`): `internTextures(scene, gltf, masks)` swaps every material texture + team-mask texture of a freshly loaded template for ONE canonical `Texture` per key. first loaded wins, duplicate (never uploaded) → GC. global registry ⇒ shared across levels, pieces AND different bases.
+- key = `image identity | sampler sig`. identity: external `uri` ⇒ resolved url (loader path + uri, dot-segments folded: `lod/../tex/a.png` == `tex/a.png`) · embedded `bufferView` / `data:` uri ⇒ content hash (64-bit non-crypto, + length) · no parser (hand-built) ⇒ raw pixel-data hash · else null ⇒ left alone. sampler sig = colourSpace, wrap, filters, flipY, mipmaps, anisotropy, channel, format, uv transform ⇒ same picture under another config stays its own Texture (never merges what samples differently).
+- refcount: 1 ref per (template, key) + 1 per (live instance, key) (`retainTextures` at build, `release()` frees; idempotent). refs 0 ⇒ `texture.dispose()` EXACTLY once, registry entry dropped. `evictHumanoidTemplates(loader, urls?)` drops cached templates + their refs (live instances keep what they sample; last holder disposes). not covered (pre-existing): template geometry/materials are not disposed on evict.
+- loader still fetches+decodes each LOD file's images (transient CPU, browser http cache); only the GPU-resident Texture is shared. no loader plugin (works with any loader incl. test mocks).
+- tests `test/humanoid-tex.test.js` (5): 3 levels + piece embedded ⇒ 3 Textures (materials+masks) · uri sharing via `../`, other url / other sampler NOT shared · refcount (instance/template/evict order, double release, reload after evict) · concurrent mounts race · identity core (pixel hash, null identity, sampler sig). 5 mutants killed.
+- measured (live, `tools/humanoid-stack.sh` + `tools/humanoid-perf.mjs 200 humanoid <clubman> team`, `lod.distances [28,34]` ⇒ levels 108/48/44, 512² × {color, normal, orm, team mask}; CDP, headless Brave/Metal):
+  | | before (cd2d751) | after |
+  |---|---|---|
+  | renderer `info.memory.textures` (baseline 15 → loaded) | 15 → 27 (+12) | 15 → 19 (+4) |
+  | unique material-referenced Textures / est. MB (RGBA8+mips, mask excl.) | 9 / 12 | 3 / 4 |
+  | all 4 images incl. mask, est. GPU upper bound | 12 Textures ≈ 16 MB | 4 ≈ 5.3 MB |
+  | draws / tris / fps (5 s, vsync-capped 60) | 414 / 1.461M / 58–60 | 414 / 1.461M / 60 |
+  | same-camera screenshot | md5 bb9a16a6… | byte-identical |
+  GPU bytes are an ESTIMATE (WebGPU exposes counts, not bytes): w×h×4×4/3 per Texture.
+- WebGL fallback ⇒ team mask **works** (not white). client renderer is `WebGPURenderer` only (`renderer.js`); with `navigator.gpu` absent it runs its WebGL2 backend, which compiles the SAME TSL node material ⇒ mask-tinted. checked live (gpu hidden via CDP `addScriptToEvaluateOnNewDocument`, `backend=WebGLBackend`): 200 units, 4 team colours rendered, red/blue/yellow tint pixels within 0.5% of WebGPU, mean abs pixel diff 0.24/255, textures 19 / 3 unique, 60 fps (proof `07a`/`07b`). no GLSL path needed/built. the only untinted case = TSL unavailable (`acquireTeamMaterial` → null, e.g. headless node) ⇒ plain (material,hex) whole-material tint, mask ignored.

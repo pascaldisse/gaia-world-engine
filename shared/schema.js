@@ -61,6 +61,16 @@ export const SCHEMA = {
       sky: { doc: 'water preset: fresnel reflection color' },
       tip: { doc: 'flame preset: tip color' },
       lines: { doc: 'hologram scanline count', range: [2, 120] },
+      gltf: {
+        doc: 'glTF/GLB mesh → world asset URL; static scene',
+        fields: {
+          src: { doc: 'relative world asset URL or absolute URL' },
+          scale: { doc: 'uniform model scale', range: [0.01, 100] },
+          rotation: { doc: 'model-local XYZ Euler radians' },
+          position: { doc: 'model-local XYZ offset' },
+          solid: { doc: 'collision participation; default false' },
+        },
+      },
       vrm: {
         doc: 'VRM avatar source: the entity IS a humanoid avatar (VRoid-compatible, VRM 0.x). May coexist with parts. All edits are pure data — every client re-derives the same look. See docs/CHARACTER-EDITOR-README.md',
         fields: {
@@ -71,6 +81,26 @@ export const SCHEMA = {
           idle: { doc: 'procedural life: { breath, sway, blink, arms } each 0..1; false = statue; omitted = defaults. Walk gait auto-engages from measured velocity; the body faces its direction of travel' },
           dance: { doc: 'beat-locked groove: { bpm, energy 0..1 } — deterministic from world time, same move on the same beat for every client' },
           animation: { doc: 'clip playback: { clip: "/assets/vrma/*.vrma", loop, speed, fade } — humanoid-retargeted (VRMC_vrm_animation); clips: Relax/Jump/Goodbye/Thinking/LookAround/Surprised. Skeleton priority: dance > clip > walk > idle; blink always runs' },
+        },
+      },
+      humanoid: {
+        doc: 'parametric humanoid kit: ONE base glTF humanoid + costume pieces + color slots + body params → N characters. preset JSON + overrides = a unit; same data = same unit on every client (seeded). Pieces rebind to the base skeleton BY BONE NAME (VRM/Mixamo/VRoid names). Geometry + (material,hex) shared across instances — RTS-safe. See docs/HUMANOID-KIT-SPEC.md; editor: H in creator mode',
+        fields: {
+          preset: { doc: 'URL of a preset JSON {base, params, costume, colors, vary, extends}; `/x` = engine asset, `x` = world asset, http(s) as-is. Unit fields override it' },
+          base: { doc: 'glTF humanoid (skinned, +Z forward, feet at y=0) — any rig whose bone names resolve (VRM/Mixamo/VRoid)' },
+          params: { doc: 'body params, 1 = neutral: height .5-1.8, build .6-1.6, torsoLength/armLength/legLength/shoulders .7-1.4, neckLength .6-1.6, headScale .7-1.5, handScale .6-1.6, footScale .7-1.4' },
+          bones: { doc: 'escape hatch: { canonicalBone: scale | [x,y,z] } multiplied on top of params (canonical = VRM humanoid names: hips, spine, leftUpperArm, …)' },
+          costume: { doc: '{ slot: pieceGlbUrl | null } — pieces are GLBs skinned to the base rest pose (rigid meshes under a bone attach to it); null clears a preset slot. slots are free strings (kit default: hair head torso legs feet back weaponR weaponL)' },
+          colors: { doc: '{ slot: "#hex" } — slot = material name (skin, hair, eyes, primary, secondary, accent, trim, metal, team, …) or glTF extras.slot; `team` is just a slot' },
+          seed: { doc: 'number|string: drives preset.vary (param jitter, palette/costume picks) for keys the unit does not set; deterministic' },
+          scale: { doc: 'uniform model scale', range: [0.01, 100] },
+          position: { doc: 'model-local XYZ offset' },
+          rotation: { doc: 'model-local XYZ Euler radians' },
+          solid: { doc: 'collision participation; default false' },
+          merge: { doc: 'default true: base + costume skinned parts sharing one material render as ONE SkinnedMesh per LOD level (≤2 draws/unit incl. shadow). false = one mesh per piece' },
+          lod: { doc: 'true | { distances:[d1,d2], bases:[url,…]?, hysteresis } — lower-detail base glTFs switched by camera distance; without bases: <base>_lod1.gltf, <base>_lod2.gltf siblings' },
+          clip: { doc: 'clip playback: string | { name, speed=1, loop=true, t0=0 } — plays an animation (base glb animations or `clips`) on the one instance mixer; change it via set mesh ⇒ 0.15s crossfade, no remount; null stops; unknown name ⇒ warn + keep previous. JS: group.userData.humanoid.setClip(name, {speed,loop,t0,fade}). See HUMANOID-KIT-SPEC §16' },
+          clips: { doc: 'URL of a glb whose animations are retargeted onto the base rig by node name / canonical bone (shared, parsed once); same-named clips override the base glb\'s' },
         },
       },
     },

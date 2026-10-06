@@ -1,0 +1,50 @@
+{
+  "name": "soldier",
+  "extends": "/assets/humanoid/presets/mannequin.json",
+  "params": {
+    "build": 1.06,
+    "shoulders": 1.08
+  },
+  "costume": {
+    "head": "/assets/humanoid/costume/head/helmet.glb",
+    "torso": "/assets/humanoid/costume/torso/armor.glb",
+    "legs": "/assets/humanoid/costume/legs/trousers.glb",
+    "feet": "/assets/humanoid/costume/feet/boots.glb",
+    "weaponR": "/assets/humanoid/costume/weapon/sword.glb",
+    "weaponL": "/assets/humanoid/costume/weapon/shield.glb"
+  },
+  "colors": {
+    "secondary": "#4a5160",
+    "accent": "#3b2a1e",
+    "team": "#c0392b"
+  },
+  "vary": {
+    "params": {
+      "height": 0.07,
+      "build": 0.1,
+      "headScale": 0.05,
+      "legLength": 0.05
+    },
+    "palettes": {
+      "skin": [
+        "#f1c7a8",
+        "#d9a784",
+        "#b5835a",
+        "#8f5f4d",
+        "#5e3c2c"
+      ]
+    },
+    "costume": {
+      "head": [
+        "/assets/humanoid/costume/head/helmet.glb",
+        "/assets/humanoid/costume/head/helmet.glb",
+        "/assets/humanoid/costume/head/cap.glb",
+        null
+      ],
+      "weaponL": [
+        "/assets/humanoid/costume/weapon/shield.glb",
+        null
+      ]
+    }
+  }
+}

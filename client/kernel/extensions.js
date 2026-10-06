@@ -32,6 +32,10 @@
 // sync/update are called by the engine's own loops. Returning nothing is legal:
 // an extension may be pure side effect.
 //
+// ctx also carries `three` (three/webgpu namespace) and `tsl` (three/tsl) — the engine's own
+// instances — so an extension served from outside the engine root can build custom GPU
+// materials/geometry without a second copy of three (bare imports don't resolve there).
+//
 // A failing extension must NOT take the engine down: the studio still opens when
 // a production is broken or absent. Failures are warned and skipped.
 
@@ -70,9 +74,19 @@ function fromQuery(key) {
 
 export function extensionList() {
   const w = typeof window !== 'undefined' ? window.__GAIA_EXTENSIONS__ : null;
-  const list = (Array.isArray(w) && w.length ? w : null) ?? fromQuery('ext') ?? DEFAULT_EXTENSIONS;
+  if (w === false) return []; // same explicit opt-out convention as __GAIA_GATE__
+  const host = Array.isArray(w) && w.length ? w : null;
+  const query = fromQuery('ext');
+  // Vite injects the world launcher's optional, comma-separated extension
+  // URLs. Host-page and explicit query choices retain precedence.
+  const configured = typeof __GAIA_EXTENSIONS__ === 'string' && __GAIA_EXTENSIONS__
+    ? __GAIA_EXTENSIONS__.split(',').map((s) => s.trim()).filter(Boolean)
+    : null;
+  const list = host ? [...host, ...(query ?? [])] : (query ?? configured ?? DEFAULT_EXTENSIONS);
   // only strings are URLs to resolve; modules and functions pass through as-is
-  return list.map((e) => (typeof e === 'string' ? resolve(e) : e));
+  // Host entries retain precedence; the URL query appends only new entries.
+  const seen = new Set();
+  return list.map((e) => (typeof e === 'string' ? resolve(e) : e)).filter((e) => !seen.has(e) && (seen.add(e), true));
 }
 
 export function gateModule() {

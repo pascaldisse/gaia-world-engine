@@ -1,0 +1,62 @@
+<!doctype html><meta charset=utf-8><title>r8 sky: three vs wgpu</title>
+<style>body{margin:0;background:#222;color:#ccc;font:12px monospace}canvas{display:block}</style>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r8 S1 repro: a real MxO sky (createMxoSky from the game, read-only copy in .scratch/ext) = MeshBasicMaterial { transparent, depthTest, depthWrite:false, fog:false, DoubleSide,
+// Normal|Additive blending, map, opacity, colour }, nested Groups (scale + mirrored scale), renderOrder -1000+k, vertex UVs outside [0,1] (RepeatWrapping), over an opaque ground + wall.
+// Result: window.__result = { done, meanAbs, pctOver8, skyRegion:{...}, pngs:{three,wgpu,diff}, adapterStats }
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+import { createMxoSky } from '/ext/client/mxo-sky.mjs';
+const q = new URLSearchParams(location.search);
+const W = Number(q.get('w') ?? 640), H = Number(q.get('h') ?? 480);
+const R = window.__result = { done: false, log: [], pngs: {} };
+const log = (...a) => { R.log.push(a.join(' ')); };
+const raf = () => new Promise(requestAnimationFrame);
+const mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.cssText = `width:${W}px;height:${H}px;position:absolute;left:-9000px`; document.body.appendChild(c); return c; };
+function snap(canvas) { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0); return x.getImageData(0, 0, W, H); }
+function png(img) { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(img, 0, 0); return c.toDataURL('image/png'); }
+function diff(a, b, y0 = 0, y1 = H) {
+  const out = new ImageData(W, H); let sum = 0, over = 0, max = 0, la = 0, lb = 0, n = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4; let m = 0;
+    for (let k = 0; k < 3; k++) { const d = Math.abs(a.data[i + k] - b.data[i + k]); if (y >= y0 && y < y1) sum += d; if (d > m) m = d; out.data[i + k] = Math.min(255, d * 4); }
+    out.data[i + 3] = 255;
+    if (y >= y0 && y < y1) { n++; if (m > 8) over++; if (m > max) max = m; la += (a.data[i] + a.data[i + 1] + a.data[i + 2]) / 3; lb += (b.data[i] + b.data[i + 1] + b.data[i + 2]) / 3; }
+  }
+  return { img: out, meanAbs: +(sum / (n * 3)).toFixed(2), pctOver8: +(100 * over / n).toFixed(1), maxDiff: max, meanLumThree: +(la / n).toFixed(1), meanLumWgpu: +(lb / n).toFixed(1) };
+}
+try {
+  const scene = new THREE.Scene();
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 1 })); ground.rotation.x = -Math.PI / 2; scene.add(ground);
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(30, 22, 4), new THREE.MeshStandardMaterial({ color: 0x806040, roughness: 1 })); wall.position.set(20, 11, -30); scene.add(wall);
+  scene.add(new THREE.HemisphereLight(new THREE.Color(0.41, 0.66, 1.0), new THREE.Color(0.13, 0.16, 0.17), 0.9));
+  scene.add(new THREE.DirectionalLight(0xffffff, 0));
+  const cam = new THREE.PerspectiveCamera(60, W / H, 0.1, Number(q.get('far') ?? 2000)); cam.position.set(0, 1.7, 0); cam.lookAt(0, 20, -50); cam.updateMatrixWorld(true);
+  const spec = await (await fetch('/ext/sky/sky.json')).json();
+  const sky = await createMxoSky({ THREE, scene, camera: cam, spec, baseUrl: new URL('/ext/sky/sky.json', location.href).href, dayOffset: Number(q.get('day') ?? 0) });
+  sky.update(0); R.skyState = { layers: sky.state.layers.map((l) => [l.id, l.mesh, l.blend, l.texture, +l.alpha.toFixed(3)]), clear: sky.state.clear };
+  // isolation knobs: ?only=<layer idx> (hide the other sky layers) &nofog=1 &bare=1 (hide ground+wall)
+  if (q.has('nofog')) scene.fog = null;
+  if (q.has('bare')) { ground.visible = false; wall.visible = false; }
+  if (q.has('only')) { const dome = sky.root.children[0]; dome.children.forEach((m, i) => { m.visible = i === Number(q.get('only')); }); sky.root.children.slice(1).forEach((m) => { m.visible = false; }); }
+  const cThree = mkCanvas(), cWgpu = mkCanvas();
+  const renderer = new THREE.WebGPURenderer({ canvas: cThree, antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1;
+  await renderer.init();
+  const backend = await createWgpuBackend({ canvas: cWgpu, wasm, renderHeight: H });
+  const adapter = createSceneAdapter(backend, { three: THREE });
+  renderer.render(scene, cam); await raf(); await raf();
+  const a = snap(cThree);
+  adapter.sync(scene, cam); backend.renderFrame(0); await raf(); await raf();
+  const b = snap(cWgpu);
+  const d = diff(a, b), dSky = diff(a, b, 0, Math.floor(H * 0.5));
+  R.pngs.three = png(a); R.pngs.wgpu = png(b); R.pngs.diff = png(d.img);
+  const { img, ...m } = d; const { img: _i, ...ms } = dSky; R.full = m; R.skyHalf = ms;
+  R.adapterStats = { unsupported: [...adapter.stats.unsupported], degraded: [...adapter.stats.degraded] };
+  R.ok = true;
+} catch (e) { log('EXC', e.stack || e); R.ok = false; }
+R.done = true;
+</script>

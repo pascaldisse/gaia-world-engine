@@ -391,6 +391,14 @@ pub struct MaterialFlags {
     pub blend: Option<BlendKind>,
     /// Base colour only: no lights, shadows, exposure (sky domes, backdrops).
     pub unlit: bool,
+    /// With `unlit`: still apply exposure + Reinhard (three `toneMapped: true` on a MeshBasicMaterial). false = authored colour as-is (three `toneMapped: false`).
+    pub unlit_tone_mapped: bool,
+    /// true = the sun shadow map is NOT sampled for this material (three `receiveShadow: false`). Per MATERIAL (the instance buffer has no spare lane); default false = receives.
+    pub no_receive_shadow: bool,
+    /// true = probe GI is NOT sampled for this material (hemisphere ambient only). three attaches GI only to Standard/Physical/Lambert *NodeMaterial* (gi-attach.js isGIEligibleMaterial); plain MeshStandardMaterial (GLTFLoader figures) never gets it.
+    pub no_gi: bool,
+    /// true = the shadow CASTER pass culls back faces (three: a FrontSide material renders `side = shadowSide ?? side` = FrontSide into the shadow map, so a single-sided surface whose front faces AWAY from the sun casts nothing). Default false = double-sided caster (old behaviour). Per MATERIAL.
+    pub shadow_cull_back: bool,
     /// None = default (opaque writes, blended does not).
     pub depth_write: Option<bool>,
     /// Lower draws first (sky = negative → everything else over it). Blended sort far→near inside a group.
@@ -509,6 +517,8 @@ pub struct MaterialDesc {
     /// Some(c) = alpha MASK with cutoff c; None = opaque.
     pub alpha_cutoff: Option<f32>,
     pub emissive: [f32; 3],
+    /// three `emissiveMap === map`: emissive x base_color_texture sample (three r180 MeshStandardNodeMaterial: emissive x emissiveMap.rgb; no vertex colour, no base_color factor). Ignored without a base texture.
+    pub emissive_from_base: bool,
 }
 
 struct GpuMesh {
@@ -533,6 +543,8 @@ struct GpuMaterial {
     bind: wgpu::BindGroup,
     /// Some = external WGSL pipeline; None = built-in PBR pipeline.
     pipeline: Option<wgpu::RenderPipeline>,
+    /// shadow caster pass culls back faces (MaterialFlags::shadow_cull_back)
+    shadow_cull_back: bool,
 }
 
 /// External material (three TSL node builder output): WGSL module + group(1)
@@ -983,6 +995,45 @@ impl RenderCore {
         self.static_gen += 1;
     }
 
+    /// `unlit` materials only: also apply exposure + Reinhard (three `toneMapped: true`). Call AFTER `set_material_flags` (which resets it).
+    pub fn set_material_unlit_tone_mapped(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.unlit_tone_mapped == on {
+            return;
+        }
+        f.unlit_tone_mapped = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+
+    /// three `receiveShadow: false` for every user of this material. Call AFTER `set_material_flags` (which resets it). Works for built-in materials only (shader materials sample no sun shadow here).
+    pub fn set_material_no_receive_shadow(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.no_receive_shadow == on {
+            return;
+        }
+        f.no_receive_shadow = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+
+    /// three has NOT attached probe GI to this material (plain non-node material): hemisphere ambient only. Call AFTER `set_material_flags` (which resets it).
+    pub fn set_material_no_gi(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.no_gi == on {
+            return;
+        }
+        f.no_gi = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+
     pub fn material_flags(&self, id: u32) -> MaterialFlags {
         self.material_flags.get(&id).copied().unwrap_or_default()
     }
@@ -1092,7 +1143,7 @@ impl RenderCore {
                 has_tex,
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
-            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, self.material_flags.get(&id).map_or(0.0, |f| (f.no_receive_shadow as u32 | (f.no_gi as u32) << 1) as f32)],
             maps0: [arr.is_some() as u32 as f32, if mm.normal_scale == 0.0 { 1.0 } else { mm.normal_scale }, tv(mm.normal).is_some() as u32 as f32, tv(mm.roughness).is_some() as u32 as f32],
             maps1: [tv(mm.metalness).is_some() as u32 as f32, tv(mm.emissive).is_some() as u32 as f32, tv(mm.ao).is_some() as u32 as f32, mm.side as f32],
         };
@@ -1133,11 +1184,23 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
+                shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
                 desc: Some(desc),
                 bind,
                 pipeline: None,
             },
         );
+    }
+
+    /// three FrontSide material -> shadow caster pass culls back faces (see `MaterialFlags::shadow_cull_back`). Independent of `set_material_flags` ordering for the GPU material, but that call resets the flag: call AFTER it.
+    pub fn set_material_shadow_cull_back(&mut self, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        f.shadow_cull_back = on;
+        self.material_flags.insert(id, f);
+        if let Some(m) = self.materials.get_mut(&id) {
+            m.shadow_cull_back = on;
+        }
+        self.static_gen += 1; // static shadow cache must re-render
     }
 
     /// Primary material path: external WGSL + layout. Validated with naga BEFORE
@@ -1247,6 +1310,7 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
+                shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
                 desc: None,
                 bind,
                 pipeline: Some(pipeline),
@@ -2154,6 +2218,7 @@ pub fn load_scene_into(
                     _ => None,
                 },
                 emissive: m.emissive,
+                emissive_from_base: false,
             },
         );
         if matches!(m.alpha, scene::AlphaMode::Blend) {

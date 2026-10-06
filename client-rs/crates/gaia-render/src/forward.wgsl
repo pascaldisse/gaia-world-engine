@@ -23,10 +23,10 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
-    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure)
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic), w bitfield: 1 = sun shadow NOT sampled (three receiveShadow:false), 2 = probe GI NOT sampled (non-node material: hemi only)
     maps0: vec4<f32>,        // x has array base, y normal scale, z has normal map, w has roughness map
     maps1: vec4<f32>,        // x has metalness map, y has emissive map, z has AO map, w side (0 double, 1 front only, 2 back only)
-    };
+};
 @group(0) @binding(0) var<uniform> frame: Frame;
 // ---- r6 probe GI (gi.rs): atlases read back from three's GI compute, sampled with the SAME math as client/kernel/gi/gi-open-nodes.js ----
 struct GiCascade { a: vec4<f32>, b: vec4<f32> };  // a = (baseCell.xyz window min cell, spacing) · b = (dims.xyz, baseIndex)
@@ -289,8 +289,11 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let side = material.maps1.w;
     if ((side > 0.5 && side < 1.5 && !front) || (side > 1.5 && front)) { discard; }
     var base = material.base_color;
+    var emis = material.emissive.rgb;
     if (material.params.w > 0.5) {
-    base = base * textureSample(base_tex, base_samp, in.uv);
+        let texel = textureSample(base_tex, base_samp, in.uv);
+        base = base * texel;
+        if (material.flags.y > 0.5) { emis = emis * texel.rgb; } // three emissiveMap: totalEmissive = emissive x emissiveMap.rgb
     }
     if (material.maps0.x > 0.5) {
     base = base * textureSample(base_array, base_samp, in.uv, i32(in.uv1.x + 0.5));
@@ -311,7 +314,12 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     if (material.flags.x > 0.5) {
-        return vec4<f32>(apply_fog(base.rgb, in.world), base.a); // unlit: authored colour as-is (backdrops, sky domes, additive cards)
+        let cu = apply_fog(base.rgb, in.world);
+        if (material.flags.z > 0.5) { // unlit but tone-mapped (three MeshBasicMaterial toneMapped:true): exposure + Reinhard, no lighting
+            let eu = cu * frame.ambient.w;
+            return vec4<f32>(eu / (vec3<f32>(1.0) + eu), base.a);
+        }
+        return vec4<f32>(cu, base.a); // unlit: authored colour as-is (backdrops, sky domes, additive cards)
     }
     var n = normalize(in.normal);
     if (!front) { n = -n; }
@@ -332,7 +340,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let rough = clamp(r0, 0.04, 1.0);
     let sun_l = -frame.sun_dir.xyz;
 var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
-* sun_shadow(in.world, frame.camera_pos.xyz, n, max(dot(n, sun_l), 0.0));
+* select(sun_shadow(in.world, frame.camera_pos.xyz, n, max(dot(n, sun_l), 0.0)), 1.0, (u32(material.flags.w + 0.5) & 1u) != 0u);
     for (var i = 0u; i < min(frame.counts.x, MAX_POINT_LIGHTS); i = i + 1u) {
         let pl = frame.points[i];
         let d = pl.position_range.xyz - in.world;
@@ -349,11 +357,11 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));
     var ao = 1.0;
     if (material.maps1.z > 0.5) { ao = textureSample(ao_tex, base_samp, in.uv).r; }
-    var em = material.emissive.rgb;
+    var em = emis;
     if (material.maps1.y > 0.5) { em = em * textureSample(emissive_tex, base_samp, in.uv).rgb; }
     // three PhysicalLightingModel.indirect: diffuseColor = albedo * (1 - metalness); hemi/ambient E/PI is pre-divided CPU-side. AO (aoMap.r) scales indirect diffuse only.
     var irr = hemi; // shader units = E / PI
-    if (gi.info.x > 0.5) {
+    if (gi.info.x > 0.5 && (u32(material.flags.w + 0.5) & 2u) == 0u) { // flags.w bit 2 = no_gi (three attaches GI to NodeMaterials only)
         let q = gi_query(in.world, n);
         let g = q.xyz / PI;
         // ambient 'replace' (gi-open-nodes.js :116-117 ambientReplaceTSL + the hemi light's own +hemi): net E = hemi + c*(gi - hemi) = mix(hemi, gi, c); 'add': hemi + gi

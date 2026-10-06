@@ -60,7 +60,7 @@ fn scene(device: &wgpu::Device, queue: &wgpu::Queue, with_plane: bool) -> Render
     core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 0.0);
     core.set_hemisphere_irradiance([0.0; 3], [0.0; 3]);
     if with_plane {
-        core.create_material(device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3] });
+        core.create_material(device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
         let s = 4.0;
         core.create_mesh(device, 1, &[-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s], &[0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.], &[0.0; 8], &[0, 2, 1, 0, 3, 2]).unwrap();
         core.create_instance(1, 1, 1, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);

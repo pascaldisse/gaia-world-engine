@@ -79,9 +79,12 @@ alphaTest: m.alphaTest ?? 0, visible: m.visible !== false,
 roughness: kind === 'lambert' ? 1 : kind === 'basic' ? 1 : (m.roughness ?? 1), metalness: kind === 'standard' || kind === 'physical' ? (m.metalness ?? 0) : 0,
 emissive: rgb(m.emissive ?? { r: 0, g: 0, b: 0 }), emissiveIntensity: m.emissiveIntensity ?? 1,
 };
-if (kind === 'basic') p.unlit = true;
+// r8: Basic = no lighting (three MeshBasic*Material). NOT for a NodeMaterial with custom *Node slots: its look comes from those nodes (TSL package path); the plain-PBR fallback of such a material stays lit (r6: flat white walls).
+if (kind === 'basic' && !(m.isNodeMaterial && hasNodes(m))) { p.unlit = true; p.toneMapped = true; /* r8 MEASURED (r8-blend.html): three r180 WebGPURenderer with renderer.toneMapping set tone-maps EVERY canvas fragment, `material.toneMapped:false` white opaque reads 188 (= Reinhard(1) sRGB) not 255 → unlit stays tone-mapped in the core */ }
 if (kind === 'physical') for (const k of ['clearcoat', 'clearcoatRoughness', 'transmission', 'ior', 'thickness', 'sheen', 'iridescence']) if (m[k]) p[k] = m[k];
 if (m.userData?.preset) p.preset = m.userData.preset;
+// r9: three's GI attach (kernel/gi/gi-attach.js isGIEligibleMaterial) only wires probe GI into Standard/Physical/Lambert *NodeMaterial*; a plain MeshStandardMaterial (GLTFLoader figure, skinned or not) is lit by the hemisphere light only → tell the core not to sample the probes for it.
+if (!(m.isMeshStandardNodeMaterial || m.isMeshPhysicalNodeMaterial || m.isMeshLambertNodeMaterial)) p.noGi = true;
 if (m.blending === 2) p.blending = 'additive';
 return p;
 }
@@ -91,7 +94,7 @@ const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = 
 export function materialSig(m, { exportNodeMaterial = null } = {}) {
   if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;
   const c = m.color, e = m.emissive;
-  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
+  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${m.toneMapped}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
 }
 const customCache = new WeakMap(); // NodeMaterial → { version, v }
 function customNode(m) { let c = customCache.get(m); if (!c || c.version !== m.version) { c = { version: m.version, v: isCustomNode(m) }; customCache.set(m, c); } return c.v; }
@@ -114,7 +117,7 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
 if (c.error) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
 return { kind: 'wgsl', package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
   }
-  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
+  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined }; // emissiveMap: === map -> emissive x base texel (r7), distinct -> own slot (r6 maps)
 }
 // a *NodeMaterial with no custom *Node slot set renders exactly like its non-node twin → plain PBR is faithful
 function hasNodes(m) {

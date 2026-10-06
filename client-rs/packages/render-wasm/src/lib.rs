@@ -283,14 +283,35 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_mesh_colors(&mut self, id: u32, rgba: &[f32]) -> Result<(), JsError> {
         self.core.set_mesh_colors(&self.device, id, rgba).map_err(err)
     }
-    /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
+        /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
     #[wasm_bindgen(js_name = setMaterialFlags)]
     pub fn set_material_flags(&mut self, id: u32, blend: u32, unlit: bool, depth_write: i32, render_order: i32, cast_shadow: i32) {
         let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), _ => None };
         self.core.set_material_blend(id, blend != 0);
-        self.core.set_material_flags(&self.device, id, MaterialFlags { blend: b, unlit, depth_write: (depth_write >= 0).then_some(depth_write != 0), render_order, cast_shadow: (cast_shadow >= 0).then_some(cast_shadow != 0) });
+        self.core.set_material_flags(&self.device, id, MaterialFlags { blend: b, unlit, depth_write: (depth_write >= 0).then_some(depth_write != 0), render_order, cast_shadow: (cast_shadow >= 0).then_some(cast_shadow != 0), ..Default::default() });
     }
-    #[wasm_bindgen(js_name = destroyTexture)]
+    /// unlit materials: apply exposure + Reinhard (three toneMapped:true). Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialUnlitToneMapped)]
+    pub fn set_material_unlit_tone_mapped(&mut self, id: u32, on: bool) {
+        self.core.set_material_unlit_tone_mapped(&self.device, id, on);
+    }
+    /// three receiveShadow:false (per material): sun shadow map not sampled. Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialNoReceiveShadow)]
+    pub fn set_material_no_receive_shadow(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_receive_shadow(&self.device, id, on);
+    }
+/// three did not attach probe GI to this (non-node) material: hemisphere ambient only. Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialNoGi)]
+    pub fn set_material_no_gi(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_gi(&self.device, id, on);
+    }
+    
+    /// three FrontSide material: shadow caster pass culls back faces (r9). Call after setMaterialFlags (which resets it).
+    #[wasm_bindgen(js_name = setMaterialShadowCullBack)]
+    pub fn set_material_shadow_cull_back(&mut self, id: u32, on: bool) {
+        self.core.set_material_shadow_cull_back(id, on);
+    }
+#[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);
     }
@@ -338,8 +359,9 @@ let core = RenderCore::new(&device, &queue, opts);
         alpha_cutoff: f32,
         emissive: &[f32],
     ) -> Result<(), JsError> {
-        if base_color.len() != 4 || emissive.len() != 3 {
-            return Err(err("createMaterial: base_color needs 4 floats, emissive 3"));
+        // emissive: 3 floats, or 4 with [3] = 1 -> emissive x base texture (three emissiveMap === map)
+        if base_color.len() != 4 || !(emissive.len() == 3 || emissive.len() == 4) {
+            return Err(err("createMaterial: base_color needs 4 floats, emissive 3 (or 4: [3]=emissive-from-base flag)"));
         }
         self.core.create_material(
             &self.device,
@@ -351,6 +373,7 @@ let core = RenderCore::new(&device, &queue, opts);
                 base_color_texture: (base_color_texture != 0).then_some(base_color_texture),
                 alpha_cutoff: (alpha_cutoff >= 0.0).then_some(alpha_cutoff),
                 emissive: [emissive[0], emissive[1], emissive[2]],
+                emissive_from_base: emissive.get(3).is_some_and(|f| *f > 0.5),
             },
         );
         Ok(())

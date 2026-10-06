@@ -63,7 +63,7 @@ fn plane_scene_at(device: &wgpu::Device, queue: &wgpu::Queue, metallic: f32, eye
     opts.render_height = 64;
     let mut core = RenderCore::new(device, queue, opts);
     core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 0.0); // sun off: ambient only
-    core.create_material(device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3] });
+    core.create_material(device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
     let s = 4.0;
     let pos = [-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s];
     let n = [0., normal_y, 0., 0., normal_y, 0., 0., normal_y, 0., 0., normal_y, 0.];
@@ -114,6 +114,23 @@ fn clear_colour_is_scene_background() {
     assert!(close(px, want, 1), "clear: got {px:?} want {want:?}");
 }
 
+/// r7: three emissiveMap === map -> totalEmissive = emissive x map.rgb (raw texel: no base_color factor, no vertex colour). Hemi zero + sun off => only the emissive term remains.
+#[test]
+fn emissive_from_base_multiplies_texel_not_flat() {
+let (device, queue) = device();
+let emis = [0.4f32, 0.2, 0.1];
+let texel = 128.0 / 255.0; // linear texture: sampled value is 128/255 = 0.502 (no sRGB decode)
+for (flag, k) in [(true, texel), (false, 1.0)] {
+let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+core.set_hemisphere_irradiance([0.0; 3], [0.0; 3]);
+core.create_texture_linear(&device, &queue, 7, 2, 2, &[128u8; 16]).unwrap();
+// base_color 0.5 factor on purpose: must NOT scale the emissive term
+core.create_material(&device, 1, MaterialDesc { base_color: [0.5, 0.5, 0.5, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: Some(7), alpha_cutoff: None, emissive: emis, emissive_from_base: flag });
+let got = centre(&shoot(&device, &queue, &mut core));
+let want = expect_rgb([emis[0] * k, emis[1] * k, emis[2] * k]);
+assert!(close(got, want, 2), "emissive_from_base={flag}: got {got:?} want {want:?}");
+}
+}
 // ---------------------------------------------------------------------------------------------------------------------------
 // r6 S3 probe GI. Synthetic atlases (res 4/4) with per-probe constant irradiance; expected values = gi-open-nodes.js math done by hand.
 const PI: f32 = std::f32::consts::PI;
@@ -196,4 +213,143 @@ fn background_color_is_tone_mapped_like_three() {
     let px = centre(&shoot(&device, &queue, &mut core));
     assert!(close(px, expect_rgb(c), 1), "bg: got {px:?} want {:?}", expect_rgb(c));
     assert!(close(px, [138, 158, 178], 3), "bg vs three-measured: {px:?}");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// r8 sky: unlit (three MeshBasic) + blend + depthWrite + order flags (Eden sky domes). Unlit ignores sun/hemi; tone flag = exposure+Reinhard.
+fn unlit_scene(device: &wgpu::Device, queue: &wgpu::Queue, base: [f32; 4], flags: MaterialFlags, tone: bool) -> RenderCore {
+    let mut core = plane_scene(device, queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+    core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 5.0); // lights on: unlit must ignore them
+    core.set_hemisphere_irradiance([3.0; 3], [3.0; 3]);
+    core.create_material(device, 1, MaterialDesc { base_color: base, metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+    if flags.blend.is_some() {
+        core.set_material_blend(1, true);
+    }
+    core.set_material_flags(device, 1, flags);
+    core.set_material_unlit_tone_mapped(device, 1, tone);
+    core
+}
+
+#[test]
+fn unlit_ignores_lights_and_honours_tone_map_flag() {
+    let (device, queue) = device();
+    let f = MaterialFlags { unlit: true, ..Default::default() };
+    let mut raw = unlit_scene(&device, &queue, [0.5, 0.25, 0.1, 1.0], f, false);
+    let got = centre(&shoot(&device, &queue, &mut raw));
+    let want = [(srgb(0.5) * 255.0).round() as u8, (srgb(0.25) * 255.0).round() as u8, (srgb(0.1) * 255.0).round() as u8];
+    assert!(close(got, want, 1), "unlit raw: got {got:?} want {want:?}");
+    let mut tm = unlit_scene(&device, &queue, [0.5, 0.25, 0.1, 1.0], f, true);
+    let got = centre(&shoot(&device, &queue, &mut tm));
+    let want = expect_rgb([0.5, 0.25, 0.1]);
+    assert!(close(got, want, 1), "unlit tone-mapped: got {got:?} want {want:?}");
+}
+
+#[test]
+fn unlit_alpha_blend_over_background_blends_after_tone_map() {
+    // core blends the tone-mapped fragment over the (tone-mapped) clear in the linear sRGB target: out = a*T(src) + (1-a)*T(bg)
+    let (device, queue) = device();
+    let t = |e: f32| e / (1.0 + e);
+    let (a, src, bg) = (0.4f32, 0.8f32, 0.3f32);
+    let f = MaterialFlags { unlit: true, blend: Some(BlendKind::Alpha), depth_write: Some(false), ..Default::default() };
+    let mut core = unlit_scene(&device, &queue, [src, src, src, a], f, true);
+    core.set_background_color([bg; 3]);
+    let got = centre(&shoot(&device, &queue, &mut core));
+    let l = a * t(src) + (1.0 - a) * t(bg);
+    let want = [(srgb(l) * 255.0).round() as u8; 3];
+    assert!(close(got, want, 2), "unlit blend: got {got:?} want {want:?}");
+}
+
+#[test]
+fn render_order_draws_lower_first() {
+    // two coplanar unlit alpha-blended quads, depth_write off: the one with the HIGHER render_order lands on top (opaque a=1 hides the other)
+    let (device, queue) = device();
+    for (ro_red, want_red) in [(5, true), (-5, false)] {
+        let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+        core.create_material(&device, 1, MaterialDesc { base_color: [1.0, 0.0, 0.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        core.create_material(&device, 2, MaterialDesc { base_color: [0.0, 0.0, 1.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        let s = 4.0;
+        let pos = [-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s];
+        let n = [0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.];
+        core.create_mesh(&device, 2, &pos, &n, &[0.0; 8], &[0, 2, 1, 0, 3, 2]).unwrap();
+        core.create_instance(2, 2, 2, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        for (id, ro) in [(1u32, ro_red), (2u32, 0)] {
+            core.set_material_blend(id, true);
+            core.set_material_flags(&device, id, MaterialFlags { unlit: true, blend: Some(BlendKind::Alpha), depth_write: Some(false), render_order: ro, ..Default::default() });
+        }
+        let got = centre(&shoot(&device, &queue, &mut core));
+        let red = got[0] > 100 && got[2] < 50;
+        assert_eq!(red, want_red, "render_order red={ro_red}: got {got:?}");
+    }
+}
+
+#[test]
+fn no_receive_shadow_flag_skips_sun_shadow_sampling() {
+    // receiver plane y=0, caster plane y=2 straight above (same footprint), sun straight down: centre is in shadow unless the receiver material opts out (three receiveShadow:false)
+    let (device, queue) = device();
+    let mut got = vec![];
+    for no_recv in [false, true] {
+        let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+        core.set_sun([0.0, -1.0, 0.0], [1.0, 1.0, 1.0], 3.0);
+        core.set_hemisphere_irradiance([0.0; 3], [0.0; 3]);
+        core.create_material(&device, 2, MaterialDesc { base_color: [0.1, 0.1, 0.1, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        let s = 1.0; // small caster: centre of the view only, camera sees past it? it is ABOVE: camera at y=6 sees the caster on top → put camera below-side instead
+        let pos = [-s, 2.0, -s, s, 2.0, -s, s, 2.0, s, -s, 2.0, s];
+        let n = [0., -1., 0., 0., -1., 0., 0., -1., 0., 0., -1., 0.];
+        core.create_mesh(&device, 2, &pos, &n, &[0.0; 8], &[0, 1, 2, 0, 2, 3]).unwrap();
+        core.create_instance(2, 2, 2, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        core.set_instance_cast_shadow(2, true);
+        core.set_instance_cast_shadow(1, false);
+        core.set_material_flags(&device, 1, MaterialFlags::default());
+        core.set_material_no_receive_shadow(&device, 1, no_recv);
+        // look from a grazing angle so the caster (y=2, |x|<1) does not hide the receiver centre: eye off to the side, low
+        core.set_camera(glam::Mat4::look_at_rh(glam::Vec3::new(5.0, 1.0, 0.0), glam::Vec3::ZERO, glam::Vec3::Y).inverse().to_cols_array(), 40f32.to_radians(), 0.1, Some(100.0));
+        got.push(centre(&shoot(&device, &queue, &mut core)));
+    }
+    eprintln!("no_receive: shadowed {:?} vs opt-out {:?}", got[0], got[1]);
+    assert!(got[0][0] < got[1][0] / 2, "shadowed {:?} vs no-receive {:?}", got[0], got[1]);
+}
+
+/// r8 S3: a SKINNED draw (identity palette) must be lit exactly like the same static quad: sun + hemisphere + emissive + GI all reach the skinned path.
+#[test]
+fn skinned_draw_is_lit_like_static_draw() {
+    let (device, queue) = device();
+    let mut px = vec![];
+    for skinned in [false, true] {
+        let mut core = plane_scene(&device, &queue, 0.0, glam::Vec3::new(0.0, 6.0, 0.01), 1.0);
+        core.set_sun([0.3, -1.0, 0.2], [1.0, 0.9, 0.8], 2.0);
+        core.set_hemisphere_irradiance([1.5, 1.8, 2.4], [0.3, 0.2, 0.1]);
+        core.create_material(&device, 1, MaterialDesc { base_color: [0.6, 0.5, 0.4, 1.0], metallic: 0.0, roughness: 0.8, base_color_texture: None, alpha_cutoff: None, emissive: [0.05, 0.02, 0.0], emissive_from_base: false });
+        if skinned {
+            core.remove_instance(1);
+            let s = 4.0;
+            let pos = [-s, 0., -s, s, 0., -s, s, 0., s, -s, 0., s];
+            let n = [0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.];
+            core.create_skin(5, 1, &glam::Mat4::IDENTITY.to_cols_array()).unwrap();
+            core.set_skin_pose(5, &glam::Mat4::IDENTITY.to_cols_array()).unwrap();
+            core.create_skinned_mesh(9, 5, &pos, &n, &[0.0; 8], &[0; 16], &[1.0, 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0.], &[0, 2, 1, 0, 3, 2]).unwrap();
+            core.create_instance(9, 9, 1, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        }
+        px.push(centre(&shoot(&device, &queue, &mut core)));
+    }
+    eprintln!("skinned parity: static {:?} skinned {:?}", px[0], px[1]);
+    assert!(close(px[0], px[1], 1), "static {:?} vs skinned {:?}", px[0], px[1]);
+}
+
+/// r9 S2: three attaches probe GI only to Standard/Physical/Lambert *NodeMaterial*; a plain MeshStandardMaterial (GLTFLoader figure) is lit by hemisphere only. no_gi material ignores the probes (hemi E=pi -> 0.5), default material samples them.
+#[test]
+fn no_gi_material_ignores_probes_and_stays_hemisphere_only() {
+    let mut got = vec![];
+    for no_gi in [false, true] {
+        let (device, queue) = device();
+        let mut core = plane_scene_at(&device, &queue, 0.0, AT + glam::Vec3::new(0.0, 6.0, 0.01), 1.0, AT);
+        core.set_hemisphere_irradiance([PI; 3], [PI; 3]);
+        let (irr, dep) = atlases(&[]);
+        core.set_gi_probes(&device, &queue, &irr, &dep, &gi_params(1.0, 0.0)).expect("set_gi_probes");
+        core.set_material_flags(&device, 1, MaterialFlags::default());
+        core.set_material_no_gi(&device, 1, no_gi);
+        got.push(centre(&shoot(&device, &queue, &mut core)));
+    }
+    eprintln!("no_gi: GI {:?} vs opt-out {:?}", got[0], got[1]);
+    assert!(close(got[0], lit(avg(&[16, 17, 32, 33]), 0.5), 1), "default material must sample GI: {:?}", got[0]);
+    assert!(close(got[1], expect_rgb([0.5; 3]), 1), "no_gi must be hemisphere only: {:?}", got[1]);
 }

@@ -20,6 +20,7 @@ export function serve({ port = Number(process.env.PORT || 5391),
     let p = null;
     if (u === '/asylum.glb') p = glb;
     else if (u.startsWith('/pkg/')) p = safe(pkg, u.slice(4));
+    else if (u.startsWith('/ext/')) p = safe(join(root, '.scratch/ext'), u.slice(4)); // r8: read-only game assets copied into .scratch (never committed)
     else if (u.startsWith('/nm/')) p = safe(nm, u.slice(3));
     else if (u.startsWith('/tsl/')) p = safe(join(root, 'scratch/tsl-games'), u.slice(4));
     else if (u.startsWith('/gi/')) p = safe(join(root, 'client/kernel/gi'), u.slice(3));

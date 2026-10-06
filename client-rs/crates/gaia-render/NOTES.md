@@ -183,3 +183,21 @@ DS behaviour for shadows (hidden parts casting?) — default hidden = no cast, o
 - forward.wgsl: `gi_query_cascade/gi_query` port of gi-open-nodes.js queryCascadeTSL:45-78 / queryCascadesCoverageTSL:95-109 (+ createOpenQueryNode ambientReplaceTSL:116). WGSL fix hit: vector `&&` illegal → `all()`.
 - Tests: `tests/lighting.rs` 7 (device = Metal). Mutation check: x-slot +1 → `gi_disabled_probe…` fails (tolerance ±1 for GI cases).
 - Proof + numbers + gaps: docs/RENDER-API.md §10 (three vs wgpu: hemi 0.0002 mean abs, GI 0.0037, 5 px >8 of 307200).
+
+## Round 7 — EMISSIVE x emissiveMap===map (lampas/r7-emissive, 2026-10-06)
+- `MaterialDesc.emissive_from_base` -> `MaterialUniform.flags.y`; forward.wgsl `emis = emissive * raw base_tex texel` (three r180 MaterialNode.js:218-229; no vertex colour / base_color factor). render-wasm `create/updateMaterial` emissive len 4 ([3]>0.5 = flag). JS: wgpu-backend matArgs flag when emissiveMap key === map key; distinct -> flat + degraded 'emissiveMap-distinct'.
+- Test `lighting.rs::emissive_from_base_multiplies_texel_not_flat` (RED without the shader line). Proof r7-emissive.html: mean abs 0.81 / 4.8 % px >8 (was 32.75 / 60.6 flat). Detail + gaps: docs/RENDER-API.md §11.
+- Overlap: lane r6-mat (uncommitted at the time) binds a full emissive_tex (maps1.y) — supersedes this flag on merge.
+
+## Round 8 — EDEN LOOK (lampas/r8-eden-look, 2026-10-06)
+- Sky box = adapter dropped transparent/opacity/blend/depthWrite/renderOrder/unlit of MeshBasic -> drawn opaque lit. Now `setMaterialFlags` + `setMaterialUnlitToneMapped` (wasm) from wgpu-backend; sky repro r8-sky.html: meanAbs 64.97 -> 8.6 (0.51 with fog off); before/after docs/render-api-r8/sky-before-after.png.
+- three r180 WebGPU tone-maps toneMapped:false too (measured r8-blend.html) -> unlit stays tone-mapped. Gap: three blends HDR-linear then tone-maps; core blends post-tonemap (a=.5 white: 165 vs 157).
+- receiveShadow:false -> `MaterialFlags.no_receive_shadow` (per material, all-users rule). Shadow geometry itself verified correct (r8-shadow.html). Skinned lighting parity test green -> character darkness not in core path (UNVERIFIED cause).
+- Overlap r6-mat: blend/depthWrite/side (see RENDER-API §12). Detail: docs/RENDER-API.md §12.
+
+## Round 9 — STREAK (lampas/r9-streak, 2026-10-06)
+- Wedge on Eden right wall = shadow cast by a SINGLE-SIDED surface whose front faces away from the sun. three r180 WebGPU shadow pass = `material.shadowSide ?? material.side` (Renderer.js:2902) = FrontSide default -> back-facing-to-sun surfaces cast NOTHING; core caster pass was cull None -> cast.
+- Ruled out (tests/streak.rs `wall_lit_uniform_with_shadows_on`: 600 m wall, 4 low suns, shadows ON == OFF per pixel, worst |diff| 0): cascade split, shadow-frustum coverage, wall self-acne.
+- Fix: `MaterialFlags.shadow_cull_back` / `set_material_shadow_cull_back` (call after set_material_flags) + back-cull caster pipelines; wasm `setMaterialShadowCullBack`; wgpu-backend pushes it for three FrontSide (Double/Back keep double-sided caster). Default false = old behaviour for non-three users.
+- Proof: cargo away/double 0 · away/FrontSide 154 · sun-facing FrontSide 0; browser tools/render-wasm/r9-streak.html (three rendered 4 frames: WebGPU shadow maps need >1 frame): single-sided away plane wall px three 113 vs wgpu 27 (before) -> 110 (after), meanAbs 6.93 -> 2.35; box-caster control three 26 == wgpu 27 (shadows still match).
+- Open: three `shadowSide` explicit overrides ignored; negative-determinant instance transforms flip winding (three flips frontFace per object; core does not); forward pass still double-sided (r6-mat `side` lane); real Eden pair NOT re-shot (UNVERIFIED that the wedge disappears there).

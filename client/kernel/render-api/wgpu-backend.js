@@ -106,7 +106,6 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
 const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owned by that material
   const texByKey = new Map();    // texture descriptor key (uuid:version, material-map) → { id, refs } — one GPU texture shared by every material using it
   const texStats = { uploads: 0, hits: 0 };
-const flagged = new Map();   // MaterialId → had non-default render flags (so an edit back to opaque clears them)
   // textures[slot] = {width,height,data,key?}. With a `key` the GPU texture is shared + refcounted and `data` (lazy getter in material-map) is only
   // read on a MISS → an idle frame / a second material on the same image does 0 pixel reads and 0 uploads.
   function acquireTexture(t) {
@@ -150,27 +149,64 @@ function releaseTexture(h) {
 if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
 else gpu.destroyTexture(h.id);
 }
-// side: three Side (FrontSide=cull back → 1, BackSide → 2, DoubleSide → 0 in the core encoding)
+// side: three Side (FrontSide=cull back -> 1, BackSide -> 2, DoubleSide -> 0 in the core encoding). Render FLAGS (blend/unlit/depthWrite/renderOrder/shadow) = r8/r9 setMatFlags below.
+// r7: emissiveMap === map (same key) -> emissive x base texel (4th emissive float = flag), emissive slot NOT bound (would multiply twice); distinct emissiveMap -> bound in its own slot (r6 maps).
 function matArgs(params, textures) {
 const [r, g, b] = colorOf(params.color);
 const e = colorOf(params.emissive, [0, 0, 0]);
 const k = params.emissiveIntensity ?? 1;
+const emBase = !!(textures?.emissiveMap?.key && textures.emissiveMap.key === textures.map?.key);
 const owned = [], ids = {};
 for (const slot of ['map', 'array', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) {
-if (!textures?.[slot]) continue;
+if (!textures?.[slot] || (slot === 'emissiveMap' && emBase)) continue;
 const h = acquireTexture(textures[slot]); owned.push(h); ids[slot] = h.id;
 }
-// additive blending (three blending=2) / transparent / opacity<1 → core blend pass (sorted far→near, no depth write like three)
-const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
 const side = params.doubleSide ? 0 : params.backSide ? 2 : 1;
-return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, ids.map ?? 0, params.alphaTest > 0 ? params.alphaTest : -1, Float32Array.of(e[0] * k, e[1] * k, e[2] * k)],
-maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessMap ?? 0, ids.emissiveMap ?? 0, ids.aoMap ?? 0, params.normalScale ?? 1, side], flags: [blend, false /* unlit NOT forwarded: three Basic walls get their look from sources not mapped yet (node/lightmap) — unlit made them flat white, measured r6 */, params.depthWrite === false ? 0 : -1, -1, -1] };
+return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, ids.map ?? 0, params.alphaTest > 0 ? params.alphaTest : -1, emBase ? Float32Array.of(e[0] * k, e[1] * k, e[2] * k, 1) : Float32Array.of(e[0] * k, e[1] * k, e[2] * k)],
+maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessMap ?? 0, ids.emissiveMap ?? 0, ids.aoMap ?? 0, params.normalScale ?? 1, side] };
 }
-function applyMat(id, m) {
-gpu.setMaterialMaps(id, ...m.maps);
-if (m.flags[0] || m.flags[1] || m.flags[2] >= 0) gpu.setMaterialFlags(id, ...m.flags); else if (m.hadFlags) gpu.setMaterialFlags(id, 0, false, -1, 0, -1);
-}
-let lightsDirty = false;
+  // r8: three material state the core takes as FLAGS (setMaterialFlags): blend (transparent / opacity<1 / additive), unlit (plain Basic), depthWrite:false, per-object renderOrder
+  // (core order is per MATERIAL: last node to set it wins — Eden sky layers have one material each), toneMapped (unlit only). No game names.
+  const matFlags = new Map(); // MaterialId → { blend, unlit, dw, toneMapped, ro, pushed }
+  function flagsFromParams(params = {}) {
+    const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
+    // r9: three r180 renders `shadowSide ?? side` into the shadow map -> a FrontSide material casts only from its front faces (core caster pass culls back faces); Double/Back keep the double-sided caster
+    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi };
+  }
+  function pushFlags(id) {
+    const f = matFlags.get(id); if (!f) return;
+    const nondefault = f.blend || f.unlit || f.dw >= 0 || f.ro || f.norecv;
+    let reset = false;
+    if (nondefault || f.pushed) {
+      gpu.setMaterialFlags(id, f.blend, f.unlit, f.dw, f.ro, -1); reset = true; // resets every core flag incl. shadow_cull_back
+      if (f.unlit) gpu.setMaterialUnlitToneMapped(id, f.toneMapped);
+      if (f.norecv) gpu.setMaterialNoReceiveShadow(id, true);
+      f.pushed = !!nondefault;
+    }
+    if (f.nogi) gpu.setMaterialNoGi?.(id, true); // r9: material not GI-eligible in three (plain non-node material) → hemisphere only. Default (eligible) materials push nothing.
+    if (reset) f.cullPushed = false;
+    if (!!f.cull !== !!f.cullPushed) { gpu.setMaterialShadowCullBack?.(id, !!f.cull); f.cullPushed = !!f.cull; } // ?. = older wasm pkg without the r9 export keeps the double-sided caster
+  }
+  function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, norecv: prev?.norecv ?? false, cullPushed: prev?.cullPushed ?? false, pushed: prev?.pushed ?? false }); pushFlags(id); }
+  // r8 receiveShadow:false → core per-MATERIAL flag: a material stops sampling the sun shadow only when EVERY instance using it has receiveShadow false (mixed = receives, the old behaviour).
+  const recvUsers = new Map(); // MaterialId → Map<NodeId, bool receive>
+  function trackReceive(node) {
+    if (node.kind !== 'instance' || !node.material) return;
+    if (node.recvMat && node.recvMat !== node.material) { recvUsers.get(node.recvMat)?.delete(node.id); refreshReceive(node.recvMat); }
+    let m = recvUsers.get(node.material); if (!m) recvUsers.set(node.material, m = new Map());
+    m.set(node.id, node.receiveShadow !== false); node.recvMat = node.material; refreshReceive(node.material);
+  }
+  function untrackReceive(node) { if (node.recvMat) { recvUsers.get(node.recvMat)?.delete(node.id); refreshReceive(node.recvMat); node.recvMat = 0; } }
+  function refreshReceive(id) {
+    const m = recvUsers.get(id); let none = !!m && m.size > 0; if (m) for (const r of m.values()) if (r) { none = false; break; }
+    let f = matFlags.get(id); if (!f) { f = { blend: 0, unlit: false, dw: -1, toneMapped: true, ro: 0, norecv: false, pushed: false }; matFlags.set(id, f); }
+    if (f.norecv === none) return; f.norecv = none; pushFlags(id);
+  }
+  function setMatOrder(id, ro) { // renderOrder is a node property; the core sorts per material
+    let f = matFlags.get(id); if (!f) { f = { blend: 0, unlit: false, dw: -1, toneMapped: true, ro: 0, norecv: false, pushed: false }; matFlags.set(id, f); }
+    if ((f.ro || 0) === (ro || 0)) return; f.ro = ro || 0; pushFlags(id);
+  }
+  let lightsDirty = false;
   let sunId = 0;
 
   const need = (map, id, what) => { const v = map.get(id); if (!v) throw new Error(`render-api(wgpu): unknown ${what} ${id}`); return v; };
@@ -292,7 +328,7 @@ threeSkipped() { return gpu.threeSkipped(); },
     createMaterial(params = {}, textures = null) {
       const ma = matArgs(params, textures); const { owned, args } = ma;
       const id = gpu.createMaterial(...args);
-      applyMat(id, ma); flagged.set(id, !!(ma.flags[0] || ma.flags[1] || ma.flags[2] >= 0));
+      gpu.setMaterialMaps(id, ...ma.maps); setMatFlags(id, params);
       if (owned.length) matTextures.set(id, owned);
       return id;
     },
@@ -300,8 +336,7 @@ threeSkipped() { return gpu.threeSkipped(); },
     updateMaterial(id, params = {}, textures = null) {
       const ma = matArgs(params, textures); const { owned, args } = ma;
       const old = matTextures.get(id) || [];
-      ma.hadFlags = flagged.get(id); flagged.set(id, !!(ma.flags[0] || ma.flags[1] || ma.flags[2] >= 0));
-      gpu.updateMaterial(id, ...args); applyMat(id, ma);
+      gpu.updateMaterial(id, ...args); gpu.setMaterialMaps(id, ...ma.maps); setMatFlags(id, params);
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
@@ -362,7 +397,7 @@ threeSkipped() { return gpu.threeSkipped(); },
     // r4: changed live uniform values [{key,value}] (tsl-export pkg.live.update()) → core reflected uniform buffer.
     setShaderUniforms(id, changed) { if (changed.length) gpu.setThreeUniforms(id, JSON.stringify(changed)); },
     destroyMaterial(id) {
-      gpu.destroyMaterial(id); flagged.delete(id);
+      gpu.destroyMaterial(id); matFlags.delete(id); recvUsers.delete(id);
       for (const h of matTextures.get(id) || []) releaseTexture(h);
       matTextures.delete(id);
 for (const s of matStorage.get(id) || []) releaseStorage(s.h);
@@ -376,8 +411,10 @@ createNode(mat4, parent = 0) {
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static, groups: flags.groups ? normalizeGroups(flags.groups) : undefined, instAttrs: flags.instAttrs ?? null };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static, groups: flags.groups ? normalizeGroups(flags.groups) : undefined, instAttrs: flags.instAttrs ?? null, renderOrder: flags.renderOrder || 0, receiveShadow: flags.receiveShadow };
       nodes.set(node.id, node); link(node, flags.parent);
+      if (node.renderOrder) setMatOrder(material, node.renderOrder);
+      trackReceive(node);
       const [pw, pv] = parentState(node); sync(node, pw, pv);
       return node.id;
     },
@@ -406,18 +443,20 @@ createNode(mat4, parent = 0) {
       if (patch.mat4) node.local = Float64Array.from(asMat(patch.mat4));
       if (patch.visible !== undefined) node.visible = !!patch.visible;
       if (patch.material !== undefined && node.kind === 'instance') node.material = patch.material;
+      if (node.kind === 'instance' && (patch.receiveShadow !== undefined || patch.material !== undefined)) { if (patch.receiveShadow !== undefined) node.receiveShadow = patch.receiveShadow; trackReceive(node); }
+      if (node.kind === 'instance' && (patch.renderOrder !== undefined || (patch.material !== undefined && node.renderOrder))) { if (patch.renderOrder !== undefined) node.renderOrder = patch.renderOrder || 0; setMatOrder(node.material, node.renderOrder); } // r8: core sorts per material
       if (node.kind === 'instance') {
       if (patch.castShadow !== undefined && patch.castShadow !== node.castShadow) { node.castShadow = !!patch.castShadow; if (node.rid) gpu.setInstanceCastShadow(node.rid, node.castShadow); }
       if (patch.groups !== undefined) { node.groups = patch.groups ? normalizeGroups(patch.groups) : { words: new Uint32Array(0) }; if (node.rid) { applyGroups(node); relinkGroupChildren(node); } }
       if (patch.static !== undefined && patch.static !== node.static) { node.static = !!patch.static; if (node.rid) gpu.setInstanceStatic(node.rid, node.static); }
       }
-      // receiveShadow/renderOrder/euler: accepted, no-ops (core receivers = all opaque; no ordering)
+      // receiveShadow/euler: accepted, no-ops (core receivers = all opaque). renderOrder (r8) → material order flag above
       const [pw, pv] = parentState(node); sync(node, pw, pv);
     },
     removeNode(id) {
       const node = need(nodes, id, 'node');
       for (const cid of [...node.children]) backend.removeNode(cid);
-      dropRids(node);
+      dropRids(node); untrackReceive(node);
       if (node.parent) nodes.get(node.parent)?.children.delete(id);
       nodes.delete(id);
     },

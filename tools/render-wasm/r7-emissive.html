@@ -1,0 +1,69 @@
+<!doctype html><meta charset=utf-8><title>r7 emissive x emissiveMap: three vs wgpu</title>
+<style>body{margin:0;background:#222;color:#ccc;font:12px monospace}canvas{display:block}</style>
+<script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// r7 proof: MeshStandardMaterial { emissive, emissiveMap === map } (the Eden GI room-floor pattern) drawn by three WebGPURenderer and by the wasm wgpu renderer, same pose.
+// Variants (one page load): same = emissiveMap===map (fixed path: emissive x texel) | before_flat = wgpu with emissiveMap dropped (== the pre-r7 flat add) vs the same three ref |
+//   distinct = emissiveMap is a DIFFERENT Texture object (identical pixels) -> not bound: flat + adapter degraded 'emissiveMap-distinct' (expected gap)
+// Result: window.__result = { done, variants:{name:{meanAbs,pctOver8,meanLumThree,meanLumWgpu}}, pngs:{<name>.three|wgpu|diff}, adapterStats }
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+const q = new URLSearchParams(location.search);
+const W = Number(q.get('w') ?? 640), H = Number(q.get('h') ?? 480);
+const R = window.__result = { done: false, log: [], variants: {}, pngs: {} };
+const log = (...a) => { R.log.push(a.join(' ')); };
+const raf = () => new Promise(requestAnimationFrame);
+const mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; c.style.cssText = `width:${W}px;height:${H}px;position:absolute;left:-9000px`; document.body.appendChild(c); return c; };
+function snap(canvas) { const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0); return x.getImageData(0, 0, W, H); }
+function png(img) { const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').putImageData(img, 0, 0); return c.toDataURL('image/png'); }
+function diff(a, b) {
+  const out = new ImageData(W, H); let sum = 0, over = 0, max = 0, sumLum = [0, 0];
+  for (let i = 0; i < a.data.length; i += 4) {
+    let m = 0;
+    for (let k = 0; k < 3; k++) { const d = Math.abs(a.data[i + k] - b.data[i + k]); sum += d; if (d > m) m = d; out.data[i + k] = Math.min(255, d * 4); }
+    out.data[i + 3] = 255; if (m > 8) over++; if (m > max) max = m;
+    sumLum[0] += (a.data[i] + a.data[i + 1] + a.data[i + 2]) / 3; sumLum[1] += (b.data[i] + b.data[i + 1] + b.data[i + 2]) / 3;
+  }
+  const n = W * H;
+  return { img: out, meanAbs: sum / (n * 3), pctOver8: (100 * over) / n, maxDiff: max, meanLumThree: sumLum[0] / n, meanLumWgpu: sumLum[1] / n };
+}
+// 4 x 4 checker of saturated colours with a symmetric-in-v layout (row parity same under a v flip: 5 rows)
+function checkerTex() {
+  const N = 5, S = 20, w = N * S, data = new Uint8Array(w * w * 4);
+  const pal = [[230, 90, 60], [60, 120, 220], [240, 200, 70], [90, 200, 120], [200, 80, 200]];
+  for (let y = 0; y < w; y++) for (let x = 0; x < w; x++) { const cx = (x / S) | 0, cy = (y / S) | 0, c = pal[(cx + cy * 2) % 5], i = (y * w + x) * 4; data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 255; }
+  const t = new THREE.DataTexture(data, w, w); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.needsUpdate = true; return t;
+}
+try {
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x202830);
+  const tex = checkerTex(), tex2 = tex.clone(); tex2.needsUpdate = true;
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.MeshStandardMaterial({ color: 0x909090, roughness: 1, metalness: 0, map: tex, emissive: new THREE.Color(0.45, 0.4, 0.35), emissiveMap: tex }));
+  floor.rotation.x = -Math.PI / 2; scene.add(floor);
+  const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xb8825a, roughness: 1, metalness: 0 })); box.position.set(2, 1, -1); scene.add(box); // control: no emissive
+  scene.add(new THREE.HemisphereLight(new THREE.Color(0.41, 0.66, 1.0), new THREE.Color(0.13, 0.16, 0.17), 0.9));
+  scene.add(new THREE.DirectionalLight(0xffffff, 0)); // sun OFF on both sides (a scene with NO directional light leaves the core's default sun on = adapter gap, not r7)
+  const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 200); cam.position.set(-6, 7, 9); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
+  const cThree = mkCanvas(), cWgpu = mkCanvas();
+  const renderer = new THREE.WebGPURenderer({ canvas: cThree, antialias: false }); renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+  renderer.toneMapping = THREE.ReinhardToneMapping; renderer.toneMappingExposure = 1;
+  await renderer.init(); R.adapter = renderer.backend?.adapter?.info ? { ...renderer.backend.adapter.info } : null;
+  const backend = await createWgpuBackend({ canvas: cWgpu, wasm, renderHeight: H });
+  const adapter = createSceneAdapter(backend, { three: THREE });
+  const shotThree = async () => { renderer.render(scene, cam); await raf(); await raf(); return snap(cThree); };
+  const shotWgpu = async () => { adapter.sync(scene, cam); backend.renderFrame(0); await raf(); await raf(); return snap(cWgpu); };
+  const finish = (name, a, b) => { const d = diff(a, b); R.pngs[name + '.three'] = png(a); R.pngs[name + '.wgpu'] = png(b); R.pngs[name + '.diff'] = png(d.img); const { img, ...m } = d; R.variants[name] = m; log(name, JSON.stringify(m)); };
+  const mat = floor.material;
+  // 1. emissiveMap === map
+  const refThree = await shotThree(); const sameWgpu = await shotWgpu(); finish('same', refThree, sameWgpu);
+  R.adapterSame = { degraded: [...adapter.stats.degraded] };
+  // 2. pre-r7 behaviour: wgpu draws emissive flat (emissiveMap removed on the wgpu side) vs the same three reference
+  mat.emissiveMap = null; mat.needsUpdate = true; const flatWgpu = await shotWgpu(); finish('before_flat', refThree, flatWgpu);
+  // 3. DISTINCT Texture object (identical pixels): not bound -> flat + degraded flag. three reference re-shot with the same material.
+  mat.emissiveMap = tex2; mat.needsUpdate = true; const dThree = await shotThree(); const dWgpu = await shotWgpu(); finish('distinct', dThree, dWgpu);
+  R.adapterStats = { unsupported: [...adapter.stats.unsupported], degraded: [...adapter.stats.degraded] };
+  R.ok = true;
+} catch (e) { log('EXC', e.stack || e); R.ok = false; }
+R.done = true;
+</script>

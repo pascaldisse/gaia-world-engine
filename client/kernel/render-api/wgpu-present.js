@@ -4,7 +4,7 @@
 import { installGpuMirror } from './gpu-mirror.js';
 import { createWgpuBackend } from './wgpu-backend.js';
 import { createSceneAdapter } from './scene-adapter.js';
-import { exportNodeMaterial } from './tsl-export.js';
+import { exportNodeMaterial, structCache } from './tsl-export.js';
 import { createGiBridge } from './gi-bridge.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, params = new URLSearchParams(location.search) }) {
@@ -20,13 +20,13 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' } } });
-  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE }, nativeInstancing: params.get('wgpuInst') !== '0' });
+  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE, cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0' });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   addEventListener('resize', size);
   const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {
-    backend, adapter, canvas, stats: st, giBridge,
+    backend, adapter, canvas, stats: st, giBridge, tslCache: structCache,
     // one frame: world matrices → adapter diff/push → core render. Replaces renderer.render(scene, camera) / post.render().
     frame() {
       const a = performance.now();

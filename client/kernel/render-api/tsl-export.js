@@ -11,8 +11,7 @@ const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture
 
 // builder → data package. `THREE` = three/webgpu namespace; `WGSLNodeBuilder` is not exported publicly, so we reach it
 // through three's own backend factory (WebGPUBackend.prototype.createNodeBuilder) without constructing a device.
-export function exportNodeMaterial(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null } = {}) {
-if (!material?.isNodeMaterial) throw new Error('exportNodeMaterial: material.isNodeMaterial required');
+function buildPackage(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null } = {}) {
 const Ctor = wgslBuilderCtor ?? headlessRenderer(THREE)._ctor;
 const r = renderer ?? headlessRenderer(THREE);
 // `object` = the real mesh (its geometry attributes decide which TSL attribute() nodes resolve); `geometry` = same without the object (InstancedMesh/Skinned: instancing is expanded by the adapter, never exported).
@@ -47,7 +46,7 @@ out.uniforms = bd.uniforms.map((u) => {
   const node = u.nodeUniform?.node, source = semantic ? { kind: 'host', semantic } : sourceOf(node, refs, lightUuids);
   // key = stable id the backend uses for set_three_uniforms (uniform node uuid; unique per package)
   const key = semantic ? null : (node?.uuid ?? `${g.index}.${i}.${u.name}`);
-  if (key) liveUniforms.push({ key, u });
+  if (key) liveUniforms.push({ key, u, node, get: () => u.getValue?.() });
   return { name: u.name, semantic, key, source, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) };
 });
 } else if (bd.texture) { out.textureUuid = bd.texture.uuid; out.colorSpace = bd.texture.colorSpace ?? null; }
@@ -72,30 +71,34 @@ Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: 
 const attributeSources = {};
 for (const a of b.getAttributesArray()) if (a.node?.attribute) attributeSources[`node:${a.node.uuid}`] = a.node.attribute;
 Object.defineProperty(pkg, 'attributeSources', { value: attributeSources, enumerable: false });
-// (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over builder.updateNodes — reference(), uniform
+defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes: [...b.updateNodes], updateBeforeNodes: [...b.updateBeforeNodes], live: liveUniforms });
+Object.defineProperty(pkg, 'tpl', { enumerable: false, value: { updateNodes: [...b.updateNodes], updateBeforeNodes: [...b.updateBeforeNodes], liveUniforms } });
+return pkg;
+}
+// (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
+function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null }) {
 const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r;
-const last = new Map(liveUniforms.map(({ key, u }) => [key, toPlain(u.getValue?.())])); // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
+const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial.has(key) ? initial.get(key) : toPlain(get())])); // initial = the package's own shipped values (rebound builder-singleton uniforms carry a stale value until the first update) // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
-  keys: liveUniforms.map((x) => x.key),
-  get version() { return version; },
-  update({ object = obj, camera = cam, scene = sc, time } = {}) {
-    frame.update(); if (time != null) frame.time = time;
-    frame.renderId++; frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
-    for (const n of b.updateBeforeNodes) frame.updateBeforeNode(n);
-    for (const n of b.updateNodes) frame.updateNode(n);
-    const changed = [];
-    for (const { key, u } of liveUniforms) {
-      const raw = u.getValue?.();
-      if (sameValue(raw, last.get(key))) continue;
-      const v = toPlain(raw); last.set(key, v); changed.push({ key, value: v });
-    }
-    if (changed.length) version++;
-    return changed;
-  },
+keys: liveUniforms.map((x) => x.key),
+get version() { return version; },
+update({ object = obj, camera = cam, scene = sc, time } = {}) {
+frame.update(); if (time != null) frame.time = time;
+frame.renderId++; frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
+for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
+for (const n of updateNodes) frame.updateNode(n);
+const changed = [];
+for (const { key, get } of liveUniforms) {
+const raw = get();
+if (sameValue(raw, last.get(key))) continue;
+const v = toPlain(raw); last.set(key, v); changed.push({ key, value: v });
+}
+if (changed.length) version++;
+return changed;
+},
 } });
-return pkg;
 }
 
 // r6: where a TSL vertex attribute's data comes from. geometry = geometry.getAttribute(name); node = a BufferAttributeNode's own attribute (instanced → per-instance row).
@@ -159,4 +162,131 @@ function builtinSemantics(THREE) {
   for (const n of ['modelWorldMatrix', 'modelNormalMatrix', 'modelWorldMatrixInverse', 'modelPosition', 'modelScale', 'modelViewPosition', 'modelDirection',
     'cameraNear', 'cameraFar', 'time', 'deltaTime', 'frameId']) put(T[n], n);
   return m;
+}
+// ===== r10-3 STRUCTURAL EXPORT CACHE =====
+// Same node graph (types + connections + constants + function identity + non-value props) => identical WGSL. A key hit skips three's node
+// builder (~175 ms) and REBINDS the cached package: uniform key/value, texture, storage buffer, own live closure per material.
+// Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
+// cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+export const structCache = { map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map() };
+const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
+const fnIds = new WeakMap(); let fnN = 0;
+const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };
+const SKIP_PROPS = new Set(['uuid', 'id', 'name', 'version', 'userData', 'needsUpdate']);
+const primSig = (o, skipValue) => { let s = ''; for (const k of Object.keys(o)) { if (k[0] === '_' || SKIP_PROPS.has(k) || (skipValue && k === 'value')) continue; const v = o[k]; const t = typeof v; if (t === 'boolean' || t === 'string') s += `${k}=${v};`; else if (t === 'number') s += `${k}=${v};`; else if (t === 'function') s += `${k}=f${fnId(v)};`; else if (v === null) s += `${k}=null;`; } return s; };
+// walk the material's node graph: ordered unique nodes + key. Slot nodes (uniform/texture/buffer) contribute type only, never value/uuid.
+function structWalk(THREE, material, { object = null, geometry = null, scene = null } = {}) {
+const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
+const parts = [], nodes = [], ids = new Map();
+// material level
+for (const k of Object.keys(material)) { const v = material[k]; if (v && v.isTexture) return { refuse: 'material-texture-slot:' + k }; }
+parts.push(`M:${material.type}:${material.constructor?.name}:${primSig(material, false).replace(/(opacity|roughness|metalness|ior|thickness|clearcoat\w*|sheen\w*|iridescence\w*|emissiveIntensity|envMapIntensity|reflectivity|specularIntensity|dispersion|anisotropy\w*|attenuationDistance|lightMapIntensity|aoMapIntensity|bumpScale|displacementScale|displacementBias|shininess|linewidth|size|dashSize|gapSize|scale|polygonOffsetFactor|polygonOffsetUnits|alphaTest|blendAlpha|stencilRef|depthFunc)=[^;]*;/g, (m, k2) => (k2 === 'alphaTest' ? `alphaTest=${material.alphaTest > 0 ? 1 : 0};` : ''))}`);
+const g = object?.geometry ?? geometry; const o = object;
+parts.push(`O:${o ? (o.isInstancedMesh ? 'I' : '') + (o.isSkinnedMesh ? 'S' : '') + (o.isBatchedMesh ? 'B' : '') + (o.isPoints ? 'P' : '') + (o.isLine ? 'L' : '') + (o.isSprite ? 'Q' : '') : 'M'}`);
+if (g?.attributes) for (const n of Object.keys(g.attributes).sort()) { const a = g.attributes[n]; parts.push(`a:${n}:${a.itemSize}:${a.isInstancedBufferAttribute ? 1 : 0}${a.normalized ? 'n' : ''}`); }
+parts.push(`ix:${g?.index ? 1 : 0}:mo:${g?.morphAttributes ? Object.keys(g.morphAttributes).length : 0}`);
+const L = []; scene?.traverse?.((x) => { if (x.isLight && (x.isDirectionalLight || x.isPointLight || x.isAmbientLight || x.isHemisphereLight)) L.push(x.type + (x.castShadow ? 's' : '')); }); parts.push('L:' + L.join(','));
+const slot = (n) => n.isUniformNode || n.isTextureNode || n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode;
+const visit = (n) => {
+const seen = ids.get(n.uuid); if (seen !== undefined) { parts.push('#' + seen); return; }
+ids.set(n.uuid, nodes.length); nodes.push(n);
+let s = `(${n.constructor?.name}:${n.type ?? ''}:${n.nodeType ?? ''}:${n.updateType ?? ''}${n.updateBeforeType ?? ''}${n.updateAfterType ?? ''}:`;
+if (n.isTextureNode) { const t = n.value; s += `T${t?.constructor?.name}:${t?.format}:${t?.type}:${t?.colorSpace}:${+!!t?.isDepthTexture}:${+!!t?.isArrayTexture}:${+!!t?.isCubeTexture}:${t?.image?.depth ?? ''}`; }
+else if (n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode) { const a = n.value; s += `B${a?.constructor?.name}:${a?.itemSize}:${a?.array?.constructor?.name}:${a?.count ?? ''}`; }
+s += primSig(n, !!slot(n));
+parts.push(s);
+if (!n.isUniformNode) for (const { property, index, childNode } of NU.getNodeChildren(n)) { parts.push(`.${property}${index ?? ''}`); visit(childNode); }
+parts.push(')');
+};
+for (const { property, index, childNode } of NU.getNodeChildren(material)) { parts.push(`.${property}${index ?? ''}`); visit(childNode); }
+return { key: parts.join(''), nodes };
+}
+export function exportNodeMaterial(material, opts = {}) {
+if (!material?.isNodeMaterial) throw new Error('exportNodeMaterial: material.isNodeMaterial required');
+const mode = opts.cache ?? 'on';
+if (mode === 'off') return buildPackage(material, opts);
+const THREE = opts.THREE, C = structCache; let t0 = nowMs(), w;
+try { w = structWalk(THREE, material, opts); } catch (e) { w = { refuse: 'walk-error:' + (e?.message ?? e) }; }
+C.keyMs += nowMs() - t0;
+if (w.refuse) { C.uncacheable++; why('uncacheable:' + w.refuse.split(':')[0], w.refuse); return buildPackage(material, opts); }
+const tpl = C.map.get(w.key);
+if (tpl?.unproven?.size && !tpl.noRebind) { t0 = nowMs(); const pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.misses++; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const u of [...tpl.unproven]) { if (have.has(u)) { SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
+if (tpl && tpl.nodes.length === w.nodes.length && !tpl.noRebind) {
+t0 = nowMs(); let pkg = null;
+try { pkg = rebind(tpl, w, material, opts); } catch (e) { C.rebindFail++; why('rebindFail', String(e?.message ?? e)); }
+C.rebindMs += nowMs() - t0;
+if (pkg) {
+if (mode !== 'verify') { C.hits++; return pkg; }
+const full = buildPackage(material, opts); C.verified++;
+const diff = comparePackages(pkg, full, tpl.pkg);
+if (diff) { C.mismatch++; why('MISMATCH', `${material.name || material.type}: ${diff}`); return full; }
+C.hits++; return full;
+}
+}
+t0 = nowMs(); const pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.misses++;
+if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } C.wgslOf.set(w.key, k); }
+if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } C.map.set(w.key, t); }
+return pkg;
+}
+const strHash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
+// template validation + slot index: every non-shared binding must resolve to a walked node (else rebind would alias M0's data into M1 = wrong pixels).
+function templateBinds(t) {
+const { pkg, nodes } = t; const idx = new Map(nodes.map((n, i) => [n.uuid, i]));
+const lightKeys = new Set(); for (const n of pkg.tpl.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightKeys.add(v.uuid);
+t.texNode = new Map(); for (const n of nodes) if (n.isTextureNode && n.value?.uuid) t.texNode.set(n.value.uuid, n);
+t.bufNode = new Map(); for (const n of nodes) if (n.value?.isBufferAttribute) t.bufNode.set(n.value, n);
+t.uniNode = new Map(); for (const { key, node } of pkg.tpl.liveUniforms) if (node) t.uniNode.set(key, node);
+for (const g of pkg.bindGroups) for (const b of g.bindings) {
+if (b.textureUuid && !t.texNode.has(b.textureUuid)) return `texture-unmapped:${b.name}`;
+if (b.kind === 'storage-buffer') { const a = pkg.bufferSources[`${g.group}.${b.binding}`]; if (!t.bufNode.has(a)) return `buffer-unmapped:${b.name}`; }
+}
+if (Object.keys(pkg.attributeSources).length) return 'node-attributes';
+for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
+return null;
+}
+const SHARED_OK = new Set(); // reserved: process-wide singleton uniform nodes proven shared
+function rebind(t, w, material, opts) {
+const { THREE } = opts, T = t.pkg, map = new Map();
+for (let i = 0; i < t.nodes.length; i++) { const a = t.nodes[i], b = w.nodes[i]; if (a.uuid !== b.uuid) { if (a.constructor !== b.constructor || (a.type ?? null) !== (b.type ?? null)) throw new Error('slot type mismatch at ' + i); map.set(a.uuid, b); } }
+const m = (n) => { const x = map.get(n.uuid); if (x) return x; const o = t.refOwner?.get(n.uuid); if (o) { const ox = map.get(o.owner.uuid); if (ox) { if (ox[o.prop] == null) { if (o.prop === '_matrixUniform' && ox.isTextureNode && ox.value?.matrix) ox._matrixUniform = (THREE.TSL ?? THREE).uniform(ox.value.matrix); else throw new Error('owned node not materialised: ' + o.prop); } return ox[o.prop]; } } return n; };
+const r = opts.renderer ?? headlessRenderer(THREE);
+const obj = opts.object ?? new THREE.Mesh(opts.geometry ?? new THREE.BoxGeometry(1, 1, 1), material);
+obj.updateMatrixWorld?.();
+const cam = opts.camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000), sc = opts.scene ?? new THREE.Scene();
+const textureSources = {}, bufferSources = {};
+const texUuid = (u) => { const n = t.texNode.get(u), n1 = map.get(n.uuid) ?? n; const tx = n1.value; textureSources[tx.uuid] = tx; return tx.uuid; };
+const groups = T.bindGroups.map((g) => ({ group: g.group, name: g.name, bindings: g.bindings.map((b) => {
+const o = { ...b };
+if (b.uniforms) o.uniforms = b.uniforms.map((u) => {
+const n0 = t.uniNode.get(u.key); const n1 = n0 && m(n0);
+if (!n0 || n1 === n0) return { ...u };
+const src = u.source?.kind === 'uniform' ? { ...u.source, uuid: n1.uuid, name: n1.name || null } : u.source;
+return { ...u, key: n1.uuid, source: src, value: toPlain(n1.value) };
+});
+else if (b.textureUuid) o.textureUuid = texUuid(b.textureUuid);
+else if (b.kind === 'storage-buffer') { const a0 = T.bufferSources[`${g.group}.${b.binding}`]; const n0b = t.bufNode.get(a0), n1 = map.get(n0b.uuid) ?? n0b; bufferSources[`${g.group}.${b.binding}`] = n1.value; }
+return o;
+}) }));
+const pkg = { vertex: T.vertex, fragment: T.fragment, bindGroups: groups, attributes: T.attributes, varyings: T.varyings, vertexEntry: 'main', fragmentEntry: 'main',
+material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite } };
+Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
+Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: false });
+Object.defineProperty(pkg, 'attributeSources', { value: {}, enumerable: false });
+const live = T.tpl.liveUniforms.map(({ key, node, get }) => { const n1 = node && m(node); return !node || n1 === node ? { key, get } : { key: n1.uuid, get: () => n1.value }; });
+const upd = T.tpl.updateNodes.map(m), updB = T.tpl.updateBeforeNodes.map(m);
+const initial = new Map(); for (const g of groups) for (const b of g.bindings) for (const u of b.uniforms ?? []) if (u.key) initial.set(u.key, u.value);
+defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes: upd, updateBeforeNodes: updB, live, initial });
+Object.defineProperty(pkg, 'tpl', { enumerable: false, value: { updateNodes: upd, updateBeforeNodes: updB, liveUniforms: live } });
+return pkg;
+}
+// rebound vs fully built: identical WGSL + identical JSON except material meta; same texture/buffer sources; same uniform key sets. null = equal.
+function comparePackages(a, b, tplPkg) {
+if (a.vertex !== b.vertex || a.fragment !== b.fragment) return 'WGSL differs (struct key collision)';
+const ja = JSON.parse(JSON.stringify(a)), jb = JSON.parse(JSON.stringify(b)); delete ja.material.name; delete jb.material.name;
+const sa = JSON.stringify(ja), sb = JSON.stringify(jb);
+if (sa !== sb) { let i = 0; while (sa[i] === sb[i]) i++; return `JSON differs @${i}: rebound ${sa.slice(Math.max(0, i - 60), i + 80)} <> built ${sb.slice(Math.max(0, i - 60), i + 80)}`; }
+for (const k of ['textureSources', 'bufferSources']) { const ka = Object.keys(a[k]), kb = Object.keys(b[k]); if (ka.join() !== kb.join()) return `${k} keys differ`; for (const x of ka) if (a[k][x] !== b[k][x]) return `${k}[${x}] object differs`; }
+if (a.live.keys.join() !== b.live.keys.join()) return 'live keys differ';
+return null;
 }

@@ -74,6 +74,19 @@ function computeNormals(positions, indices) {
   return n;
 }
 
+// three Texture → {width,height,data:Uint8Array rgba8} (DataTexture rgba8 as-is; image/canvas/bitmap via 2D canvas). null = unreadable.
+export function texturePixels(t) {
+  const img = t?.image;
+  if (!img) return null;
+  if (img.data && img.width > 0 && img.height > 0) {
+    const d = img.data instanceof Uint8Array || img.data instanceof Uint8ClampedArray ? img.data : null;
+    return d && d.length === img.width * img.height * 4 ? { width: img.width, height: img.height, data: new Uint8Array(d.buffer, d.byteOffset, d.length) } : null;
+  }
+  const w = img.width ?? img.videoWidth, h = img.height ?? img.videoHeight;
+  if (!(w > 0 && h > 0) || typeof OffscreenCanvas === 'undefined') return null;
+  const c = new OffscreenCanvas(w, h).getContext('2d'); c.drawImage(img, 0, 0);
+  return { width: w, height: h, data: new Uint8Array(c.getImageData(0, 0, w, h).data.buffer) };
+}
 export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl' } = {}) {
   if (!canvas) throw new Error('createWgpuBackend requires { canvas }');
   if (!wasm?.GaiaRender) throw new Error('createWgpuBackend requires { wasm } = the render_wasm.js module');
@@ -169,6 +182,23 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
       if (owned.length) matTextures.set(id, owned);
       return id;
     },
+    // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the
+    // package's non-enumerable textureSources (uuid → three Texture); a texture binding without readable pixels = loud Error.
+    createShaderMaterial(pkg) {
+      if (!pkg?.vertex || !pkg?.fragment || !Array.isArray(pkg.bindGroups)) throw new Error('createShaderMaterial: tsl-export package required');
+      const names = [], ids = [], owned = [];
+      for (const g of pkg.bindGroups) for (const b of g.bindings) {
+        if (!String(b.kind).startsWith('texture')) continue;
+        const t = pkg.textureSources?.[b.textureUuid];
+        const px = t && texturePixels(t);
+        if (!px) throw new Error(`createShaderMaterial: texture binding '${b.name}' (uuid ${b.textureUuid}) has no readable pixels`);
+        const id = gpu.createTexture(px.width, px.height, px.data); owned.push(id); names.push(b.name); ids.push(id);
+      }
+      const id = gpu.createThreeMaterial(JSON.stringify(pkg), names, Uint32Array.from(ids));
+      if (owned.length) matTextures.set(id, owned);
+      return id;
+    },
+    setShaderTime(seconds) { gpu.setThreeTime(seconds); },
     destroyMaterial(id) {
       gpu.destroyMaterial(id);
       for (const t of matTextures.get(id) || []) gpu.destroyTexture(t);

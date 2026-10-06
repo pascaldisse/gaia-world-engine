@@ -35,7 +35,7 @@ out.uniforms = bd.uniforms.map((u) => ({ name: u.name, semantic: semantics.get(u
 return out;
 }),
 }));
-return {
+const pkg = {
 vertex: b.vertexShader, fragment: b.fragmentShader,
 bindGroups: groups,
 attributes: b.getAttributesArray().map((a, i) => ({ name: a.name, type: a.type, location: i })),
@@ -43,6 +43,11 @@ varyings: (b.varyings ?? []).map((v) => ({ name: v.name, type: v.type })),
 vertexEntry: 'main', fragmentEntry: 'main',
 material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite },
 };
+// live three Texture per textureUuid, NON-enumerable → JSON stays as-is; backends read pixels from it (wgpu-backend createShaderMaterial).
+const textureSources = {};
+for (const g of b.getBindings()) for (const bd of g.bindings) if (bd.texture) textureSources[bd.texture.uuid] = bd.texture;
+Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
+return pkg;
 }
 
 function toPlain(v) {

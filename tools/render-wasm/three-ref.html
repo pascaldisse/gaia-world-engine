@@ -1,0 +1,18 @@
+<!doctype html><meta charset=utf-8><title>three r180 WebGPU reference strip</title>
+<style>body{margin:0;background:#000}canvas{display:block;float:left}</style><script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// ground truth for three.html: same materials/cube/camera through three's own WebGPURenderer. bun run.mjs --page three-ref.html --w 1024 --h 256
+import * as THREE from 'three/webgpu';
+import { NAMES, CLEAR, SIZE, buildMaterial, makeScene } from '/three-materials.js';
+const R = window.__result = { done: false, log: [] };
+for (const name of NAMES) {
+  try {
+    const r = new THREE.WebGPURenderer({ antialias: false }); r.setPixelRatio(1); r.setSize(SIZE, SIZE); await r.init(); document.body.appendChild(r.domElement);
+    r.setClearColor(new THREE.Color().setRGB(...CLEAR, THREE.LinearSRGBColorSpace), 1);
+    const { scene, cam } = makeScene(THREE, await buildMaterial(name, THREE));
+    for (let i = 0; i < 3; i++) await r.renderAsync(scene, cam);
+    R.log.push(name + ' ok backend=' + (r.backend.isWebGPUBackend ? 'webgpu' : 'webgl'));
+  } catch (e) { R.log.push(name + ' EXC ' + (e.stack || e)); }
+}
+R.ok = true; R.done = true;
+</script>

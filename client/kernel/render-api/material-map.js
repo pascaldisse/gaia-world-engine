@@ -57,4 +57,7 @@ function hasNodes(m) {
 for (const k in m) if (k.endsWith('Node') && m[k]) return true;
 return false;
 }
-const isCustomNode = (m) => hasNodes(m) || (m.constructor?.name && m.type && m.constructor.name !== m.type) || typeof m.setupDiffuseColor === 'function' && m.setupDiffuseColor !== Object.getPrototypeOf(Object.getPrototypeOf(m))?.setupDiffuseColor;
+// only Mesh*NodeMaterial have a plain-PBR twin the backend draws faithfully; Sprite/Points/Line*NodeMaterial carry their own
+// vertex stage (billboard, point size, line width) → always the shader package (Round 3b: SpriteNodeMaterial drew as a PBR cube).
+const PBR_TWIN = /^Mesh(Basic|Standard|Physical|Lambert|Phong|Toon|Matcap|Normal)NodeMaterial$/;
+const isCustomNode = (m) => !PBR_TWIN.test(m.type ?? '') || hasNodes(m) || (m.constructor?.name && m.type && m.constructor.name !== m.type) || typeof m.setupDiffuseColor === 'function' && m.setupDiffuseColor !== Object.getPrototypeOf(Object.getPrototypeOf(m))?.setupDiffuseColor;

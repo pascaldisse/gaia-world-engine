@@ -285,6 +285,23 @@ impl GaiaRender {
             .map_err(err)?;
         Ok(id)
     }
+    /// three r180 TSL package (tsl-export.js JSON, as-is) → material id. `texture_names[i]` = WGSL binding var
+    /// name (package `bindGroups[].bindings[].name`), `texture_ids[i]` = id from createTexture. gaia-render NOTES 'Round 3'.
+    #[wasm_bindgen(js_name = createThreeMaterial)]
+    pub fn create_three_material(&mut self, package_json: String, texture_names: Array, texture_ids: &[u32]) -> Result<u32, JsError> {
+        if texture_names.length() as usize != texture_ids.len() {
+            return Err(err("createThreeMaterial: texture_names/texture_ids length mismatch"));
+        }
+        let tex: HashMap<String, u32> = texture_names.iter().zip(texture_ids).map(|(n, &i)| (n.as_string().unwrap_or_default(), i)).collect();
+        let id = self.id("material");
+        self.core.create_three_material(&self.device, id, &package_json, tex).map_err(err)?;
+        Ok(id)
+    }
+    /// seconds fed to three `time` semantic uniforms.
+    #[wasm_bindgen(js_name = setThreeTime)]
+    pub fn set_three_time(&mut self, seconds: f32) {
+        self.core.set_three_time(seconds);
+    }
     #[wasm_bindgen(js_name = destroyMaterial)]
     pub fn destroy_material(&mut self, id: u32) {
         self.core.remove_material(id);

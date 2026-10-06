@@ -13,7 +13,8 @@ fn external_wgsl_material_renders_and_bad_wgsl_is_err() {
     let (device, queue) = device();
     let mut core = RenderCore::new(&device, &queue, RenderOptions::default());
     let mut ubo = Vec::new();
-    for f in [1.0f32, 0.2, 0.2, 1.0, 0.0, 0.5, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0] {
+    // Material = base_color, params, emissive, flags (r4: flags.x unlit; 0 = lit)
+    for f in [1.0f32, 0.2, 0.2, 1.0, 0.0, 0.5, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] {
         ubo.extend_from_slice(&f.to_le_bytes());
     }
     let desc = ShaderMaterialDesc {
@@ -47,7 +48,7 @@ fn external_wgsl_material_renders_and_bad_wgsl_is_err() {
     let mut enc = device.create_command_encoder(&Default::default());
     core.render(&device, &queue, &mut enc, &view, UpscaleSize { width: 64, height: 64 });
     queue.submit(Some(enc.finish()));
-    assert!(pollster::block_on(scope.pop()).is_none(), "validation error");
+    let e = pollster::block_on(scope.pop()); assert!(e.is_none(), "validation error: {e:?}");
     let bad = ShaderMaterialDesc { wgsl: "fn broken( {".into(), ..desc };
     assert!(core.create_shader_material(&device, 8, &bad).is_err());
 }

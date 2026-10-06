@@ -41,6 +41,8 @@ pub struct Material {
     pub emissive: [f32; 3],
     /// Baked light from `material.extras.lightmap` (scene-export): image index, texCoord, fac.
     pub lightmap: Option<Lightmap>,
+    /// Engine render flags from `material.extras.gaia` (scene-export `materialFlags`).
+    pub flags: crate::MaterialFlags,
 }
 
 /// DS1 baked lightmap, applied as the DS client does (nari-world-companion
@@ -156,6 +158,7 @@ impl SceneData {
                 },
                 emissive: material.emissive_factor(),
                 lightmap: parse_lightmap(&doc, material.extras()),
+                flags: parse_flags(material.extras()),
             });
         }
         // glTF default material for primitives without one.
@@ -168,6 +171,7 @@ impl SceneData {
             alpha: AlphaMode::Opaque,
             emissive: [0.0; 3],
             lightmap: None,
+            flags: Default::default(),
         });
         let scene = doc
             .default_scene()
@@ -357,6 +361,24 @@ fn to_rgba8(image: &gltf::image::Data) -> Result<Rgba8Image, LoadError> {
         height: image.height,
         pixels,
     })
+}
+
+/// `extras.gaia = {blend:"alpha"|"additive"|"subtractive", unlit, depthWrite, renderOrder, castShadow}`.
+fn parse_flags(extras: &gltf::json::Extras) -> crate::MaterialFlags {
+    let mut f = crate::MaterialFlags::default();
+    let Some(v) = extras.as_ref().and_then(|r| serde_json::from_str::<serde_json::Value>(r.get()).ok()) else { return f };
+    let Some(g) = v.get("gaia") else { return f };
+    f.blend = match g.get("blend").and_then(|b| b.as_str()) {
+        Some("additive") => Some(crate::BlendKind::Additive),
+        Some("subtractive") => Some(crate::BlendKind::Subtractive),
+        Some("alpha") => Some(crate::BlendKind::Alpha),
+        _ => None,
+    };
+    f.unlit = g.get("unlit").and_then(|b| b.as_bool()).unwrap_or(false);
+    f.depth_write = g.get("depthWrite").and_then(|b| b.as_bool());
+    f.render_order = g.get("renderOrder").and_then(|b| b.as_i64()).unwrap_or(0) as i32;
+    f.cast_shadow = g.get("castShadow").and_then(|b| b.as_bool());
+    f
 }
 
 /// `extras.lightmap = {texture, texCoord, fac, blend:"overlay"}` → Lightmap (image index).

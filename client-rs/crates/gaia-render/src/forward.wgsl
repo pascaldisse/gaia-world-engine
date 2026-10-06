@@ -17,6 +17,7 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure)
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<uniform> material: Material;
@@ -142,6 +143,9 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     }
     if (material.params.z >= 0.0 && base.a < material.params.z) {
         discard;
+    }
+    if (material.flags.x > 0.5) {
+        return base; // unlit: authored colour as-is (backdrops, sky domes, additive cards)
     }
     var n = normalize(in.normal);
     if (!front) { n = -n; }

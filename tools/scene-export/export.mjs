@@ -6,7 +6,8 @@
 //     include?: { roots?: [node names], },            // scene-root node names to keep (default: all)
 //     exclude?: { skinned?: true, nodes?: [regex], materials?: [regex] },
 //     keepTexCoord1?: true,                           // keep TEXCOORD_1 (lightmap UV) when present
-//     sun?: { direction:[x,y,z] | rotationDeg:[pitch,yaw], color:[r,g,b], intensity },
+//     materialFlags?: [{ name?: regex, extras?: {key: regex}, set: {blend:'alpha'|'additive'|'subtractive', unlit, depthWrite, renderOrder, castShadow} }],
+//     sun?: { direction:[x,y,z] (travel, glTF basis) | rotationDeg:[pitch,yaw] (+pitch = from above) + basisFlip?:[1,1,-1], color:[r,g,b], intensity },
 //     pointLights?: [{ name, position:[x,y,z], color:[r,g,b], intensity, range }],
 //     camera?: { name, position:[x,y,z], yawDeg, pitchDeg, fovYDeg, near, far },
 //     skinned?: { nodes?: regex (skinned node names, default '^skinned:'), clip?: regex (animation name; default = first clip
@@ -102,6 +103,16 @@ export function exportScene(manifest, baseDir = '.') {
     texMap.set(ti, outTextures.length - 1); return outTextures.length - 1;
   };
   const remapTexInfo = (ti) => ti ? { ...ti, index: mapTexture(ti.index) } : ti;
+  // manifest.materialFlags: [{ name?: regex, extras?: {key: regex} , set: {blend, unlit, depthWrite, renderOrder, castShadow} }]
+  // → material.extras.gaia (engine render flags). Rules apply in order, later keys win. Game knowledge lives in the manifest only.
+  const flagRules = (manifest.materialFlags ?? []).map(r => ({ name: r.name && new RegExp(r.name), extras: Object.entries(r.extras ?? {}).map(([k, v]) => [k, new RegExp(v)]), set: r.set }));
+  const materialFlagsFor = (m) => { let out = null;
+    for (const r of flagRules) {
+      if (r.name && !r.name.test(m.name ?? '')) continue;
+      if (!r.extras.every(([k, re]) => m.extras?.[k] !== undefined && re.test(String(m.extras[k])))) continue;
+      out = { ...(out ?? {}), ...r.set };
+    }
+    return out; };
   const matMap = new Map();
   const mapMaterial = (mi) => {
     if (mi === undefined) return undefined;
@@ -111,6 +122,7 @@ export function exportScene(manifest, baseDir = '.') {
     for (const k of ['normalTexture', 'occlusionTexture', 'emissiveTexture']) if (m[k]) m[k] = remapTexInfo(m[k]);
     if (m.extensions) { delete m.extensions.MSFT_texture_dds; if (!Object.keys(m.extensions).length) delete m.extensions; }
     const lm = m.extras?.lightmap; if (lm && lm.texture !== undefined) lm.texture = mapTexture(lm.texture);
+    const fl = materialFlagsFor(m); if (fl) { (m.extras ??= {}).gaia = fl; stats.flaggedMaterials = (stats.flaggedMaterials ?? 0) + 1; }
     outMaterials.push(m); matMap.set(mi, outMaterials.length - 1); return outMaterials.length - 1;
   };
 
@@ -205,7 +217,11 @@ Object.assign(stats, { skins: outSkins.length, joints: outSkins.reduce((a, s) =>
   const extUsed = [];
   if (manifest.sun) {
     const s = manifest.sun; let dir = s.direction;
-    if (!dir && s.rotationDeg) { const [p, y] = s.rotationDeg.map(d => d * Math.PI / 180); dir = [Math.sin(y) * Math.cos(p) * -1, -Math.sin(p), -Math.cos(y) * Math.cos(p)]; }
+    if (!dir && s.rotationDeg) { // [pitch,yaw] deg → light TRAVEL dir = Ry(yaw)·Rx(pitch)·(0,0,1) in the SOURCE basis, then × s.basisFlip (default [1,1,-1]: source +Z → glTF -Z)
+      const [p, y] = s.rotationDeg.map(d => d * Math.PI / 180), f = s.basisFlip ?? [1, 1, -1];
+      dir = [Math.sin(y) * Math.cos(p) * f[0], -Math.sin(p) * f[1], Math.cos(y) * Math.cos(p) * f[2]];
+    }
+    if (dir[1] > 0) (stats.warnings ??= []).push(`sun '${s.name ?? 'sun'}' travels UP (dir.y=${(dir[1] / Math.hypot(...dir)).toFixed(3)}) → lights only undersides; check the source row`);
     lights.push({ type: 'directional', name: s.name ?? 'sun', color: s.color ?? [1, 1, 1], intensity: s.intensity ?? 3 });
     outNodes.push({ name: s.name ?? 'sun', rotation: quatFromDir(dir), extensions: { KHR_lights_punctual: { light: lights.length - 1 } } }); roots.push(outNodes.length - 1);
   }

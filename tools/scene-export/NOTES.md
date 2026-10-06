@@ -26,3 +26,7 @@ camera = glb extras.playerStarts[1] (+1.7 m eye), lights from lighting.json (tor
 - Water prims, alpha modes copied as-is from source; DS mtd shader parity not attempted (source says: only g_Diffuse→baseColor).
 - Interior `objects` (doors, props) included as static at their authored pose; dynamic collision not exported.
 - Sparse accessors unsupported (error). KTX2 not produced (PNG only).
+
+## Skinned characters (lampas/r3-skin, 10-06)
+Manifest `skinned: { nodes: regex (default '^skinned:'), clip?: regex, maxCharacters? }` → skins + joint hierarchy (ancestors kept) + ONE merged animation `skinned-characters` (first clip `<characterId>/…` touching the skin's joints). JOINTS_0 u16, WEIGHTS_0 f32. selfCheck allows skins/animations only when `skinned` is set; it does NOT check node cycles.
+Asylum: `.scratch/asylum-skinned.manifest.json` = scene-export lane's manifest + `skinned.nodes '^skinned:[co]\d{4}_'` → 88 skins / 3302 joints / 82 clips / 9604 channels, 121 MB, 8.5 s. Player parts (`skinned:player*`) excluded (all 36 class bodies sit at the start).

@@ -136,16 +136,18 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const matFlags = new Map(); // MaterialId → { blend, unlit, dw, toneMapped, ro, pushed }
   function flagsFromParams(params = {}) {
     const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
-    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, toneMapped: params.toneMapped !== false };
+    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, toneMapped: params.toneMapped !== false, nogi: !!params.noGi };
   }
   function pushFlags(id) {
     const f = matFlags.get(id); if (!f) return;
     const nondefault = f.blend || f.unlit || f.dw >= 0 || f.ro || f.norecv;
-    if (!nondefault && !f.pushed) return;
-    gpu.setMaterialFlags(id, f.blend, f.unlit, f.dw, f.ro, -1);
-    if (f.unlit) gpu.setMaterialUnlitToneMapped(id, f.toneMapped);
-    if (f.norecv) gpu.setMaterialNoReceiveShadow(id, true);
-    f.pushed = !!nondefault;
+    if (nondefault || f.pushed) { // setMaterialFlags RESETS the per-material opt-outs below, so they are re-applied after it
+      gpu.setMaterialFlags(id, f.blend, f.unlit, f.dw, f.ro, -1);
+      if (f.unlit) gpu.setMaterialUnlitToneMapped(id, f.toneMapped);
+      if (f.norecv) gpu.setMaterialNoReceiveShadow(id, true);
+      f.pushed = !!nondefault;
+    }
+    if (f.nogi) gpu.setMaterialNoGi?.(id, true); // r9: material not GI-eligible in three (plain non-node material) → hemisphere only. Default (eligible) materials push nothing.
   }
   function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, norecv: prev?.norecv ?? false, pushed: prev?.pushed ?? false }); pushFlags(id); }
   // r8 receiveShadow:false → core per-MATERIAL flag: a material stops sampling the sun shadow only when EVERY instance using it has receiveShadow false (mixed = receives, the old behaviour).

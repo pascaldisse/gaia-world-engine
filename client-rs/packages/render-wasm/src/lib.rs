@@ -272,7 +272,12 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_material_no_receive_shadow(&mut self, id: u32, on: bool) {
         self.core.set_material_no_receive_shadow(&self.device, id, on);
     }
-#[wasm_bindgen(js_name = destroyTexture)]
+/// three did not attach probe GI to this (non-node) material: hemisphere ambient only. Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialNoGi)]
+    pub fn set_material_no_gi(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_gi(&self.device, id, on);
+    }
+    #[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);
     }

@@ -334,3 +334,22 @@ fn skinned_draw_is_lit_like_static_draw() {
     eprintln!("skinned parity: static {:?} skinned {:?}", px[0], px[1]);
     assert!(close(px[0], px[1], 1), "static {:?} vs skinned {:?}", px[0], px[1]);
 }
+
+/// r9 S2: three attaches probe GI only to Standard/Physical/Lambert *NodeMaterial*; a plain MeshStandardMaterial (GLTFLoader figure) is lit by hemisphere only. no_gi material ignores the probes (hemi E=pi -> 0.5), default material samples them.
+#[test]
+fn no_gi_material_ignores_probes_and_stays_hemisphere_only() {
+    let mut got = vec![];
+    for no_gi in [false, true] {
+        let (device, queue) = device();
+        let mut core = plane_scene_at(&device, &queue, 0.0, AT + glam::Vec3::new(0.0, 6.0, 0.01), 1.0, AT);
+        core.set_hemisphere_irradiance([PI; 3], [PI; 3]);
+        let (irr, dep) = atlases(&[]);
+        core.set_gi_probes(&device, &queue, &irr, &dep, &gi_params(1.0, 0.0)).expect("set_gi_probes");
+        core.set_material_flags(&device, 1, MaterialFlags::default());
+        core.set_material_no_gi(&device, 1, no_gi);
+        got.push(centre(&shoot(&device, &queue, &mut core)));
+    }
+    eprintln!("no_gi: GI {:?} vs opt-out {:?}", got[0], got[1]);
+    assert!(close(got[0], lit(avg(&[16, 17, 32, 33]), 0.5), 1), "default material must sample GI: {:?}", got[0]);
+    assert!(close(got[1], expect_rgb([0.5; 3]), 1), "no_gi must be hemisphere only: {:?}", got[1]);
+}

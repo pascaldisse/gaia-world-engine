@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
 import { createSceneAdapter } from '../client/kernel/render-api/scene-adapter.js';
 import { materialToParams, materialSig } from '../client/kernel/render-api/material-map.js';
+import { isGIEligibleMaterial } from '../client/kernel/gi/gi-attach.js';
 import { createWgpuBackend } from '../client/kernel/render-api/wgpu-backend.js';
 
 async function fakeWgpu() {
   const calls = []; let id = 0;
   const rec = (n) => (...a) => { calls.push([n, ...a]); return ++id; };
   const gpu = new Proxy({ hasTimestamps: () => false, createMaterial: rec('createMaterial'), updateMaterial: rec('updateMaterial'), destroyMaterial: rec('destroyMaterial'), createMesh: rec('createMesh'),
-    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
+    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoGi: rec('setMaterialNoGi'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
     { get: (t, k) => (k === 'then' ? undefined : t[k] ?? (() => 0)) });
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -63,5 +64,43 @@ test('wgpu-backend: receiveShadow:false on EVERY user of a material → setMater
     if (mixed) assert.notEqual(last?.[0], 'setMaterialNoReceiveShadow', 'a receiving user wins (old behaviour)');
     else assert.deepEqual([last[0], last[2]], ['setMaterialNoReceiveShadow', true]);
     if (!mixed) { b.receiveShadow = true; ad.sync(scene); assert.notEqual(calls.at(-1)[0], 'setMaterialNoReceiveShadow'); } // flip one user back → flags re-pushed without the opt-out
+  }
+});
+
+test('r9: noGi mirrors three gi-attach eligibility exactly (plain material = hemi only; Standard/Physical/Lambert NodeMaterial = GI receiver)', () => {
+  for (const M of ['MeshStandardMaterial', 'MeshPhysicalMaterial', 'MeshLambertMaterial', 'MeshBasicMaterial', 'MeshStandardNodeMaterial', 'MeshPhysicalNodeMaterial', 'MeshLambertNodeMaterial', 'MeshBasicNodeMaterial']) {
+    const m = new THREE[M]();
+    assert.equal(!!materialToParams(m).params.noGi, !isGIEligibleMaterial(m), M);
+  }
+});
+
+function skinnedRig(mat) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), 3));
+  g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 4));
+  g.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 4));
+  const b0 = new THREE.Bone(), m = new THREE.SkinnedMesh(g, mat); m.add(b0);
+  const scene = new THREE.Scene(); scene.add(m); scene.updateMatrixWorld(true); m.bind(new THREE.Skeleton([b0]));
+  return scene;
+}
+
+test('r9: SkinnedMesh + static mesh with a plain MeshStandardMaterial (Eden figure) → setMaterialNoGi(id,true); NodeMaterial figure → none; stays set after a flags push', async () => {
+  for (const [Mat, expectNoGi] of [[THREE.MeshStandardMaterial, true], [THREE.MeshStandardNodeMaterial, false]]) {
+    for (const skinned of [true, false]) {
+      const { calls, backend } = await fakeWgpu();
+      const mat = new Mat({ roughness: 0.9, metalness: 0 });
+      const scene = skinned ? skinnedRig(mat) : (() => { const s = new THREE.Scene(); s.add(new THREE.Mesh(tri(), mat)); return s; })();
+      const ad = createSceneAdapter(backend, { three: THREE }); ad.sync(scene);
+      const gi = calls.filter((c) => c[0] === 'setMaterialNoGi');
+      assert.equal(gi.length > 0, expectNoGi, `${Mat.name} skinned=${skinned}`);
+      if (expectNoGi) {
+        const last = calls.filter((c) => c[0] === 'setMaterialNoGi' || c[0] === 'setMaterialFlags').at(-1);
+        assert.deepEqual([last[0], last[2]], ['setMaterialNoGi', true]);
+        mat.transparent = true; mat.opacity = 0.5; mat.needsUpdate = true; ad.sync(scene); // blend flag push resets the core opt-out → must be re-applied after it
+        const after = calls.filter((c) => c[0] === 'setMaterialNoGi' || c[0] === 'setMaterialFlags').at(-1);
+        assert.equal(after[0], 'setMaterialNoGi');
+      }
+    }
   }
 });

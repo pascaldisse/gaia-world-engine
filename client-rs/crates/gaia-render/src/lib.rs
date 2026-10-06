@@ -2,6 +2,7 @@
 //! Device/Queue + an output view; this crate renders a glTF scene at an internal
 //! resolution (`render_height`) and scales to the output through an `Upscaler`.
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
+pub mod groups;
 pub mod scene;
 pub mod shadow;
 mod three_material;
@@ -11,6 +12,7 @@ pub mod skin;
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
+pub use groups::{GroupMask, InstanceGroups};
 pub use scene::{CameraData, SceneData};
 pub use shadow::{ShadowOptions, ShadowStats};
 use wgpu::util::DeviceExt;
@@ -54,6 +56,9 @@ pub struct RenderOptions {
     pub fit_height_bias: f32,
     /// Sun cascaded shadow maps (see `shadow.rs`). Point-light shadows: not implemented.
     pub shadows: ShadowOptions,
+    /// Visibility-group culling also removes hidden instances from the shadow maps (true = what you can't see casts nothing).
+    /// false = hidden instances still cast. Whether the source game does either is UNVERIFIED (see NOTES round 6).
+    pub groups_cull_shadows: bool,
 }
 
 impl Default for RenderOptions {
@@ -74,6 +79,7 @@ impl Default for RenderOptions {
             fit_eye_back: 0.6,
             fit_height_bias: 0.5,
             shadows: ShadowOptions::default(),
+            groups_cull_shadows: true,
         }
     }
 }
@@ -573,6 +579,12 @@ pub struct RenderCore {
     three_time: f32,
     /// GPU skinning (src/skin.rs): skinned meshes + joint palettes, one compute pass/frame.
     skin: skin::SkinSystem,
+    /// Per-instance visibility groups (only instances that were given groups/parent are present).
+    groups: HashMap<u32, InstanceGroups>,
+    /// Host-set active group set; None = group culling off (everything drawn).
+    active_groups: Option<GroupMask>,
+    /// Instances excluded from the last rebuild by group culling.
+    pub last_group_hidden: u32,
 }
 
 impl RenderCore {
@@ -721,6 +733,9 @@ impl RenderCore {
             timing,
             three: Default::default(),
             three_time: 0.0,
+            groups: HashMap::new(),
+            active_groups: None,
+            last_group_hidden: 0,
         }
     }
 
@@ -1179,7 +1194,54 @@ impl RenderCore {
         if self.instances.remove(&id).is_some_and(|i| i.is_static) {
             self.static_gen += 1;
         }
+        if self.groups.remove(&id).is_some() && self.active_groups.is_some() {
+            self.static_gen += 1;
+        }
         self.instances_dirty = true;
+    }
+
+    // ---- visibility groups (generic draw-group culling; see groups.rs) ----
+    /// Instance group mask as u32 words (word w bit b = group 32w+b; any length, 128+ ok). Empty = no groups = always drawn.
+    pub fn set_instance_groups(&mut self, id: u32, words: &[u32]) {
+        let g = self.groups.entry(id).or_default();
+        g.mask = GroupMask::from_words(words);
+        self.groups_changed();
+    }
+    /// Instance follows `parent` instance's effective mask instead of its own (None = detach). Chain + cycle guarded.
+    pub fn set_instance_group_parent(&mut self, id: u32, parent: Option<u32>) {
+        self.groups.entry(id).or_default().parent = parent;
+        self.groups_changed();
+    }
+    /// ACTIVE group set (the host unions whatever it likes into `words`). An instance with groups is drawn iff its mask ∩ active ≠ ∅;
+    /// instances without groups are always drawn. Applies to the main passes AND the shadow maps (`RenderOptions.groups_cull_shadows`).
+    pub fn set_active_groups(&mut self, words: &[u32]) {
+        let m = GroupMask::from_words(words);
+        if self.active_groups.as_ref() != Some(&m) {
+            self.active_groups = Some(m);
+            self.groups_changed();
+        }
+    }
+    /// Union of several sets, then `set_active_groups` (convenience for hosts holding one set per source).
+    pub fn set_active_groups_union(&mut self, sets: &[&[u32]]) {
+        let masks: Vec<GroupMask> = sets.iter().map(|s| GroupMask::from_words(s)).collect();
+        let u = GroupMask::union(masks.iter());
+        self.set_active_groups(&u.0);
+    }
+    /// Group culling OFF (default): everything drawn.
+    pub fn clear_active_groups(&mut self) {
+        if self.active_groups.take().is_some() {
+            self.groups_changed();
+        }
+    }
+    pub fn active_groups(&self) -> Option<&GroupMask> {
+        self.active_groups.as_ref()
+    }
+    fn groups_changed(&mut self) {
+        self.instances_dirty = true;
+        self.static_gen += 1;
+    }
+    fn instance_group_visible(&self, id: u32) -> bool {
+        groups::is_drawn(&self.groups, id, self.active_groups.as_ref())
     }
 
     pub fn instance_count(&self) -> usize {
@@ -1247,8 +1309,18 @@ impl RenderCore {
     }
 
     fn rebuild_instances(&mut self, device: &wgpu::Device) {
-        let mut list: Vec<&Instance> = self.instances.values().collect();
-        list.sort_by_key(|i| (i.mesh, i.material));
+        let mut ids: Vec<(&u32, &Instance)> = self.instances.iter().collect();
+        // group culling: hidden instances leave the sorted list (main passes) — and, if `groups_cull_shadows`, the casters too
+        let hidden: std::collections::HashSet<u32> = if self.active_groups.is_some() {
+            ids.iter().filter(|(id, _)| !self.instance_group_visible(**id)).map(|(id, _)| **id).collect()
+        } else {
+            Default::default()
+        };
+        self.last_group_hidden = hidden.len() as u32;
+        let cull_shadows = self.opts.groups_cull_shadows;
+        ids.sort_by_key(|(_, i)| (i.mesh, i.material));
+        let all: Vec<(u32, &Instance)> = ids.iter().map(|(id, i)| (**id, *i)).collect();
+        let list: Vec<&Instance> = all.iter().filter(|(id, _)| !hidden.contains(id)).map(|(_, i)| *i).collect();
         let mut data: Vec<[f32; 16]> = Vec::with_capacity(list.len());
         self.batches.clear();
         for (n, inst) in list.iter().enumerate() {
@@ -1261,10 +1333,10 @@ impl RenderCore {
         }
         self.instance_transforms = data.clone();
         // world-space AABBs for shadow caster culling (same order as `data`)
-        let casters: Vec<shadow::Caster> = list
+        let casters: Vec<shadow::Caster> = all
             .iter()
-            .filter(|inst| inst.cast_shadow)
-            .map(|inst| {
+            .filter(|(id, inst)| inst.cast_shadow && (!cull_shadows || !hidden.contains(id)))
+            .map(|(_, inst)| {
                 let (lo, hi) = self
                     .meshes
                     .get(&inst.mesh)
@@ -1395,7 +1467,7 @@ impl RenderCore {
         let three_list: Vec<(u32, u32, [f32; 16])> = if self.three.mats.is_empty() {
             Vec::new()
         } else {
-            let mut v: Vec<_> = self.instances.iter().filter(|(_, i)| self.three.is_three(i.material)).map(|(k, i)| (*k, i.material, i.transform)).collect();
+            let mut v: Vec<_> = self.instances.iter().filter(|(k, i)| self.three.is_three(i.material) && self.instance_group_visible(**k)).map(|(k, i)| (*k, i.material, i.transform)).collect();
             v.sort_by_key(|x| x.0);
             v
         };
@@ -1787,6 +1859,10 @@ pub fn load_scene_into(
         }
         core.create_instance(i as u32, i as u32, d.material as u32, identity);
         core.set_instance_static(i as u32, true); // glb nodes are baked: never move
+        if scene.node_groups.contains_key(&d.node) {
+            // groups resolved through the node's parent chain here (a parent node may have no draw of its own)
+            core.set_instance_groups(i as u32, &GroupMask::from_bits(&scene.effective_node_groups(d.node)).0);
+        }
         let diag = v.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), x| {
             (lo.min(Vec3::from_array(x.position)), hi.max(Vec3::from_array(x.position)))
         });

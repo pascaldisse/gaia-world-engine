@@ -21,6 +21,8 @@ pub struct Draw {
     pub first_index: u32,
     pub index_count: u32,
     pub material: usize,
+    /// glTF node this primitive came from (key into `SceneData::node_groups`).
+    pub node: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,6 +119,36 @@ pub struct SceneData {
     pub notes: Vec<String>,
     /// Skinned nodes (NOT baked into `draws`) + skins + clip; None = file has no skins.
     pub skins: Option<crate::skin::SkinScene>,
+    /// Visibility groups per glTF node (`node.extras.gaia.visibilityGroups`), nodes WITHOUT geometry included
+    /// (a parent / a collision-like node can carry groups without being drawn). See `groups.rs`.
+    pub node_groups: std::collections::HashMap<usize, NodeGroups>,
+}
+
+/// `extras.gaia.visibilityGroups = {draw:[bit..], display?:[bit..], parentNode?:<node index>}` (scene-export).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NodeGroups {
+    /// Group bit indices this node is drawn for (empty = unconstrained).
+    pub draw: Vec<u32>,
+    /// Group bit indices this node ACTIVATES (host-side input for the active set; the renderer never reads it).
+    pub display: Vec<u32>,
+    /// Node whose effective groups this node follows (replaces its own `draw`).
+    pub parent_node: Option<usize>,
+}
+
+impl SceneData {
+    /// Effective draw-group bits of a node after following `parent_node` links (cycle/dangling → empty = unconstrained).
+    pub fn effective_node_groups(&self, node: usize) -> Vec<u32> {
+        let mut cur = node;
+        for _ in 0..crate::groups::MAX_PARENT_DEPTH {
+            let Some(g) = self.node_groups.get(&cur) else { return Vec::new() };
+            match g.parent_node {
+                Some(p) if self.node_groups.contains_key(&p) => cur = p,
+                Some(_) => return Vec::new(),
+                None => return g.draw.clone(),
+            }
+        }
+        Vec::new()
+    }
 }
 
 pub type LoadError = String;
@@ -239,6 +271,9 @@ fn visit(
     blend_prims: &mut usize,
 ) -> Result<(), LoadError> {
     let world = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+    if let Some(g) = parse_node_groups(node.extras()) {
+        out.node_groups.insert(node.index(), g);
+    }
     if let Some(camera) = node.camera()
         && out.camera.is_none()
     {
@@ -343,6 +378,7 @@ fn visit(
                 first_index,
                 index_count: out.indices.len() as u32 - first_index,
                 material,
+                node: node.index(),
             });
         }
     }
@@ -421,4 +457,12 @@ fn parse_ambient(doc: &gltf::Document) -> Option<Hemisphere> {
         Some(Vec3::new(c.first()?.as_f64()? as f32, c.get(1)?.as_f64()? as f32, c.get(2)?.as_f64()? as f32))
     };
     Some(Hemisphere { sky: rgb("sky")?, ground: rgb("ground")? })
+}
+
+/// `node.extras.gaia.visibilityGroups` → NodeGroups. Bits are u32 indices; junk entries are skipped.
+fn parse_node_groups(extras: &gltf::json::Extras) -> Option<NodeGroups> {
+    let v: serde_json::Value = serde_json::from_str(extras.as_ref()?.get()).ok()?;
+    let g = v.get("gaia")?.get("visibilityGroups")?;
+    let bits = |k: &str| -> Vec<u32> { g.get(k).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|x| x as u32)).collect()).unwrap_or_default() };
+    Some(NodeGroups { draw: bits("draw"), display: bits("display"), parent_node: g.get("parentNode").and_then(|p| p.as_u64()).map(|p| p as usize) })
 }

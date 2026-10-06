@@ -2,7 +2,7 @@
 //! env: GAIA_GLB, GAIA_CAMERA=x,y,z,yaw,pitch (deg; default = glb camera), GAIA_SHADOWS=0|1,
 //! GAIA_SHADOW_CACHE=0|1, GAIA_SHADOW_DYNAMIC_PCT (0..100 of instances forced dynamic),
 //! GAIA_SUN=dx,dy,dz[,intensity], GAIA_SUN_SWEEP=deg/frame (moves the sun every frame),
-//! GAIA_SKIN_CAST=0 (skinned instances do not cast), GAIA_ANIM_TIME=<s> (re-pose clip), GAIA_CAM_LOOK=ex,ey,ez,tx,ty,tz, GAIA_FRAMES (60), GAIA_OUT (ppm path), GAIA_HEIGHT (720), GAIA_RES, GAIA_CASCADES, GAIA_MAXDIST.
+//! GAIA_ACTIVE_GROUPS=b,b,.. (visibility-group culling; `none` = empty set), GAIA_SKIN_CAST=0 (skinned instances do not cast), GAIA_ANIM_TIME=<s> (re-pose clip), GAIA_CAM_LOOK=ex,ey,ez,tx,ty,tz, GAIA_FRAMES (60), GAIA_OUT (ppm path), GAIA_HEIGHT (720), GAIA_RES, GAIA_CASCADES, GAIA_MAXDIST.
 use gaia_render::*;
 use glam::{Mat4, Vec3};
 
@@ -39,6 +39,12 @@ fn main() {
     eprintln!("bounds {:?} .. {:?} sun {:?} camera {:?} draws {}", scene.bounds_min, scene.bounds_max, scene.sun, scene.camera.map(|c| c.world.w_axis), scene.draws.len());
     let mut core = RenderCore::new(&device, &queue, RenderOptions { render_height: hh, shadows: so, exposure: env("GAIA_EXPOSURE", 1.0), ..Default::default() });
     load_scene_into(&mut core, &device, &queue, &scene).expect("scene");
+    // GAIA_ACTIVE_GROUPS=50,51 : ACTIVE visibility-group bit indices (union); `none` = empty set (hides every grouped instance); unset = culling off
+    if let Ok(v) = std::env::var("GAIA_ACTIVE_GROUPS") {
+        let bits: Vec<u32> = if v.trim() == "none" { vec![] } else { v.split(',').map(|x| x.trim().parse().expect("GAIA_ACTIVE_GROUPS")).collect() };
+        core.set_active_groups(&GroupMask::from_bits(&bits).0);
+        eprintln!("active groups {bits:?} (grouped draws: {})", scene.draws.iter().filter(|d| scene.node_groups.get(&d.node).is_some_and(|g| !scene.effective_node_groups(d.node).is_empty() || g.parent_node.is_some())).count());
+    }
     // GAIA_HIDE_DRAWS=lo-hi : remove static draw instances lo..=hi (pick by bisection: which draw covers a pixel)
     if let Ok(r) = std::env::var("GAIA_HIDE_DRAWS") {
         let (lo, hi) = r.split_once('-').map(|(a, b)| (a.parse::<u32>().unwrap(), b.parse::<u32>().unwrap())).expect("lo-hi");
@@ -115,8 +121,8 @@ if let Some(c) = floats("GAIA_CAMERA") {
         if f == frames - 1 { last_stats = core.shadow_stats().clone(); }
     }
     let med = |v: &mut Vec<f64>| { v.sort_by(|a, b| a.total_cmp(b)); if v.is_empty() { f64::NAN } else { v[v.len() / 2] } };
-    println!("RESULT shadows={} cache={} dyn%={} sweep={} frames={} total_ms_med={:.3} shadow_ms_med={:.3} cpu_encode_ms_med={:.3} main_draws={}",
-        core.shadow_options().enabled, core.shadow_options().cache, pct, sweep, frames, med(&mut tot), med(&mut sh), med(&mut cpu), core.last_draw_calls);
+    println!("RESULT shadows={} cache={} dyn%={} sweep={} frames={} total_ms_med={:.3} shadow_ms_med={:.3} cpu_encode_ms_med={:.3} main_draws={} group_hidden={}",
+        core.shadow_options().enabled, core.shadow_options().cache, pct, sweep, frames, med(&mut tot), med(&mut sh), med(&mut cpu), core.last_draw_calls, core.last_group_hidden);
     let s = &last_stats;
     println!("STATS(last frame) splits={:?} static_rerendered={:?} static_draws={:?} dynamic_draws={:?} static_inst={:?} dyn_inst={:?} copies={} passes={} total_shadow_draws={} cull_ms={:.3}",
         &s.split_distances[..s.cascades.max(1)], &s.static_rerendered[..s.cascades.max(1)], &s.static_draws[..s.cascades.max(1)], &s.dynamic_draws[..s.cascades.max(1)], &s.static_instances[..s.cascades.max(1)], &s.dynamic_instances[..s.cascades.max(1)], s.copies, s.passes, s.total_draws, s.cpu_cull_ms);

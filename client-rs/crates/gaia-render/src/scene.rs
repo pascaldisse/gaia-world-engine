@@ -103,6 +103,8 @@ pub struct SceneData {
     pub bounds_max: Vec3,
     /// Contract deviations accepted while loading (u16 indices, no camera, ...).
     pub notes: Vec<String>,
+    /// Skinned nodes (NOT baked into `draws`) + skins + clip; None = file has no skins.
+    pub skins: Option<crate::skin::SkinScene>,
 }
 
 pub type LoadError = String;
@@ -184,6 +186,7 @@ impl SceneData {
                 &mut blend_prims,
             )?;
         }
+        out.skins = crate::skin::SkinScene::from_document(doc, buffers, &mut out.notes);
         if u16_prims > 0 {
             out.notes
                 .push(format!("{u16_prims} primitive(s) had non-u32 indices (widened)"));
@@ -256,7 +259,7 @@ fn visit(
             }
         }
     }
-    if let Some(mesh) = node.mesh() {
+    if let Some(mesh) = node.mesh().filter(|_| node.skin().is_none()) {
         let normal_matrix = Mat3::from_mat4(world).inverse().transpose();
         for prim in mesh.primitives() {
             if prim.mode() != gltf::mesh::Mode::Triangles {

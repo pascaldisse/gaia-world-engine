@@ -567,6 +567,8 @@ struct Renderer {
     pixel_order: PixelOrder,
     capture_sender: mpsc::Sender<CaptureReady>,
     core: Option<gaia_render::RenderCore>,
+    /// Skinned characters + clip (glTF skins/animations); GAIA_ANIM_TIME=<s> freezes the clip time.
+    skin_anim: Option<(gaia_render::skin::SkinScene, Instant, Option<f32>)>,
     frame_index: u64,
     timing_every: u32,
     cpu_encode_ms: f64,
@@ -762,6 +764,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
         };
+        let mut skin_anim = None;
         let core = match glb {
             Some((data, render_height, upscaler)) => {
                 let mut core = gaia_render::RenderCore::new(
@@ -774,6 +777,25 @@ impl Renderer {
                     },
                 );
                 gaia_render::load_scene_into(&mut core, &device, &queue, data)?;
+                for n in &data.notes {
+                    eprintln!("[gaia-render] note: {n}");
+                }
+                let fixed = std::env::var("GAIA_ANIM_TIME").ok().and_then(|v| v.parse::<f32>().ok());
+                skin_anim = data.skins.clone().map(|s| (s, Instant::now(), fixed));
+                // GAIA_CAM_LOOK=ex,ey,ez,tx,ty,tz overrides the file camera (proof shots).
+                if let Ok(v) = std::env::var("GAIA_CAM_LOOK") {
+                    let f: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if f.len() != 6 {
+                        return Err(format!("GAIA_CAM_LOOK wants 6 floats, got {v:?}"));
+                    }
+                    let view = glam::Mat4::look_at_rh(
+                        glam::Vec3::new(f[0], f[1], f[2]),
+                        glam::Vec3::new(f[3], f[4], f[5]),
+                        glam::Vec3::Y,
+                    );
+                    let (yfov, znear, zfar) = (core.camera.yfov, core.camera.znear, core.camera.zfar);
+                    core.set_camera(view.inverse().to_cols_array(), yfov, znear, zfar);
+                }
                 install_upscaler(&mut core, &device, &queue, format, upscaler)?;
                 eprintln!(
                     "[gaia-render] instances={} tris={} render_height={render_height} timestamps={}",
@@ -808,6 +830,7 @@ impl Renderer {
             pixel_order,
             capture_sender,
             core,
+            skin_anim,
             frame_index: 0,
             timing_every,
             cpu_encode_ms: 0.0,
@@ -903,6 +926,12 @@ impl Renderer {
         };
         // ONE render per frame into the offscreen target (also the /screenshot source),
         // then a copy to the surface. Queue-mode upscalers (MetalFX) submit inside render_frame.
+        if let (Some(core), Some((sk, t0, fixed))) = (self.core.as_mut(), &self.skin_anim) {
+            let t = fixed.unwrap_or_else(|| t0.elapsed().as_secs_f32());
+            if let Err(e) = sk.pose_at(core, t) {
+                eprintln!("[gaia-render] skin pose: {e}");
+            }
+        }
         if let Some(core) = self.core.as_mut() {
             let started = Instant::now();
             if let Err(error) =
@@ -999,8 +1028,9 @@ impl Renderer {
         {
             let internal = core.internal_size().unwrap_or(output);
             eprintln!(
-                "[gpu-ms] frame={} scene={:.3} upscale={:.3} total={:.3} cpu_encode={:.3} draws={} internal={}x{} output={}x{}",
+                "[gpu-ms] frame={} skin={:.3} scene={:.3} upscale={:.3} total={:.3} cpu_encode={:.3} draws={} internal={}x{} output={}x{} skinned_verts={} joints={}",
                 self.frame_index,
+                core.read_skin_ms_blocking(&self.device).unwrap_or(f64::NAN),
                 t.scene_ms,
                 t.upscale_ms,
                 t.total_ms,
@@ -1009,7 +1039,9 @@ impl Renderer {
                 internal.width,
                 internal.height,
                 output.width,
-                output.height
+                output.height,
+                core.skinned_vertex_count(),
+                core.skin_joint_count()
             );
         }
     }

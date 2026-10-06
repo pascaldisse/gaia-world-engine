@@ -8,9 +8,11 @@
 //     keepTexCoord1?: true,                           // keep TEXCOORD_1 (lightmap UV) when present
 //     sun?: { direction:[x,y,z] | rotationDeg:[pitch,yaw], color:[r,g,b], intensity },
 //     pointLights?: [{ name, position:[x,y,z], color:[r,g,b], intensity, range }],
-//     camera?: { name, position:[x,y,z], yawDeg, pitchDeg, fovYDeg, near, far } }
+//     camera?: { name, position:[x,y,z], yawDeg, pitchDeg, fovYDeg, near, far },
+//     skinned?: { nodes?: regex (skinned node names, default '^skinned:'), clip?: regex (animation name; default = first clip
+//                 whose name starts with the node's character id), maxCharacters? } }   // -> glTF skins + ONE merged animation
 // Output contract: POSITION/NORMAL/TEXCOORD_0 (+TANGENT/TEXCOORD_1/COLOR_0 if present) · u32 indices · PBR MR materials ·
-// PNG textures (DDS decoded) · node transforms · KHR_lights_punctual · one camera node. No skins, no animations.
+// PNG textures (DDS decoded) · node transforms · KHR_lights_punctual · one camera node. Skins + one animation ONLY when manifest.skinned.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -114,14 +116,15 @@ export function exportScene(manifest, baseDir = '.') {
 
   // meshes: filter primitives, repack
   const meshMap = new Map();
-  const mapMesh = (mi) => {
-    if (meshMap.has(mi)) return meshMap.get(mi);
+  const mapMesh = (mi, skinned = false) => {
+const key = skinned ? mi + ':s' : mi;
+if (meshMap.has(key)) return meshMap.get(key);
     const sm = src.meshes[mi], prims = [];
     for (const p of sm.primitives) {
       const at = p.attributes;
       if (at.POSITION === undefined) { stats.skippedPrimitives.noPosition++; continue; }
       if ((p.mode ?? 4) !== 4) { stats.skippedPrimitives.nonTriangles++; continue; }
-      if (skipSkinned && (at.JOINTS_0 !== undefined)) { stats.skippedPrimitives.skinned++; continue; }
+      if (skinned ? (at.JOINTS_0 === undefined || at.WEIGHTS_0 === undefined) : (skipSkinned && at.JOINTS_0 !== undefined)) { stats.skippedPrimitives.skinned++; continue; }
       const mat = p.material !== undefined ? src.materials[p.material] : null;
       if (mat && matEx.some(r => r.test(mat.name ?? ''))) { stats.skippedPrimitives.material++; continue; }
       const pos = readAccessor(src, bin, at.POSITION, true);
@@ -133,15 +136,16 @@ export function exportScene(manifest, baseDir = '.') {
       if (at.TEXCOORD_0 !== undefined) attrs.TEXCOORD_0 = addAcc(readAccessor(src, bin, at.TEXCOORD_0, true), 5126, 'VEC2', 34962);
       if (at.TANGENT !== undefined) attrs.TANGENT = addAcc(readAccessor(src, bin, at.TANGENT, true), 5126, 'VEC4', 34962);
       if (manifest.keepTexCoord1 && at.TEXCOORD_1 !== undefined) attrs.TEXCOORD_1 = addAcc(readAccessor(src, bin, at.TEXCOORD_1, true), 5126, 'VEC2', 34962);
-      if (at.COLOR_0 !== undefined) { const ca = src.accessors[at.COLOR_0]; attrs.COLOR_0 = addAcc(readAccessor(src, bin, at.COLOR_0, true), 5126, ca.type, 34962); }
+      if (skinned) { attrs.JOINTS_0 = addAcc(Uint16Array.from(readAccessor(src, bin, at.JOINTS_0)), 5123, 'VEC4', 34962); attrs.WEIGHTS_0 = addAcc(readAccessor(src, bin, at.WEIGHTS_0, true), 5126, 'VEC4', 34962); stats.skinnedVertices = (stats.skinnedVertices ?? 0) + pos.length / 3; }
+if (at.COLOR_0 !== undefined) { const ca = src.accessors[at.COLOR_0]; attrs.COLOR_0 = addAcc(readAccessor(src, bin, at.COLOR_0, true), 5126, ca.type, 34962); }
       const op = { attributes: attrs, indices: addAcc(idx, 5125, 'SCALAR', 34963), mode: 4 };
       const m = mapMaterial(p.material); if (m !== undefined) op.material = m;
       if (p.extras) op.extras = p.extras;
       stats.triangles = (stats.triangles ?? 0) + idx.length / 3; stats.vertices = (stats.vertices ?? 0) + pos.length / 3;
       prims.push(op);
     }
-    if (!prims.length) { meshMap.set(mi, -1); return -1; }
-    outMeshes.push({ name: sm.name, primitives: prims }); meshMap.set(mi, outMeshes.length - 1); return outMeshes.length - 1;
+    if (!prims.length) { meshMap.set(key, -1); return -1; }
+outMeshes.push({ name: sm.name, primitives: prims }); meshMap.set(key, outMeshes.length - 1); return outMeshes.length - 1;
   };
 
   // nodes: depth-first copy with pruning
@@ -161,6 +165,40 @@ export function exportScene(manifest, baseDir = '.') {
     const c = copyNode(r); if (c >= 0) roots.push(c);
   }
   const staticMeshNodes = outNodes.length;
+// skinned characters: skins + joint hierarchy (ancestors kept for their transforms) + ONE merged clip
+const outSkins = [], outAnims = [];
+if (manifest.skinned) {
+const sk = manifest.skinned, want = new RegExp(sk.nodes ?? '^skinned:'), clipRe = sk.clip ? new RegExp(sk.clip) : null;
+const par = new Map(); src.nodes.forEach((n, i) => (n.children ?? []).forEach(c => par.set(c, i)));
+const jm = new Map();
+const ensure = (ni) => { if (jm.has(ni)) return jm.get(ni); const n = src.nodes[ni], o = {}; for (const k of ['name', 'matrix', 'translation', 'rotation', 'scale']) if (n[k] !== undefined) o[k] = n[k]; outNodes.push(o); const i = outNodes.length - 1; jm.set(ni, i); const p = par.get(ni); if (p !== undefined) { const pi = ensure(p); (outNodes[pi].children ??= []).push(i); } else roots.push(i); return i; };
+const ch = [], samplers = []; const usedClips = new Set(); let chars = 0;
+for (const ni of src.nodes.keys()) {
+const n = src.nodes[ni]; if (n.skin === undefined || n.mesh === undefined || !want.test(n.name ?? '')) continue;
+if (sk.maxCharacters && chars >= sk.maxCharacters) break;
+const mesh = mapMesh(n.mesh, true); if (mesh < 0) continue;
+const s = src.skins[n.skin], joints = s.joints.map(ensure);
+const skin = { name: n.name, joints, ...(s.skeleton !== undefined ? { skeleton: ensure(s.skeleton) } : {}) };
+if (s.inverseBindMatrices !== undefined) skin.inverseBindMatrices = addAcc(readAccessor(src, bin, s.inverseBindMatrices, true), 5126, 'MAT4');
+outSkins.push(skin); chars++;
+const o = { name: n.name, mesh, skin: outSkins.length - 1 }; if (n.extras) o.extras = n.extras;
+const pi = par.get(ni), po = pi !== undefined ? ensure(pi) : -1; outNodes.push(o); const oi = outNodes.length - 1; if (po >= 0) (outNodes[po].children ??= []).push(oi); else roots.push(oi);
+const id = n.extras?.character ?? (n.name ?? '').replace(/^skinned:/, '');
+const jointSet = new Set(s.joints);
+const ok = (a) => (clipRe ? clipRe.test(a.name ?? '') : true) && a.channels.some(c => jointSet.has(c.target.node));
+const clip = (src.animations ?? []).find(a => (a.name ?? '').startsWith(id + '/') && ok(a)) ?? (src.animations ?? []).find(ok);
+if (!clip || usedClips.has(clip)) continue; usedClips.add(clip);
+const sm = new Map();
+for (const c of clip.channels) {
+if (!jm.has(c.target.node) || c.target.path === 'weights') continue;
+if (!sm.has(c.sampler)) { const sp = clip.samplers[c.sampler], out = src.accessors[sp.output]; samplers.push({ input: addAcc(readAccessor(src, bin, sp.input, true), 5126, 'SCALAR', undefined, true), output: addAcc(readAccessor(src, bin, sp.output, true), 5126, out.type), interpolation: sp.interpolation ?? 'LINEAR' }); sm.set(c.sampler, samplers.length - 1); }
+ch.push({ sampler: sm.get(c.sampler), target: { node: jm.get(c.target.node), path: c.target.path } });
+}
+(stats.clips ??= []).push(`${n.name} <- ${clip.name}`);
+}
+if (ch.length) outAnims.push({ name: 'skinned-characters', channels: ch, samplers });
+Object.assign(stats, { skins: outSkins.length, joints: outSkins.reduce((a, s) => a + s.joints.length, 0), animChannels: ch.length });
+}
 
   // lights + camera
   const lights = [];
@@ -187,7 +225,9 @@ export function exportScene(manifest, baseDir = '.') {
     ...(outTextures.length ? { textures: outTextures, images: outImages, samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }] } : {}),
     accessors, bufferViews, buffers: [{ byteLength: 0 }],
     ...(cameras.length ? { cameras } : {}),
-  };
+...(outSkins.length ? { skins: outSkins } : {}),
+...(outAnims.length ? { animations: outAnims } : {}),
+};
   if (lights.length) { gltf.extensionsUsed = ['KHR_lights_punctual']; gltf.extensions = { KHR_lights_punctual: { lights } }; }
   const pad = (4 - (binLen % 4)) % 4; if (pad) { chunks.push(Buffer.alloc(pad)); binLen += pad; }
   gltf.buffers[0].byteLength = binLen;
@@ -201,7 +241,7 @@ export function exportScene(manifest, baseDir = '.') {
 }
 
 // structural self-check of an output GLB (used by tests and as validator fallback)
-export function selfCheck(glbBuf) {
+export function selfCheck(glbBuf, { allowSkins = false } = {}) {
   const errs = [], b = glbBuf;
   if (b.readUInt32LE(0) !== 0x46546c67 || b.readUInt32LE(4) !== 2) errs.push('bad header'); if (b.readUInt32LE(8) !== b.length) errs.push('length mismatch');
   const jl = b.readUInt32LE(12), j = JSON.parse(b.toString('utf8', 20, 20 + jl)), bl = b.readUInt32LE(20 + jl), bin = b.subarray(28 + jl, 28 + jl + bl);
@@ -222,7 +262,7 @@ export function selfCheck(glbBuf) {
   for (const [i, im] of (j.images ?? []).entries()) { if (im.bufferView !== undefined) { const v = j.bufferViews[im.bufferView]; const sig = bin.subarray(v.byteOffset, v.byteOffset + 4).toString('latin1'); if (im.mimeType === 'image/png' && sig.slice(1) !== 'PNG') errs.push(`image ${i} not PNG`); } }
   j.nodes.forEach((n, i) => { for (const c of n.children ?? []) if (c >= j.nodes.length) errs.push(`node ${i} child oob`); if (n.mesh !== undefined && n.mesh >= j.meshes.length) errs.push(`node ${i} mesh oob`); });
   const lights = j.extensions?.KHR_lights_punctual?.lights ?? []; j.nodes.forEach((n, i) => { const l = n.extensions?.KHR_lights_punctual?.light; if (l !== undefined && l >= lights.length) errs.push(`node ${i} light oob`); });
-  if (j.skins || j.animations) errs.push('skins/animations present in static output');
+  if (!allowSkins && (j.skins || j.animations)) errs.push('skins/animations present in static output');
   const camNodes = j.nodes.filter(n => n.camera !== undefined).length; if (camNodes > 1) errs.push('more than one camera node');
   return { ok: !errs.length, errors: errs.slice(0, 20), errorCount: errs.length };
 }
@@ -232,7 +272,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (!mpath) { console.error('usage: export.mjs <manifest.json> [-o out.glb] [--stats stats.json]'); process.exit(2); }
   const mp = resolve(mpath), manifest = JSON.parse(readFileSync(mp, 'utf8')), base = dirname(mp);
   const oi = args.indexOf('-o'), out = oi >= 0 ? resolve(args[oi + 1]) : resolve(base, manifest.output ?? 'scene.glb');
-  const t0 = Date.now(); const { glb, stats } = exportScene(manifest, base); const chk = selfCheck(glb);
+  const t0 = Date.now(); const { glb, stats } = exportScene(manifest, base); const chk = selfCheck(glb, { allowSkins: !!manifest.skinned });
   mkdirSync(dirname(out), { recursive: true }); writeFileSync(out, glb);
   stats.ms = Date.now() - t0; stats.selfCheck = chk; stats.output = out;
   const si = args.indexOf('--stats'); if (si >= 0) writeFileSync(resolve(args[si + 1]), JSON.stringify(stats, null, 1));

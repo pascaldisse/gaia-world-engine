@@ -3,6 +3,7 @@
 //! resolution (`render_height`) and scales to the output through an `Upscaler`.
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
 pub mod scene;
+pub mod skin;
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -498,6 +499,8 @@ pub struct RenderCore {
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
     mipgen: BilinearBlit,
+    /// GPU skinning (src/skin.rs): skinned meshes + joint palettes, one compute pass/frame.
+    skin: skin::SkinSystem,
 }
 
 impl RenderCore {
@@ -600,6 +603,7 @@ impl RenderCore {
             },
             upscaler: Box::new(BilinearBlit::new(device, opts.output_format)),
             mipgen,
+            skin: Default::default(),
             blend_pipeline,
             blend_materials: Default::default(),
             opts,
@@ -1109,6 +1113,7 @@ impl RenderCore {
         output_size: UpscaleSize,
     ) {
         self.ensure_targets(device, output_size);
+        self.encode_skinning(device, queue, encoder);
         if self.instances_dirty {
             self.rebuild_instances(device);
         }
@@ -1468,6 +1473,9 @@ pub fn load_scene_into(
         })
         .collect();
     core.set_point_lights(&packed);
+    if let Some(sk) = &scene.skins {
+        sk.load_into(core)?;
+    }
     Ok(())
 }
 

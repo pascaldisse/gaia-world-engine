@@ -442,6 +442,8 @@ pub struct GpuTimings {
     pub total_ms: f64,
     /// Shadow passes begin→end (0 when shadows off / nothing re-encoded). Included in `total_ms`.
     pub shadow_ms: f64,
+    /// earliest begin → latest end over ALL timed passes (wall span on the GPU timeline; includes idle gaps). total_ms is a SUM of pass durations.
+    pub span_ms: f64,
 }
 
 /// Data-only resource API (mirrors the JS render-api lane: meshes/materials/
@@ -1590,13 +1592,18 @@ impl RenderCore {
             // the backend; total = scene + upscale (sum, not one clock span).
             let scene_ms = ms(ts[0], ts[1]);
             let upscale_ms = self.upscaler.last_gpu_ms_blocking().unwrap_or(f64::NAN);
-            return Some(GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms + shadow_ms, shadow_ms });
+            return Some(GpuTimings { scene_ms, upscale_ms, total_ms: scene_ms + upscale_ms + shadow_ms, shadow_ms, span_ms: f64::NAN });
         }
         Some(GpuTimings {
             scene_ms: ms(ts[0], ts[1]),
             upscale_ms: ms(ts[2], ts[3]),
             total_ms: ms(if self.shadow_timed { ts[4] } else { ts[0] }, ts[3]),
             shadow_ms,
+            span_ms: {
+                let b = if self.shadow_timed { ts[0].min(ts[2]).min(ts[4]) } else { ts[0].min(ts[2]) };
+                let e = if self.shadow_timed { ts[1].max(ts[3]).max(ts[5]) } else { ts[1].max(ts[3]) };
+                e.saturating_sub(b) as f64 * tm.period_ns as f64 / 1e6
+            },
         })
     }
 }

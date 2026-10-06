@@ -46,6 +46,8 @@ struct GpuSkin {
     palette: Option<wgpu::Buffer>,
     vertex_total: u32,
     timing: Option<(wgpu::QuerySet, wgpu::Buffer, wgpu::Buffer, f32)>,
+    /// skin readback mapped by `read_skin_ms_async` (r5-adapter): the per-frame copy into it is skipped while true.
+    ts_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Default)]
@@ -189,7 +191,9 @@ impl RenderCore {
         drop(pass);
         if let Some(t) = &g.timing {
             encoder.resolve_query_set(&t.0, 0..2, &t.1, 0);
-            encoder.copy_buffer_to_buffer(&t.1, 0, &t.2, 0, 16);
+            if !g.ts_pending.load(std::sync::atomic::Ordering::Acquire) {
+                encoder.copy_buffer_to_buffer(&t.1, 0, &t.2, 0, 16);
+            }
         }
     }
 
@@ -291,6 +295,28 @@ impl RenderCore {
         }
     }
 
+    /// Non-blocking GPU ms of the last copied skin pass (works on wasm32). false = no timestamps / no skin pass yet / a sample already in flight.
+    pub fn read_skin_ms_async(&self, done: impl FnOnce(Option<f64>) + wgpu::WasmNotSend + 'static) -> bool {
+        use std::sync::atomic::Ordering;
+        let Some(g) = self.skin.gpu.as_ref() else { return false };
+        let Some(t) = g.timing.as_ref() else { return false };
+        if g.bind.is_none() || g.ts_pending.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        let (buf, pending, period) = (t.2.clone(), g.ts_pending.clone(), t.3 as f64);
+        let b2 = buf.clone();
+        buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let out = r.ok().and_then(|_| {
+                let ts: [u64; 2] = *bytemuck::from_bytes(&b2.slice(..).get_mapped_range().ok()?[..16]);
+                Some(ts[1].saturating_sub(ts[0]) as f64 * period / 1e6)
+            });
+            b2.unmap();
+            pending.store(false, Ordering::Release);
+            done(out);
+        });
+        true
+    }
+
     /// GPU ms of the last skin pass (native measurement; blocks). None = no timestamps / no skins.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_skin_ms_blocking(&self, device: &wgpu::Device) -> Option<f64> {
@@ -355,7 +381,7 @@ impl GpuSkin {
             let readback = device.create_buffer(&wgpu::BufferDescriptor { label: Some("skin ts readback"), size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             (set, resolve, readback, period_ns)
         });
-        GpuSkin { pipeline, layout, bind: None, palette: None, vertex_total: 0, timing }
+        GpuSkin { pipeline, layout, bind: None, palette: None, vertex_total: 0, timing, ts_pending: Default::default() }
     }
 }
 

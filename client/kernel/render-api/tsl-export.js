@@ -175,14 +175,14 @@ const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ??
 const fnIds = new WeakMap(); let fnN = 0;
 const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };
 const SKIP_PROPS = new Set(['uuid', 'id', 'name', 'version', 'userData', 'needsUpdate']);
-const primSig = (o, skipValue) => { let s = ''; for (const k of Object.keys(o)) { if (k[0] === '_' || SKIP_PROPS.has(k) || (skipValue && k === 'value')) continue; const v = o[k]; const t = typeof v; if (t === 'boolean' || t === 'string') s += `${k}=${v};`; else if (t === 'number') s += `${k}=${v};`; else if (t === 'function') s += `${k}=f${fnId(v)};`; else if (v === null) s += `${k}=null;`; } return s; };
+const primSig = (o, skipValue, fnBySource) => { let s = ''; for (const k of Object.keys(o)) { if (k[0] === '_' || SKIP_PROPS.has(k) || (skipValue && k === 'value')) continue; const v = o[k]; const t = typeof v; if (t === 'boolean' || t === 'string') s += `${k}=${v};`; else if (t === 'number') s += `${k}=${v};`; else if (t === 'function') s += fnBySource ? `${k}=${strHash(Function.prototype.toString.call(v))};` : `${k}=f${fnId(v)};`; else if (v === null) s += `${k}=null;`; } return s; };
 // walk the material's node graph: ordered unique nodes + key. Slot nodes (uniform/texture/buffer) contribute type only, never value/uuid.
 function structWalk(THREE, material, { object = null, geometry = null, scene = null } = {}) {
 const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
 const parts = [], nodes = [], ids = new Map();
 // material level
 for (const k of Object.keys(material).sort()) { const v = material[k]; if (v && v.isTexture) parts.push(`S:${k}:${v.constructor?.name}:${v.format}:${v.type}:${v.colorSpace}:${+!!v.isDepthTexture}:${+!!v.isArrayTexture}:${+!!v.isCubeTexture}:${v.image?.depth ?? ''}`); }
-parts.push(`M:${material.type}:${material.constructor?.name}:${primSig(material, false).replace(/(opacity|roughness|metalness|ior|thickness|clearcoat\w*|sheen\w*|iridescence\w*|emissiveIntensity|envMapIntensity|reflectivity|specularIntensity|dispersion|anisotropy\w*|attenuationDistance|lightMapIntensity|aoMapIntensity|bumpScale|displacementScale|displacementBias|shininess|linewidth|size|dashSize|gapSize|scale|polygonOffsetFactor|polygonOffsetUnits|alphaTest|blendAlpha|stencilRef|depthFunc)=[^;]*;/g, (m, k2) => (k2 === 'alphaTest' ? `alphaTest=${material.alphaTest > 0 ? 1 : 0};` : ''))}`);
+parts.push(`M:${material.type}:${material.constructor?.name}:${primSig(material, false, true).replace(/(opacity|roughness|metalness|ior|thickness|clearcoat\w*|sheen\w*|iridescence\w*|emissiveIntensity|envMapIntensity|reflectivity|specularIntensity|dispersion|anisotropy\w*|attenuationDistance|lightMapIntensity|aoMapIntensity|bumpScale|displacementScale|displacementBias|shininess|linewidth|size|dashSize|gapSize|scale|polygonOffsetFactor|polygonOffsetUnits|alphaTest|blendAlpha|stencilRef|depthFunc)=[^;]*;/g, (m, k2) => (k2 === 'alphaTest' ? `alphaTest=${material.alphaTest > 0 ? 1 : 0};` : ''))}`);
 const g = object?.geometry ?? geometry; const o = object;
 parts.push(`O:${o ? (o.isInstancedMesh ? 'I' : '') + (o.isSkinnedMesh ? 'S' : '') + (o.isBatchedMesh ? 'B' : '') + (o.isPoints ? 'P' : '') + (o.isLine ? 'L' : '') + (o.isSprite ? 'Q' : '') : 'M'}`);
 if (g?.attributes) for (const n of Object.keys(g.attributes).sort()) { const a = g.attributes[n]; parts.push(`a:${n}:${a.itemSize}:${a.isInstancedBufferAttribute ? 1 : 0}${a.normalized ? 'n' : ''}`); }
@@ -212,7 +212,8 @@ try { w = structWalk(THREE, material, opts); } catch (e) { w = { refuse: 'walk-e
 C.keyMs += nowMs() - t0;
 if (w.refuse) { C.uncacheable++; why('uncacheable:' + w.refuse.split(':')[0], w.refuse); return buildPackage(material, opts); }
 const tpl = C.map.get(w.key);
-if (tpl?.unproven?.size && !tpl.noRebind) { t0 = nowMs(); const pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.misses++; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const u of [...tpl.unproven]) { if (have.has(u)) { SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
+if ((tpl?.unproven?.size || tpl?.unprovenBuf?.size) && !tpl.noRebind) { t0 = nowMs(); const pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.misses++; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
+for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
 if (tpl && tpl.nodes.length === w.nodes.length && !tpl.noRebind) {
 t0 = nowMs(); let pkg = null;
 try { pkg = rebind(tpl, w, material, opts); } catch (e) { C.rebindFail++; why('rebindFail', String(e?.message ?? e)); }
@@ -230,7 +231,7 @@ if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length
 if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } C.map.set(w.key, t); }
 return pkg;
 }
-const strHash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
+function strHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); }
 // template validation + slot index: every non-shared binding must resolve to a walked node (else rebind would alias M0's data into M1 = wrong pixels).
 function templateBinds(t, material) {
 const { pkg, nodes } = t;
@@ -242,7 +243,7 @@ t.bufNode = new Map(); for (const n of nodes) if (n.value?.isBufferAttribute) t.
 t.uniNode = new Map(); for (const { key, node } of pkg.tpl.liveUniforms) if (node) t.uniNode.set(key, node);
 for (const g of pkg.bindGroups) for (const b of g.bindings) {
 if (b.textureUuid && !t.texNode.has(b.textureUuid) && !t.slotOf.has(b.textureUuid)) return `texture-unmapped:${b.name}`;
-if (b.kind === 'storage-buffer') { const a = pkg.bufferSources[`${g.group}.${b.binding}`]; if (!t.bufNode.has(a)) return `buffer-unmapped:${b.name}`; }
+if (b.kind === 'storage-buffer') { const a = pkg.bufferSources[`${g.group}.${b.binding}`]; if (!t.bufNode.has(a)) (t.unprovenBuf ??= new Map()).set(`${g.group}.${b.binding}`, a); /* builder-side buffer: shared iff a 2nd build binds the SAME BufferAttribute object (proven below) */ }
 }
 if (Object.keys(pkg.attributeSources).length) return 'node-attributes';
 for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !t.slotMatrix.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
@@ -269,7 +270,7 @@ const src = u.source?.kind === 'uniform' ? { ...u.source, uuid: n1.uuid, name: n
 return { ...u, key: n1.uuid, source: src, value: toPlain(n1.value) };
 });
 else if (b.textureUuid) o.textureUuid = texUuid(b.textureUuid);
-else if (b.kind === 'storage-buffer') { const a0 = T.bufferSources[`${g.group}.${b.binding}`]; const n0b = t.bufNode.get(a0), n1 = map.get(n0b.uuid) ?? n0b; bufferSources[`${g.group}.${b.binding}`] = n1.value; }
+else if (b.kind === 'storage-buffer') { const a0 = T.bufferSources[`${g.group}.${b.binding}`]; const n0b = t.bufNode.get(a0); bufferSources[`${g.group}.${b.binding}`] = n0b ? (map.get(n0b.uuid) ?? n0b).value : a0; }
 return o;
 }) }));
 const pkg = { vertex: T.vertex, fragment: T.fragment, bindGroups: groups, attributes: T.attributes, varyings: T.varyings, vertexEntry: 'main', fragmentEntry: 'main',

@@ -66,28 +66,28 @@ try {
   let amb = null;
   if (MODE === 'three') { amb = new THREE.AmbientLight(0xffffff, 1); amb.color.setRGB(AMBIENT[0] * Math.PI, AMBIENT[1] * Math.PI, AMBIENT[2] * Math.PI); scene.add(amb); } // core: ambient*albedo (no 1/π)
 
-  const cpu = { mixer: [], sync: [], submit: [], total: [] }, gpuP = [], gpuThree = [], draws = [];
+  const cpu = { mixer: [], sync: [], submit: [], total: [] }, phase = { matrixWorld: [], visit: [], sweep: [], camera: [], backendSkinUpload: [], skinUploads: [] }, texIdle = [], gpuP = [], gpuThree = [], draws = [];
   const animate = (f) => { const t = performance.now(); mixer.setTime(tAt(f)); cpu.mixer.push(performance.now() - t); };
   if (MODE === 'gaia') {
     const wasm = await import('/pkg/render_wasm.js');
     const { createWgpuBackend } = await import('/kernel/wgpu-backend.js');
     const { createSceneAdapter } = await import('/kernel/scene-adapter.js');
-    // adapter's material-map reads textures from canvas/DataTexture only; GLTFLoader gives ImageBitmaps → game-side prep: read `map` pixels ONCE into {width,height,data} (same Texture objects; a canvas image makes material-map getImageData() it per mesh per frame)
-    const tp = performance.now(); let conv = 0;
-    for (const m of mats) { const t = m.map; if (t?.image && typeof ImageBitmap !== 'undefined' && t.image instanceof ImageBitmap) { const c = document.createElement('canvas'); c.width = t.image.width; c.height = t.image.height; c.getContext('2d').drawImage(t.image, 0, 0); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height); t.image = { width: c.width, height: c.height, data: new Uint8Array(d.data.buffer) }; conv++; } }
-    R.texture_prep = { converted: conv, ms: performance.now() - tp };
     const tb = performance.now();
     const backend = await createWgpuBackend({ canvas, wasm, renderHeight: H, staticInstances: 'non-skinned', options: { ambient: AMBIENT, exposure: 1, shadows: { enabled: num('shadows', 1) !== 0 } } });
     R.backend = { name: backend.name, caps: backend.capabilities, init_ms: performance.now() - tb };
     const adapter = createSceneAdapter(backend, { three: THREE });
+const { textureReads } = await import('/kernel/material-map.js');
     animate(0);
     const ts = performance.now(); adapter.sync(scene, cam); R.first_sync_ms = performance.now() - ts;
+R.first_sync_textures = { reads: textureReads.count, read_ms: textureReads.ms, ...backend.textureStats() };
     cpu.mixer.length = 0;
     R.instances = backend.gpu.instanceCount();
     for (let f = 0; f < FRAMES; f++) {
       await raf();
       animate(f);
-      const a = performance.now(); adapter.sync(scene, cam); const b = performance.now();
+      const r0 = textureReads.count, u0 = backend.textureStats().uploads;
+const a = performance.now(); adapter.sync(scene, cam); const b = performance.now();
+for (const k in phase) phase[k].push(adapter.stats.phase[k]); texIdle.push(textureReads.count - r0 + backend.textureStats().uploads - u0);
       const p = backend.renderFrameGpuTimed(); const c = performance.now();
       cpu.sync.push(b - a); cpu.submit.push(c - b); cpu.total.push(c - a);
       gpuP.push(p); draws.push(backend.gpu.drawCalls());
@@ -95,7 +95,9 @@ try {
       if (f % 30 === 0) R.log.push(`f${f} sync ${(b - a).toFixed(2)} submit ${(c - b).toFixed(2)} draws ${draws[f]} shadowDraws ${backend.shadowStats().totalDraws}`);
     }
     const g = (await Promise.all(gpuP)).filter(Boolean);
-    R.gpu_ms = { total: stat(g.map((x) => x.total)), scene: stat(g.map((x) => x.scene)), samples: g.length, nulls: gpuP.length - g.length };
+    R.gpu_ms = { total: stat(g.map((x) => x.total)), scene: stat(g.map((x) => x.scene)), shadow: stat(g.map((x) => x.shadow ?? 0)), upscale: stat(g.map((x) => x.upscale)), skin: stat(g.map((x) => x.skin)), span: stat(g.map((x) => x.span)), totalAll: stat(g.map((x) => x.totalAll)), samples: g.length, nulls: gpuP.length - g.length };
+R.adapter_phase_ms = Object.fromEntries(Object.entries(phase).map(([k, v]) => [k, stat(v)]));
+R.texture_work_per_frame = { total_reads_plus_uploads_frames_gt0: texIdle.filter((x) => x > 0).length, frames: texIdle.length, reads_total: textureReads.count, read_ms_total: textureReads.ms, ...backend.textureStats() };
     R.skin_uploads = adapter.stats.skinUploads; R.adapter = { created: adapter.stats.created, updated: adapter.stats.updated, degraded: [...adapter.stats.degraded], unsupported: [...adapter.stats.unsupported] };
     R.draws = { median: pct(draws, 0.5), last: draws[draws.length - 1] };
     R.instances_last = backend.gpu.instanceCount();

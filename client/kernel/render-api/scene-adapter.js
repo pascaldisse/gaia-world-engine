@@ -7,10 +7,11 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams } from './material-map.js';
+import { materialToParams, materialSig } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
 
 const MAT_EPS = 0;
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {} } = {}) {
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
 const geos = new Map();        // geometry → { id, sig, users:Set<rec> }  (key = geometry object; uuid dedup is implicit)
@@ -41,24 +42,34 @@ arrays.indices = whole ? (a instanceof Uint16Array || a instanceof Uint32Array ?
 }
 return arrays;
 }
+const GEO_ATTRS = ['position', 'normal', 'uv'];
+// numeric signature [start,count,(version,count)×3,index version,index count] — compared in place, no per-frame string/array alloc
 const geoSig = (g, start, count) => {
-let s = `${start}:${count}`;
-for (const k of ['position', 'normal', 'uv']) { const a = g.attributes?.[k]; s += `|${a ? a.version : '-'}:${a ? a.count : 0}`; }
-return s + `|${g.index ? g.index.version + ':' + g.index.count : '-'}`;
+const s = [start, count];
+for (const k of GEO_ATTRS) { const a = g.attributes?.[k]; s.push(a ? a.version : -1, a ? a.count : 0); }
+s.push(g.index ? g.index.version : -1, g.index ? g.index.count : 0);
+return s;
 };
+function geoSame(g, start, count, sig) {
+if (sig[0] !== start || sig[1] !== count) return false;
+const at = g.attributes;
+for (let i = 0; i < 3; i++) { const a = at?.[GEO_ATTRS[i]]; if (sig[2 + i * 2] !== (a ? a.version : -1) || sig[3 + i * 2] !== (a ? a.count : 0)) return false; }
+return sig[8] === (g.index ? g.index.version : -1) && sig[9] === (g.index ? g.index.count : 0);
+}
 
 function ensureGeometry(rec, g, start, count) {
 const key = `${start}:${count}`;
 let e = geos.get(g);
 if (!e) { e = { parts: new Map(), users: new Set() }; geos.set(g, e); }
 let p = e.parts.get(key);
-const sig = geoSig(g, start, count);
 if (!p) {
+const sig = geoSig(g, start, count);
 const arrays = geometryArrays(g, start, count);
 if (!arrays) { stats.unsupported.add('geometry-without-position'); return null; }
 p = { id: backend.createMesh(arrays), sig, users: new Set() };
 e.parts.set(key, p); stats.uploadsGeometry++; stats.created++;
-} else if (p.sig !== sig) {
+} else if (!geoSame(g, start, count, p.sig)) {
+const sig = geoSig(g, start, count);
 const arrays = geometryArrays(g, start, count);
 if (backend.updateMesh) { backend.updateMesh(p.id, arrays); p.sig = sig; stats.uploadsGeometry++; stats.updated++; }
 else { // degrade: new mesh, users re-created by caller (flag)
@@ -67,7 +78,7 @@ const old = p.id; p.id = backend.createMesh(arrays); p.sig = sig; p.stale = old;
 for (const u of p.users) u.dirtyGeo = true;
 }
 }
-p.users.add(rec);
+if (!p.users.has(rec)) p.users.add(rec);
 return p;
 }
 
@@ -86,22 +97,23 @@ function syncLiveUniforms() {
 }
 function ensureMaterial(m) {
 let e = mats.get(m);
+if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
+const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no params/texture work
+if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
 const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
-const sig = conv.sig;
 if (!e) {
 const id = createMat(conv);
-e = { id, sig, conv, users: new Set(), epoch };
+e = { id, sig: conv.sig, conv, users: new Set(), epoch, degraded: conv.degraded };
 mats.set(m, e); stats.created++;
-} else if (e.sig !== sig && e.epoch !== epoch) {
-if (conv.kind === 'pbr' && backend.updateMaterial) { backend.updateMaterial(e.id, conv.params, conv.textures); }
+} else {
+if (conv.kind === 'pbr' && e.conv.kind === 'pbr' && backend.updateMaterial) { backend.updateMaterial(e.id, conv.params, conv.textures); }
 else { // swap handle on every user
 const old = e.id; e.id = createMat(conv);
-for (const u of e.users) for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id });
+for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); }
 backend.destroyMaterial(old);
 }
-e.sig = sig; e.conv = conv; stats.updated++;
+e.sig = conv.sig; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; stats.updated++;
 }
-e.epoch = epoch;
 if (conv.degraded) stats.degraded.add(conv.degraded);
 return e;
 }
@@ -115,7 +127,7 @@ return backend.createMaterial(conv.params, conv.textures);
 }
 
 const nodeFlags = (o, vis) => ({ castShadow: !!o.castShadow, receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0 });
-const flagSig = (f) => `${+f.castShadow}${+f.receiveShadow}${+f.visible}:${f.renderOrder}`;
+const flagBits = (o, vis) => (o.castShadow ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0); // + renderOrder compared separately (no string alloc)
 
 function buildParts(o, rec, vis) {
 // returns false when nothing renderable
@@ -189,6 +201,10 @@ stats.unsupported.add(`light:${o.type}`); // Ambient/Hemisphere/Spot/RectArea: n
 // per frame joint matrices = matrixWorld x bindMatrixInverse x bone.matrixWorld (backend skins to WORLD space,
 // == three's skinning + modelMatrix), uploaded via updateSkin ONLY when the palette changed.
 const skinRecs = new Map();
+let skinMs = 0, skinCalls = 0;
+const skelState = new WeakMap(); // Skeleton → { last:Float64Array(nb*16), ver, epoch }
+// out = a × b[off..off+16] (column-major), b read in place (no per-bone subarray)
+function mul4b(a, b, off, out) { for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + r] * b[off + c * 4 + k]; out[c * 4 + r] = v; } return out; }
 const skinCapable = () => typeof backend.createSkin === 'function' && typeof backend.updateSkin === 'function' && typeof backend.createSkinnedMesh === 'function';
 function mul4(a, b, out = new Float64Array(16)) { for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let v = 0; for (let k = 0; k < 4; k++) v += a[k * 4 + r] * b[c * 4 + k]; out[c * 4 + r] = v; } return out; }
 const attrVer = (g) => `${g.index?.version ?? -1}|${['position', 'normal', 'uv', 'skinIndex', 'skinWeight'].map(k => g.attributes[k]?.version ?? -1)}`;
@@ -209,14 +225,28 @@ const mesh = backend.createSkinnedMesh({ positions, normals, uvs, joints, weight
 const me = ensureMaterial(Array.isArray(o.material) ? o.material[0] : o.material);
 const node = backend.createInstance(mesh, me.id, IDENTITY_MAT4.slice(), nodeFlags(o, vis));
 const rr = {}; me.users.add(rr);
-r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: Array.isArray(o.material) ? o.material[0] : o.material, pal: new Float32Array(nb * 16), last: new Float32Array(nb * 16).fill(NaN), flagsSig: flagSig(nodeFlags(o, vis)) });
+r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: Array.isArray(o.material) ? o.material[0] : o.material, pal: new Float32Array(nb * 16), fbits: flagBits(o, vis), fro: o.renderOrder ?? 0, sk, lastWorld: new Float64Array(16).fill(NaN), lastBind: new Float64Array(16).fill(NaN), seenSkel: -1 });
 skinRecs.set(o, r); stats.created++; stats.uploadsGeometry++;
 }
-const pre = mul4(o.matrixWorld.elements, o.bindMatrixInverse.elements), tmp = new Float64Array(16);
-for (let i = 0; i < nb; i++) r.pal.set(mul4(pre, sk.bones[i].matrixWorld.elements, tmp), i * 16);
-let changed = false; for (let i = 0; i < r.pal.length; i++) if (r.pal[i] !== r.last[i]) { changed = true; break; }
-if (changed) { backend.updateSkin(r.skin, r.pal); r.last.set(r.pal); stats.updated++; stats.skinUploads = (stats.skinUploads ?? 0) + 1; }
-const f = nodeFlags(o, vis), fs = flagSig(f); if (fs !== r.flagsSig) { backend.updateNode(r.node, f); r.flagsSig = fs; stats.updated++; }
+// per-SKELETON change detection (once per frame, shared by every SkinnedMesh on that skeleton): bone.matrixWorld vs last frame.
+// A mesh recomputes + uploads its palette ONLY when its skeleton moved (skelVer), its own matrixWorld or its bindMatrixInverse changed.
+let st = skelState.get(sk);
+if (!st) { st = { last: new Float64Array(nb * 16).fill(NaN), ver: 0, epoch: -1 }; skelState.set(sk, st); }
+if (st.epoch !== epoch) {
+st.epoch = epoch; let ch = false; const L = st.last, B = sk.bones;
+for (let i = 0; i < nb; i++) { const e = B[i].matrixWorld.elements, off = i * 16; for (let k = 0; k < 16; k++) if (L[off + k] !== e[k]) { L[off + k] = e[k]; ch = true; } }
+if (ch) st.ver++;
+}
+const mw = o.matrixWorld.elements, bi = o.bindMatrixInverse.elements;
+const stale = r.seenSkel !== st.ver || !eqArr(r.lastWorld, mw) || !eqArr(r.lastBind, bi);
+if (stale) {
+const pre = mul4(mw, bi, r.pre ??= new Float64Array(16)), tmp = r.tmp ??= new Float64Array(16), L = st.last, pal = r.pal;
+for (let i = 0; i < nb; i++) { mul4b(pre, L, i * 16, tmp); pal.set(tmp, i * 16); }
+r.seenSkel = st.ver; r.lastWorld.set(mw); r.lastBind.set(bi);
+const ts0 = now(); backend.updateSkin(r.skin, pal); skinMs += now() - ts0; skinCalls++; stats.updated++; stats.skinUploads = (stats.skinUploads ?? 0) + 1;
+}
+const fb = flagBits(o, vis), fro = o.renderOrder ?? 0;
+if (fb !== r.fbits || fro !== r.fro) { backend.updateNode(r.node, nodeFlags(o, vis)); r.fbits = fb; r.fro = fro; stats.updated++; }
 ensureMaterial(r.mat);
 }
 function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNode(r.node); backend.destroySkinnedMesh?.(r.mesh); backend.destroySkin?.(r.skin); stats.removed++; }
@@ -230,7 +260,7 @@ if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (c
 if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // backend lacks createSkin/updateSkin/createSkinnedMesh
 seen.add(o);
 let rec = recs.get(o);
-if (!rec) { rec = { parts: [], matrix: new Float64Array(16), flagsSig: '', matSig: '', dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.flagsSig = flagSig(nodeFlags(o, vis)); rec.mref = o.material; rec.geoRef = o.geometry; }
+if (!rec) { rec = { parts: [], matrix: new Float64Array(16), fbits: 0, fro: 0, dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; rec.mref = o.material; rec.geoRef = o.geometry; }
 else updateMesh(o, rec, vis);
 }
 }
@@ -238,8 +268,9 @@ for (const c of o.children) visit(c, vis, seen);
 }
 function updateMesh(o, rec, vis) {
 const gone = rec.geoRef !== o.geometry || rec.dirtyGeo || (rec.mref !== o.material && (Array.isArray(o.material) || Array.isArray(rec.mref)));
-if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.flagsSig = flagSig(nodeFlags(o, vis)); stats.updated++; return; }
-const f = nodeFlags(o, vis), fs = flagSig(f), moved = !eqArr(rec.matrix, o.matrixWorld.elements);
+if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; stats.updated++; return; }
+const fb = flagBits(o, vis), fro = o.renderOrder ?? 0, flagsChanged = fb !== rec.fbits || fro !== rec.fro, moved = !eqArr(rec.matrix, o.matrixWorld.elements);
+const f = flagsChanged || o.isInstancedMesh ? nodeFlags(o, vis) : null;
 const single = rec.parts.length === 1 && !Array.isArray(o.material);
 let swapped = single && rec.parts[0].mat !== o.material;
 for (const p of rec.parts) {
@@ -250,7 +281,7 @@ continue;
 ensureGeometry(rec, p.geo, p.start, p.count); // version-compare only (no upload unless attribute/index version moved)
 const u = {};
 if (moved && !o.isInstancedMesh) u.mat4 = Array.from(o.matrixWorld.elements);
-if (fs !== rec.flagsSig) Object.assign(u, f);
+if (flagsChanged) Object.assign(u, f);
 if (swapped) { const me = ensureMaterial(o.material); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = o.material; u.material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
 if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count) { backend.updateInstances(p.node, instanceMats(o), o.count, Array.from(o.matrixWorld.elements)); p.instV = o.instanceMatrix.version; p.instCount = o.count; stats.updated++; }
@@ -260,7 +291,7 @@ if (Object.keys(u).length) { backend.updateNode(p.node, u); stats.updated++; }
 ensureMaterial(p.mat);
 }
 if (moved) rec.matrix.set(o.matrixWorld.elements);
-rec.flagsSig = fs;
+rec.fbits = fb; rec.fro = fro;
 }
 function destroyExpanded(p) { for (const n of p.expanded) backend.removeNode(n); }
 
@@ -268,15 +299,19 @@ return {
 stats,
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
 sync(scene, camera = null) {
+const t0 = now();
+skinMs = 0; skinCalls = 0;
 epoch++; stats.frames++; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
+const t1 = now();
 const seen = new Set();
 visit(scene, true, seen);
-for (const [o, rec] of recs) if (!seen.has(o) || (o.isInstancedMesh && !backend.updateInstances && !backend.createInstanced && false)) { destroyParts(rec); recs.delete(o); }
+const t2 = now();
+for (const [o, rec] of recs) if (!seen.has(o)) { destroyParts(rec); recs.delete(o); }
 for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
-if (camera && updateMatrices) camera.updateMatrixWorld?.();
+const t3 = now();
 syncLiveUniforms();
 if (camera) {
 if (updateMatrices) camera.updateMatrixWorld?.();
@@ -284,6 +319,9 @@ const view = Array.from(camera.matrixWorldInverse?.elements ?? []), proj = Array
 const sig = `${view}|${proj}`;
 if (view.length === 16 && proj.length === 16 && sig !== cameraSig) { backend.setCamera(view, proj); cameraSig = sig; stats.updated++; }
 }
+const t4 = now();
+// last-frame phase breakdown (ms): matrixWorld (three's own updateMatrixWorld, 0 when updateMatrices=false) · visit (per-object diff + backend calls) · sweep (removed objects + gc) · camera/live uniforms
+stats.phase = { matrixWorld: t1 - t0, visit: t2 - t1, sweep: t3 - t2, camera: t4 - t3, total: t4 - t0, backendSkinUpload: skinMs, skinUploads: skinCalls };
 },
 dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
 };

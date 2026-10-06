@@ -6,17 +6,53 @@ const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissive
 const rgb = (c) => (c ? [c.r, c.g, c.b] : [1, 1, 1]);
 const nodeCache = new WeakMap(); // NodeMaterial → { version, package }
 
+// ---- textures: ONE CPU read per (texture, version), lazy. textureData(t) returns a descriptor {width,height,srgb,key,data(getter)}:
+//   key = `${uuid}:${version}` (backend caches GPU textures by it, refcounted); `data` is only touched on a backend cache MISS, so an idle frame
+//   and every material sharing the texture cost 0 reads. Sources: Uint8 DataTexture as-is · canvas/ImageBitmap/HTMLImageElement/VideoFrame/ImageData
+//   via ONE drawImage+getImageData (image-level WeakMap: texture clones sharing an ImageBitmap read it once; canvases are re-read only when texture.version moves).
+const texCache = new WeakMap();   // Texture → { version, image, desc }
+const pixelCache = new WeakMap(); // immutable image (ImageBitmap/HTMLImageElement/ImageData) → Uint8Array rgba
+export const textureReads = { count: 0, ms: 0 }; // instrumentation: how many CPU pixel reads happened (proof: idle frame = 0)
+let scratch = null;
+const isBytes = (d) => d instanceof Uint8Array || d instanceof Uint8ClampedArray;
+function drawable(im) {
+  return (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) || (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement) ||
+    (typeof VideoFrame !== 'undefined' && im instanceof VideoFrame) || (typeof OffscreenCanvas !== 'undefined' && im instanceof OffscreenCanvas) || (typeof HTMLCanvasElement !== 'undefined' && im instanceof HTMLCanvasElement);
+}
+function readPixels(im, w, h) {
+  const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+  let out = null;
+  if (isBytes(im.data) && im.data.length === w * h * 4) out = new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.length);
+  else if (typeof ImageData !== 'undefined' && im instanceof ImageData) out = new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.byteLength);
+  else if (typeof im.getContext === 'function' && !drawable(im)) { // duck-typed canvas (own 2d context): re-read only when texture.version moves
+    const d = im.getContext('2d')?.getImageData(0, 0, w, h);
+    if (d) out = new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength);
+  } else if (drawable(im)) {
+    const immutable = !(typeof HTMLCanvasElement !== 'undefined' && im instanceof HTMLCanvasElement) && !(typeof OffscreenCanvas !== 'undefined' && im instanceof OffscreenCanvas);
+    if (immutable && pixelCache.has(im)) return pixelCache.get(im);
+    if (!scratch) scratch = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
+    if (scratch.width !== w || scratch.height !== h) { scratch.width = w; scratch.height = h; }
+    const c = scratch.getContext('2d', { willReadFrequently: true });
+    c.globalCompositeOperation = 'copy'; c.drawImage(im, 0, 0, w, h);
+    out = new Uint8Array(c.getImageData(0, 0, w, h).data.buffer);
+    if (immutable) pixelCache.set(im, out);
+  }
+  if (out) { textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
+  return out;
+}
 function textureData(t) {
-const im = t?.image;
-if (!im) return null;
-if (im.data instanceof Uint8Array || im.data instanceof Uint8ClampedArray) return { width: im.width, height: im.height, data: im.data, srgb: t.colorSpace === 'srgb' };
-if (typeof im.getContext === 'function') { // canvas
-const d = im.getContext('2d')?.getImageData(0, 0, im.width, im.height);
-if (d) return { width: im.width, height: im.height, data: new Uint8Array(d.data.buffer), srgb: t.colorSpace === 'srgb' };
+  const im = t?.image;
+  if (!im) return null;
+  const c = texCache.get(t);
+  if (c && c.version === t.version && c.image === im) return c.desc;
+  const w = im.width ?? im.videoWidth ?? im.displayWidth, h = im.height ?? im.videoHeight ?? im.displayHeight;
+  const readable = isBytes(im.data) || drawable(im) || typeof im.getContext === 'function' || (typeof ImageData !== 'undefined' && im instanceof ImageData);
+  if (!readable || !(w > 0 && h > 0)) return undefined; // present but not CPU-readable here
+  let px; // lazy + memoised
+  const desc = { width: w, height: h, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`, get data() { return px ??= readPixels(im, w, h); } };
+  texCache.set(t, { version: t.version, image: im, desc });
+  return desc;
 }
-return undefined; // present but not CPU-readable here (ImageBitmap/HTMLImageElement): decode path = backend-side loader, UNVERIFIED
-}
-
 export function pbrParams(m) {
 const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
 const p = {
@@ -33,24 +69,28 @@ if (m.blending === 2) p.blending = 'additive';
 return p;
 }
 
+const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = m[slot]; if (t) s += `|${slot}:${t.uuid}:${t.version}:${t.image ? 1 : 0}`; } return s; };
+// cheap per-frame change signature (NO allocation of params/textures, NO pixel reads). conv.sig === materialSig(m) by construction.
+export function materialSig(m, { exportNodeMaterial = null } = {}) {
+  if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;
+  const c = m.color, e = m.emissive;
+  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
+}
+const customCache = new WeakMap(); // NodeMaterial → { version, v }
+function customNode(m) { let c = customCache.get(m); if (!c || c.version !== m.version) { c = { version: m.version, v: isCustomNode(m) }; customCache.set(m, c); } return c.v; }
 export function materialToParams(m, { exportNodeMaterial = null, three = null, tslOptions = {} } = {}) {
-const params = pbrParams(m);
-const textures = {}; let tsig = '';
-for (const slot of TEX_SLOTS) {
-const t = m[slot]; if (!t) continue;
-const d = textureData(t);
-tsig += `|${slot}:${t.uuid}:${t.version}`;
-if (d) textures[slot] = d;
-}
-const hasTex = Object.keys(textures).length > 0;
-const base = `${params.color}|${params.opacity}|${+params.transparent}|${m.side}|${+params.flatShading}|${params.roughness}|${params.metalness}|${params.emissive}|${params.emissiveIntensity}|${params.alphaTest}|${+params.visible}|${params.blending ?? ''}|${params.clearcoat ?? ''}|${params.transmission ?? ''}${tsig}`;
-if (m.isNodeMaterial && isCustomNode(m)) {
-if (!exportNodeMaterial) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig: `pbr:${base}`, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
-let c = nodeCache.get(m);
-if (!c || c.version !== m.version) { c = { version: m.version, package: exportNodeMaterial(m, { ...tslOptions }) }; nodeCache.set(m, c); }
-return { kind: 'wgsl', package: c.package, fallbackParams: params, sig: `wgsl:${m.uuid}:${m.version}` };
-}
-return { kind: 'pbr', params, textures: hasTex ? textures : null, sig: `pbr:${base}`, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
+  const params = pbrParams(m);
+  const textures = {};
+  for (const slot of TEX_SLOTS) { const t = m[slot]; if (!t) continue; const d = textureData(t); if (d) textures[slot] = d; }
+  const hasTex = Object.keys(textures).length > 0;
+  const sig = materialSig(m, { exportNodeMaterial });
+  if (m.isNodeMaterial && customNode(m)) {
+    if (!exportNodeMaterial) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
+    let c = nodeCache.get(m);
+    if (!c || c.version !== m.version) { c = { version: m.version, package: exportNodeMaterial(m, { ...tslOptions }) }; nodeCache.set(m, c); }
+    return { kind: 'wgsl', package: c.package, fallbackParams: params, sig };
+  }
+  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined };
 }
 // a *NodeMaterial with no custom *Node slot set renders exactly like its non-node twin → plain PBR is faithful
 function hasNodes(m) {

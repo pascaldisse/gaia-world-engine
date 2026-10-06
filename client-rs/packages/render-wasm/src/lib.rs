@@ -526,7 +526,7 @@ o.into()
                 let v = match t {
                     Some(t) => {
                         let o = js_sys::Object::new();
-                        for (k, x) in [("scene", t.scene_ms), ("upscale", t.upscale_ms), ("total", t.total_ms)] {
+                        for (k, x) in [("scene", t.scene_ms), ("upscale", t.upscale_ms), ("shadow", t.shadow_ms), ("span", t.span_ms), ("total", t.total_ms)] {
                             let _ = Reflect::set(&o, &JsValue::from_str(k), &JsValue::from_f64(x));
                         }
                         o.into()
@@ -541,6 +541,20 @@ o.into()
         }))
     }
 
+    /// r5-adapter: Promise of the last skin compute pass GPU ms (null when no skins / no timestamps / a sample in flight). Call right after renderGpuTimed.
+    #[wasm_bindgen(js_name = skinGpuMs)]
+    pub fn skin_gpu_ms(&mut self) -> Promise {
+        Promise::new(&mut |resolve, _| {
+            let r = SendWrap(resolve.clone());
+            let asked = self.core.read_skin_ms_async(move |v| {
+                let r = r;
+                let _ = r.0.call1(&JsValue::NULL, &v.map(JsValue::from_f64).unwrap_or(JsValue::NULL));
+            });
+            if !asked {
+                let _ = resolve.call1(&JsValue::NULL, &JsValue::NULL);
+            }
+        })
+    }
     /// `render()` + a Promise resolving to ms from submit until the GPU queue reports the work done
     /// (wall clock: GPU + queue latency — NOT pure GPU time; see NOTES). Resolves -1 if no frame.
     #[wasm_bindgen(js_name = renderTimed)]

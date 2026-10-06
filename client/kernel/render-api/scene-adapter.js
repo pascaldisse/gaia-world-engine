@@ -384,6 +384,7 @@ const treeVis = parentVis && o.visible !== false; // children inherit this; laye
 // r10: three draws (main pass AND shadow pass — ShadowNode adopts camera.layers.mask when the shadow camera sits on layer 0 only) only objects whose layers intersect the camera's. Honour it, else layer-gated helpers (depth-only proxies) draw in the main view.
 const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frameCamera.layers) || ((o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) && isShadowOnly(o)));
 if (!vis && treeVis && (o.isMesh || o.isLight)) stats.layerCulled = (stats.layerCulled ?? 0) + 1;
+if (vis && treeVis && o.isMesh && isShadowOnly(o)) { stats.shadowOnly = (stats.shadowOnly ?? 0) + 1; if (o.isInstancedMesh) stats.shadowOnlyInst = (stats.shadowOnlyInst ?? 0) + (o.count ?? 0); } // r10 census
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
@@ -489,7 +490,7 @@ stats,
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
-epoch++; stats.frames++; stats.layerCulled = 0; frameScene = scene; frameCamera = camera;
+epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();
 const seen = new Set();

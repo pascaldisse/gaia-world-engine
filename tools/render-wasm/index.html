@@ -55,10 +55,15 @@ try {
   ms.sort((a, b) => a - b);
   const pick = (p) => ms[Math.min(ms.length - 1, Math.floor(ms.length * p))];
   result.submit_to_done_ms = ms.length ? { n: ms.length, min: ms[0], median: pick(0.5), p95: pick(0.95), max: ms[ms.length - 1] } : null;
+  // GPU timestamps (pure GPU time): one sample in flight; frames where the readback is still mapped resolve null.
+  const gpu = { scene: [], upscale: [], total: [] }; let nulls = 0;
+  for (let i = 0; i < FRAMES; i++) { const t = await backend.renderFrameGpuTimed(); if (t) for (const k in gpu) gpu[k].push(t[k]); else nulls++; await new Promise(requestAnimationFrame); }
+  const stat = (a) => { a.sort((x, y) => x - y); const p = (q) => a[Math.min(a.length - 1, Math.floor(a.length * q))]; return a.length ? { n: a.length, min: a[0], median: p(0.5), p95: p(0.95), max: a[a.length - 1] } : null; };
+  result.gpu_timestamp_ms = { scene: stat(gpu.scene), upscale: stat(gpu.upscale), total: stat(gpu.total), null_frames: nulls, has_timestamps: backend.gpu.hasTimestamps() };
   result.draw_calls = backend.gpu.drawCalls();
   result.sizes = Array.from(backend.gpu.sizes()); // [outW,outH,intW,intH]
   backend.renderFrame(0);
-  log(`asylum · ${result.stats.instances} instances · ${result.draw_calls} draws · internal ${result.sizes[2]}x${result.sizes[3]} → ${result.sizes[0]}x${result.sizes[1]} · submit→done median ${result.submit_to_done_ms?.median.toFixed(2)} ms`);
+  log(`asylum · ${result.stats.instances} instances · ${result.draw_calls} draws · internal ${result.sizes[2]}x${result.sizes[3]} → ${result.sizes[0]}x${result.sizes[1]} · submit→done median ${result.submit_to_done_ms?.median.toFixed(2)} ms · GPU total median ${result.gpu_timestamp_ms?.total?.median?.toFixed(2)} ms`);
   result.ok = true;
 } catch (e) {
   result.error = String(e?.stack || e); log('ERROR ' + result.error);

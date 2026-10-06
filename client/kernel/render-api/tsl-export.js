@@ -23,18 +23,19 @@ const b = new Ctor(obj, r);
 b.scene = sc; b.material = material; b.camera = cam; b.context.material = material;
 b.lightsNode = null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
 b.build();
+  const semantics = builtinSemantics(THREE);
 const groups = b.getBindings().map((g) => ({
 group: g.index, name: g.name,
 bindings: g.bindings.map((bd, i) => {
 const out = { binding: i, name: bd.name, kind: kindOf(bd), stage: stageOf(bd.visibility) };
 if (bd.isUniformsGroup) {
 out.size = bd.bytesPerElement ? undefined : undefined;
-out.uniforms = bd.uniforms.map((u) => ({ name: u.name, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) }));
+out.uniforms = bd.uniforms.map((u) => ({ name: u.name, semantic: semantics.get(u.nodeUniform?.node?.uuid) ?? (/^camera|^time$|^deltaTime$/.test(u.name) ? u.name : null), type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) }));
 } else if (bd.texture) out.textureUuid = bd.texture.uuid;
 return out;
 }),
 }));
-return {
+const pkg = {
 vertex: b.vertexShader, fragment: b.fragmentShader,
 bindGroups: groups,
 attributes: b.getAttributesArray().map((a, i) => ({ name: a.name, type: a.type, location: i })),
@@ -42,6 +43,11 @@ varyings: (b.varyings ?? []).map((v) => ({ name: v.name, type: v.type })),
 vertexEntry: 'main', fragmentEntry: 'main',
 material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite },
 };
+// live three Texture per textureUuid, NON-enumerable → JSON stays as-is; backends read pixels from it (wgpu-backend createShaderMaterial).
+const textureSources = {};
+for (const g of b.getBindings()) for (const bd of g.bindings) if (bd.texture) textureSources[bd.texture.uuid] = bd.texture;
+Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
+return pkg;
 }
 
 function toPlain(v) {
@@ -69,4 +75,14 @@ r.hasFeature = (f) => fs.has(f);
 r.backend.utils = { getTextureSampleData: () => ({ primarySamples: 1, isMSAA: false }) };
 r.backend.compatibilityMode = false;
 return (_r = r);
+}
+
+// Built-in TSL uniforms the HOST must supply (RENDER-API §6.4), keyed by the node uuid of three's own singletons.
+// Object-group members get generated names (nodeUniformN), so the name alone cannot tell the host what they mean.
+function builtinSemantics(THREE) {
+  const T = THREE.TSL ?? THREE, m = new Map();
+  const put = (node, sem) => { const u = node?.uniformNode ?? node; if (u?.uuid) m.set(u.uuid, sem); };
+  for (const n of ['modelWorldMatrix', 'modelNormalMatrix', 'modelWorldMatrixInverse', 'modelPosition', 'modelScale', 'modelViewPosition', 'modelDirection',
+    'cameraNear', 'cameraFar', 'time', 'deltaTime', 'frameId']) put(T[n], n);
+  return m;
 }

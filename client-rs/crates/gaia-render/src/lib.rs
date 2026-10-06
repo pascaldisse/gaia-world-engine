@@ -4,6 +4,9 @@
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
 pub mod scene;
 pub mod shadow;
+mod three_material;
+mod timing_async;
+pub use three_material::ThreeFrame;
 
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
@@ -399,6 +402,8 @@ struct Timing {
     readback: wgpu::Buffer,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     period_ns: f32,
+    /// readback mapped by `request_timings_async` and not yet unmapped (timing_async.rs).
+    pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -520,6 +525,10 @@ pub struct RenderCore {
     static_gen: u64,
     /// Last frame had a timed shadow span (timestamp slots 4,5).
     shadow_timed: bool,
+    /// three.js TSL packages run as-is (three_material.rs).
+    three: three_material::ThreeMaterials,
+    /// value fed to TSL `time` (seconds); host-advanced via `set_three_time`.
+    three_time: f32,
 }
 
 impl RenderCore {
@@ -614,6 +623,7 @@ impl RenderCore {
                     mapped_at_creation: false,
                 }),
                 period_ns: queue.get_timestamp_period(),
+                pending: Default::default(),
             });
         Self {
             camera: Camera {
@@ -652,6 +662,8 @@ impl RenderCore {
             frame,
             targets: None,
             timing,
+            three: Default::default(),
+            three_time: 0.0,
         }
     }
 
@@ -980,7 +992,27 @@ impl RenderCore {
         Ok(())
     }
 
+    /// three.js TSL material package (tsl-export.js JSON) run as-is: separate vertex + fragment WGSL,
+    /// naga-reflected bindings, three's camera/object uniforms filled from gaia frame data,
+    /// attributes by name. `textures`: binding var name (e.g. `nodeUniform4`) -> texture id.
+    pub fn create_three_material(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        package_json: &str,
+        textures: HashMap<String, u32>,
+    ) -> Result<(), String> {
+        let m = three_material::build(device, package_json, textures, INTERNAL_FORMAT, DEPTH_FORMAT)?;
+        self.materials.remove(&id);
+        self.three.remove(id);
+        self.three.mats.insert(id, m);
+        Ok(())
+    }
+    pub fn set_three_time(&mut self, seconds: f32) {
+        self.three_time = seconds;
+    }
     pub fn remove_material(&mut self, id: u32) {
+        self.three.remove(id);
         self.materials.remove(&id);
     }
 
@@ -1246,6 +1278,23 @@ impl RenderCore {
             &self.blend_materials,
             self.timing.as_ref().map(|tm| (&tm.set, 4, 5)),
         );
+        let three_list: Vec<(u32, u32, [f32; 16])> = if self.three.mats.is_empty() {
+            Vec::new()
+        } else {
+            let mut v: Vec<_> = self.instances.iter().filter(|(_, i)| self.three.is_three(i.material)).map(|(k, i)| (*k, i.material, i.transform)).collect();
+            v.sort_by_key(|x| x.0);
+            v
+        };
+        if !three_list.is_empty() {
+            let far = self.camera.zfar.unwrap_or(f32::INFINITY);
+            let proj = match self.camera.zfar {
+                Some(f) => Mat4::perspective_rh(self.camera.yfov, aspect, self.camera.znear, f),
+                None => Mat4::perspective_infinite_rh(self.camera.yfov, aspect, self.camera.znear),
+            };
+            let frame = ThreeFrame { view: self.camera.world.inverse(), proj, camera_world: self.camera.world, near: self.camera.znear, far, time: self.three_time };
+            self.three.prepare(device, queue, &three_list, &frame, &self.textures, &self.white, &self.sampler);
+        }
+        let t = self.targets.as_ref().expect("targets");
         let c = self.opts.clear_color;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1317,6 +1366,12 @@ impl RenderCore {
                     pass.draw_indexed(0..m.index_count, 0, range.clone());
                     draws += 1;
                 }
+            }
+            if !three_list.is_empty() {
+                let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
+                let meshes = &self.meshes;
+                let mesh_of = |m: u32| meshes.get(&m).map(|g| (g.vertices.slice(..), g.indices.slice(..), g.index_count));
+                draws += self.three.draw(&mut pass, &three_list, &mesh_of, &inst_mesh);
             }
             self.last_draw_calls = draws;
         }
@@ -1415,6 +1470,8 @@ impl RenderCore {
     /// Encode a copy of this frame's timestamps; call after `render`, before submit.
     pub fn encode_timing_readback(&self, encoder: &mut wgpu::CommandEncoder) -> bool {
         match &self.timing {
+            // async readback still mapped → copying into it would be a validation error; skip this frame's sample.
+            Some(tm) if tm.pending.load(std::sync::atomic::Ordering::Acquire) => false,
             Some(tm) => {
                 encoder.copy_buffer_to_buffer(&tm.resolve, 0, &tm.readback, 0, 32);
                 if self.shadow_timed {

@@ -1,0 +1,25 @@
+<!doctype html><meta charset=utf-8><title>render-wasm three TSL strip</title>
+<style>body{margin:0;background:#000}canvas{display:block;float:left}</style><script type=importmap>{"imports":{"three":"/nm/three/build/three.webgpu.js","three/webgpu":"/nm/three/build/three.webgpu.js","three/tsl":"/nm/three/build/three.tsl.js"}}</script>
+<script type=module>
+// three r180 TSL packages through the REAL browser path: three scene → scene-adapter(exportNodeMaterial) → wgpu-backend.createShaderMaterial
+// → wasm createThreeMaterial. One backend per 256² canvas. Diff vs three-ref.html. bun run.mjs --page three.html --w 1024 --h 256
+import * as THREE from 'three/webgpu';
+import * as wasm from '/pkg/render_wasm.js';
+import { createWgpuBackend } from '/kernel/wgpu-backend.js';
+import { createSceneAdapter } from '/kernel/scene-adapter.js';
+import { exportNodeMaterial } from '/kernel/tsl-export.js';
+import { NAMES, CLEAR, SIZE, buildMaterial, makeScene } from '/three-materials.js';
+const R = window.__result = { done: false, log: [] };
+for (const name of NAMES) {
+  try {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = SIZE; canvas.style.width = canvas.style.height = SIZE + 'px'; document.body.appendChild(canvas);
+    const backend = await createWgpuBackend({ canvas, wasm, renderHeight: SIZE, options: { clearColor: [...CLEAR, 1] } });
+    const adapter = createSceneAdapter(backend, { exportNodeMaterial, three: THREE, tslOptions: { THREE } });
+    const { scene, cam } = makeScene(THREE, await buildMaterial(name, THREE));
+    adapter.sync(scene, cam);
+    for (let i = 0; i < 3; i++) { backend.renderFrame(0); await new Promise(requestAnimationFrame); }
+    R.log.push(name + ' ok draws=' + backend.gpu.drawCalls() + ' degraded=' + [...adapter.stats.degraded].join(',') + ' unsupported=' + [...(adapter.stats.unsupported ?? [])].join(','));
+  } catch (e) { R.log.push(name + ' EXC ' + (e.stack || e)); }
+}
+R.ok = true; R.done = true;
+</script>

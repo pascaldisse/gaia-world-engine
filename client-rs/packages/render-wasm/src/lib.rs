@@ -285,6 +285,23 @@ impl GaiaRender {
             .map_err(err)?;
         Ok(id)
     }
+    /// three r180 TSL package (tsl-export.js JSON, as-is) → material id. `texture_names[i]` = WGSL binding var
+    /// name (package `bindGroups[].bindings[].name`), `texture_ids[i]` = id from createTexture. gaia-render NOTES 'Round 3'.
+    #[wasm_bindgen(js_name = createThreeMaterial)]
+    pub fn create_three_material(&mut self, package_json: String, texture_names: Array, texture_ids: &[u32]) -> Result<u32, JsError> {
+        if texture_names.length() as usize != texture_ids.len() {
+            return Err(err("createThreeMaterial: texture_names/texture_ids length mismatch"));
+        }
+        let tex: HashMap<String, u32> = texture_names.iter().zip(texture_ids).map(|(n, &i)| (n.as_string().unwrap_or_default(), i)).collect();
+        let id = self.id("material");
+        self.core.create_three_material(&self.device, id, &package_json, tex).map_err(err)?;
+        Ok(id)
+    }
+    /// seconds fed to three `time` semantic uniforms.
+    #[wasm_bindgen(js_name = setThreeTime)]
+    pub fn set_three_time(&mut self, seconds: f32) {
+        self.core.set_three_time(seconds);
+    }
     #[wasm_bindgen(js_name = destroyMaterial)]
     pub fn destroy_material(&mut self, id: u32) {
         self.core.remove_material(id);
@@ -343,7 +360,7 @@ impl GaiaRender {
     pub fn draw_calls(&self) -> u32 {
         self.core.last_draw_calls
     }
-    /// device has TIMESTAMP_QUERY (core records them; gaia-render has NO async readback yet → NOTES).
+    /// device has TIMESTAMP_QUERY (readback: renderGpuTimed → gaia-render request_timings_async).
     #[wasm_bindgen(js_name = hasTimestamps)]
     pub fn has_timestamps(&self) -> bool {
         self.has_timestamps
@@ -352,6 +369,10 @@ impl GaiaRender {
     /// Reconfigures the surface when canvas.width/height changed, encodes + submits one frame.
     /// Returns false when no surface texture was available this tick.
     pub fn render(&mut self) -> Result<bool, JsError> {
+        self.render_inner(false).map(|(drawn, _)| drawn)
+    }
+    /// encode + submit; `timing` → also copy this frame's timestamps (false if a readback is still mapped).
+    fn render_inner(&mut self, timing: bool) -> Result<(bool, bool), JsError> {
         let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
         if (w, h) != (self.config.width, self.config.height) {
             self.config.width = w;
@@ -362,9 +383,9 @@ impl GaiaRender {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
-                return Ok(false);
+                return Ok((false, false));
             }
-            _ => return Ok(false),
+            _ => return Ok((false, false)),
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.view_format),
@@ -372,9 +393,36 @@ impl GaiaRender {
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.core.render(&self.device, &self.queue, &mut encoder, &view, UpscaleSize { width: w, height: h });
+        let copied = timing && self.core.encode_timing_readback(&mut encoder);
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
-        Ok(true)
+        Ok((true, copied))
+    }
+    /// `render()` + Promise of GPU TIMESTAMP ms for this frame: {scene, upscale, total} (pure GPU time, unlike renderTimed).
+    /// Resolves null when no frame / no TIMESTAMP_QUERY / previous sample still mapped (one sample in flight).
+    #[wasm_bindgen(js_name = renderGpuTimed)]
+    pub fn render_gpu_timed(&mut self) -> Result<Promise, JsError> {
+        let (drawn, copied) = self.render_inner(true)?;
+        Ok(Promise::new(&mut |resolve, _| {
+            let r = SendWrap(resolve.clone());
+            let asked = drawn && copied && self.core.request_timings_async(move |t| {
+                let r = r;
+                let v = match t {
+                    Some(t) => {
+                        let o = js_sys::Object::new();
+                        for (k, x) in [("scene", t.scene_ms), ("upscale", t.upscale_ms), ("total", t.total_ms)] {
+                            let _ = Reflect::set(&o, &JsValue::from_str(k), &JsValue::from_f64(x));
+                        }
+                        o.into()
+                    }
+                    None => JsValue::NULL,
+                };
+                let _ = r.0.call1(&JsValue::NULL, &v);
+            });
+            if !asked {
+                let _ = resolve.call1(&JsValue::NULL, &JsValue::NULL);
+            }
+        }))
     }
 
     /// `render()` + a Promise resolving to ms from submit until the GPU queue reports the work done

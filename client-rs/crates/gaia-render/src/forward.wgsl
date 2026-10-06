@@ -18,7 +18,7 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
-    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map)
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic)
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 // ---- r6 probe GI (gi.rs): atlases read back from three's GI compute, sampled with the SAME math as client/kernel/gi/gi-open-nodes.js ----
@@ -276,6 +276,10 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     if (material.flags.x > 0.5) {
+        if (material.flags.z > 0.5) { // unlit but tone-mapped (three MeshBasicMaterial toneMapped:true): exposure + Reinhard, no lighting
+            let eu = base.rgb * frame.ambient.w;
+            return vec4<f32>(eu / (vec3<f32>(1.0) + eu), base.a);
+        }
         return base; // unlit: authored colour as-is (backdrops, sky domes, additive cards)
     }
     var n = normalize(in.normal);

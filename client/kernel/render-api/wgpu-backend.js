@@ -131,6 +131,26 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     const emBase = !!(textures?.emissiveMap?.key && textures.emissiveMap.key === textures.map?.key);
     return { owned, args: [Float32Array.of(r, g, b, params.opacity ?? 1), params.metalness ?? 0, params.roughness ?? 1, tex, params.alphaTest > 0 ? params.alphaTest : -1, emBase ? Float32Array.of(e[0] * k, e[1] * k, e[2] * k, 1) : Float32Array.of(e[0] * k, e[1] * k, e[2] * k)] };
   }
+  // r8: three material state the core takes as FLAGS (setMaterialFlags): blend (transparent / opacity<1 / additive), unlit (plain Basic), depthWrite:false, per-object renderOrder
+  // (core order is per MATERIAL: last node to set it wins — Eden sky layers have one material each), toneMapped (unlit only). No game names.
+  const matFlags = new Map(); // MaterialId → { blend, unlit, dw, toneMapped, ro, pushed }
+  function flagsFromParams(params = {}) {
+    const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
+    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, toneMapped: params.toneMapped !== false };
+  }
+  function pushFlags(id) {
+    const f = matFlags.get(id); if (!f) return;
+    const nondefault = f.blend || f.unlit || f.dw >= 0 || f.ro;
+    if (!nondefault && !f.pushed) return;
+    gpu.setMaterialFlags(id, f.blend, f.unlit, f.dw, f.ro, -1);
+    if (f.unlit) gpu.setMaterialUnlitToneMapped(id, f.toneMapped);
+    f.pushed = !!nondefault;
+  }
+  function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, pushed: prev?.pushed ?? false }); pushFlags(id); }
+  function setMatOrder(id, ro) { // renderOrder is a node property; the core sorts per material
+    let f = matFlags.get(id); if (!f) { f = { blend: 0, unlit: false, dw: -1, toneMapped: true, ro: 0, pushed: false }; matFlags.set(id, f); }
+    if ((f.ro || 0) === (ro || 0)) return; f.ro = ro || 0; pushFlags(id);
+  }
   let lightsDirty = false;
   let sunId = 0;
 
@@ -222,6 +242,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     createMaterial(params = {}, textures = null) {
       const { owned, args } = matArgs(params, textures);
       const id = gpu.createMaterial(...args);
+      setMatFlags(id, params);
       if (owned.length) matTextures.set(id, owned);
       return id;
     },
@@ -229,7 +250,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     updateMaterial(id, params = {}, textures = null) {
       const { owned, args } = matArgs(params, textures);
       const old = matTextures.get(id) || [];
-      gpu.updateMaterial(id, ...args);
+      gpu.updateMaterial(id, ...args); setMatFlags(id, params);
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
@@ -255,7 +276,7 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     // r4: changed live uniform values [{key,value}] (tsl-export pkg.live.update()) → core reflected uniform buffer.
     setShaderUniforms(id, changed) { if (changed.length) gpu.setThreeUniforms(id, JSON.stringify(changed)); },
     destroyMaterial(id) {
-      gpu.destroyMaterial(id);
+      gpu.destroyMaterial(id); matFlags.delete(id);
       for (const h of matTextures.get(id) || []) releaseTexture(h);
       matTextures.delete(id);
     },
@@ -268,8 +289,9 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, static: flags.static, renderOrder: flags.renderOrder || 0 };
       nodes.set(node.id, node); link(node, flags.parent);
+      if (node.renderOrder) setMatOrder(material, node.renderOrder);
       const [pw, pv] = parentState(node); sync(node, pw, pv);
       return node.id;
     },
@@ -278,11 +300,12 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
       if (patch.mat4) node.local = Float64Array.from(asMat(patch.mat4));
       if (patch.visible !== undefined) node.visible = !!patch.visible;
       if (patch.material !== undefined && node.kind === 'instance') node.material = patch.material;
+      if (node.kind === 'instance' && (patch.renderOrder !== undefined || (patch.material !== undefined && node.renderOrder))) { if (patch.renderOrder !== undefined) node.renderOrder = patch.renderOrder || 0; setMatOrder(node.material, node.renderOrder); } // r8: core sorts per material
       if (node.kind === 'instance') {
       if (patch.castShadow !== undefined && patch.castShadow !== node.castShadow) { node.castShadow = !!patch.castShadow; if (node.rid) gpu.setInstanceCastShadow(node.rid, node.castShadow); }
       if (patch.static !== undefined && patch.static !== node.static) { node.static = !!patch.static; if (node.rid) gpu.setInstanceStatic(node.rid, node.static); }
       }
-      // receiveShadow/renderOrder/euler: accepted, no-ops (core receivers = all opaque; no ordering)
+      // receiveShadow/euler: accepted, no-ops (core receivers = all opaque). renderOrder (r8) → material order flag above
       const [pw, pv] = parentState(node); sync(node, pw, pv);
     },
     removeNode(id) {

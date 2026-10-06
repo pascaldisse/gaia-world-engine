@@ -62,7 +62,8 @@ alphaTest: m.alphaTest ?? 0, visible: m.visible !== false,
 roughness: kind === 'lambert' ? 1 : kind === 'basic' ? 1 : (m.roughness ?? 1), metalness: kind === 'standard' || kind === 'physical' ? (m.metalness ?? 0) : 0,
 emissive: rgb(m.emissive ?? { r: 0, g: 0, b: 0 }), emissiveIntensity: m.emissiveIntensity ?? 1,
 };
-if (kind === 'basic') p.unlit = true;
+// r8: Basic = no lighting (three MeshBasic*Material). NOT for a NodeMaterial with custom *Node slots: its look comes from those nodes (TSL package path); the plain-PBR fallback of such a material stays lit (r6: flat white walls).
+if (kind === 'basic' && !(m.isNodeMaterial && hasNodes(m))) { p.unlit = true; p.toneMapped = m.toneMapped !== false; }
 if (kind === 'physical') for (const k of ['clearcoat', 'clearcoatRoughness', 'transmission', 'ior', 'thickness', 'sheen', 'iridescence']) if (m[k]) p[k] = m[k];
 if (m.userData?.preset) p.preset = m.userData.preset;
 if (m.blending === 2) p.blending = 'additive';
@@ -74,7 +75,7 @@ const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = 
 export function materialSig(m, { exportNodeMaterial = null } = {}) {
   if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;
   const c = m.color, e = m.emissive;
-  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
+  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${m.toneMapped}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
 }
 const customCache = new WeakMap(); // NodeMaterial → { version, v }
 function customNode(m) { let c = customCache.get(m); if (!c || c.version !== m.version) { c = { version: m.version, v: isCustomNode(m) }; customCache.set(m, c); } return c.v; }

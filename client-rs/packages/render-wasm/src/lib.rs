@@ -4,7 +4,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use gaia_render::{
-    MaterialBinding, MaterialDesc, RenderCore, RenderOptions, ShaderMaterialDesc, ShadowOptions, UpscaleSize,
+    BlendKind, MaterialBinding, MaterialDesc, MaterialFlags, RenderCore, RenderOptions, ShaderMaterialDesc, ShadowOptions, UpscaleSize,
 };
 use js_sys::{Array, Float32Array, Promise, Reflect, Uint8Array};
 use std::collections::HashMap;
@@ -255,7 +255,19 @@ let core = RenderCore::new(&device, &queue, opts);
         self.core.create_texture_linear(&self.device, &self.queue, id, width, height, rgba).map_err(err)?;
         Ok(id)
     }
-    #[wasm_bindgen(js_name = destroyTexture)]
+        /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
+    #[wasm_bindgen(js_name = setMaterialFlags)]
+    pub fn set_material_flags(&mut self, id: u32, blend: u32, unlit: bool, depth_write: i32, render_order: i32, cast_shadow: i32) {
+        let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), _ => None };
+        self.core.set_material_blend(id, blend != 0);
+        self.core.set_material_flags(&self.device, id, MaterialFlags { blend: b, unlit, depth_write: (depth_write >= 0).then_some(depth_write != 0), render_order, cast_shadow: (cast_shadow >= 0).then_some(cast_shadow != 0), ..Default::default() });
+    }
+    /// unlit materials: apply exposure + Reinhard (three toneMapped:true). Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialUnlitToneMapped)]
+    pub fn set_material_unlit_tone_mapped(&mut self, id: u32, on: bool) {
+        self.core.set_material_unlit_tone_mapped(&self.device, id, on);
+    }
+#[wasm_bindgen(js_name = destroyTexture)]
     pub fn destroy_texture(&mut self, id: u32) {
         self.core.remove_texture(id);
     }

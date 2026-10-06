@@ -34,3 +34,12 @@ Manifest `skinned: { nodes: regex (default '^skinned:'), clip?: regex, maxCharac
 Asylum: `.scratch/asylum-skinned.manifest.json` = scene-export lane's manifest + `skinned.nodes '^skinned:[co]\d{4}_'` → 88 skins / 3302 joints / 82 clips / 9604 channels, 121 MB, 8.5 s. Player parts (`skinned:player*`) excluded (all 36 class bodies sit at the start).
 ## Ambient (lampas/r5-sky)
 Manifest `ambient: {sky:[r,g,b], ground:[r,g,b], scale?}` -> `scenes[0].extras.gaia.ambient {sky,ground}` (colour x scale, linear shader units; engine = hemisphere lerp by n.y). COLOR_0 is passed through if the SOURCE has it (engine multiplies rgb+alpha). DS sky vertex alpha is NOT in the DS glb (companion glb-add-vertex-colors gap, see gaia-render NOTES round 5).
+## Visibility groups (lampas/r6-dgcull)
+Manifest `visibilityGroups?: {draw:'drawGroups', display:'displayGroups', parent:'drawParent'}` = SOURCE node-extras key names (defaults shown; game names live in data). Per node carrying any of them -> `extras.gaia.visibilityGroups`:
+|key|type|meaning|
+|---|---|---|
+|`draw`|int[] sorted/deduped|group bits the node is drawn for (empty = unconstrained)|
+|`display`|int[]|bits the node ACTIVATES (host input for the active set; renderer never reads)|
+|`parent`|string?|source parent name (exact or after first `:` of `<kind>:<name>`)|
+|`parentNode`|int?|OUTPUT node index of that parent (renderer follows it, own `draw` ignored)|
+Parent pruned from output -> its effective draw groups inlined into `draw` + stats warning. Source keys stay on the node verbatim; source root `extras.<draw>` (whole-map table) copied to the output root extras. `stats.visibilityNodes`. Test: `bun test test/scene-export-groups.test.js`. Engine side: gaia-render NOTES round 6.

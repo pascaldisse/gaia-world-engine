@@ -49,3 +49,15 @@ test('live closure per material', () => {
   assert.deepEqual(p1.live.update({}), []);
   const ch = p2.live.update({}); assert.equal(ch.length, 1); assert.deepEqual(ch[0].value, [0, 0, 1]); assert.equal(ch[0].key, u2.uuid);
 });
+// material-slot textures (material.map): builder creates the TextureNode itself -> rebind to THIS material's map + texture matrix
+test('material.map slot rebinds + verify equal', () => {
+  reset();
+  const mkS = (c, t, rep) => { const m = new THREE.MeshStandardNodeMaterial(); m.map = t; t.repeat.set(rep, rep); t.updateMatrix(); m.color.set(c); m.roughness = 0.3 + rep / 10; m.colorNode = null; m.emissiveNode = uniform(new THREE.Color(c)); return m; };
+  for (let i = 0; i < 4; i++) exportNodeMaterial(mkS(0x101010 * (i + 1), tex(i * 40), i + 1), { THREE, cache: 'verify' });
+  assert.equal(structCache.mismatch, 0, structCache.log.join(' | ')); assert.ok(structCache.verified >= 2, JSON.stringify(structCache.reasons) + structCache.log.join('|'));
+  const t5 = tex(99); t5.repeat.set(7, 7); t5.updateMatrix(); const p = exportNodeMaterial(mkS(0xabcdef, t5, 7), { THREE });
+  assert.ok(structCache.hits >= 3);
+  assert.equal(p.bindGroups.flatMap((g) => g.bindings).find((b) => b.textureUuid).textureUuid, t5.uuid);
+  const mat = p.bindGroups.flatMap((g) => g.bindings).filter((b) => b.uniforms).flatMap((b) => b.uniforms).find((u) => u.value?.length === 9);
+  assert.ok(mat && mat.value[0] === 7, JSON.stringify(mat));
+});

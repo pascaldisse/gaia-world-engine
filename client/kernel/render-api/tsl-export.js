@@ -77,7 +77,7 @@ return pkg;
 }
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
-function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null }) {
+function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null, pre = [] }) {
 const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r;
 const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial.has(key) ? initial.get(key) : toPlain(get())])); // initial = the package's own shipped values (rebound builder-singleton uniforms carry a stale value until the first update) // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
@@ -87,6 +87,7 @@ get version() { return version; },
 update({ object = obj, camera = cam, scene = sc, time } = {}) {
 frame.update(); if (time != null) frame.time = time;
 frame.renderId++; frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
+for (const f of pre) f();
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
 for (const n of updateNodes) frame.updateNode(n);
 const changed = [];
@@ -180,7 +181,7 @@ function structWalk(THREE, material, { object = null, geometry = null, scene = n
 const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
 const parts = [], nodes = [], ids = new Map();
 // material level
-for (const k of Object.keys(material)) { const v = material[k]; if (v && v.isTexture) return { refuse: 'material-texture-slot:' + k }; }
+for (const k of Object.keys(material).sort()) { const v = material[k]; if (v && v.isTexture) parts.push(`S:${k}:${v.constructor?.name}:${v.format}:${v.type}:${v.colorSpace}:${+!!v.isDepthTexture}:${+!!v.isArrayTexture}:${+!!v.isCubeTexture}:${v.image?.depth ?? ''}`); }
 parts.push(`M:${material.type}:${material.constructor?.name}:${primSig(material, false).replace(/(opacity|roughness|metalness|ior|thickness|clearcoat\w*|sheen\w*|iridescence\w*|emissiveIntensity|envMapIntensity|reflectivity|specularIntensity|dispersion|anisotropy\w*|attenuationDistance|lightMapIntensity|aoMapIntensity|bumpScale|displacementScale|displacementBias|shininess|linewidth|size|dashSize|gapSize|scale|polygonOffsetFactor|polygonOffsetUnits|alphaTest|blendAlpha|stencilRef|depthFunc)=[^;]*;/g, (m, k2) => (k2 === 'alphaTest' ? `alphaTest=${material.alphaTest > 0 ? 1 : 0};` : ''))}`);
 const g = object?.geometry ?? geometry; const o = object;
 parts.push(`O:${o ? (o.isInstancedMesh ? 'I' : '') + (o.isSkinnedMesh ? 'S' : '') + (o.isBatchedMesh ? 'B' : '') + (o.isPoints ? 'P' : '') + (o.isLine ? 'L' : '') + (o.isSprite ? 'Q' : '') : 'M'}`);
@@ -219,30 +220,32 @@ C.rebindMs += nowMs() - t0;
 if (pkg) {
 if (mode !== 'verify') { C.hits++; return pkg; }
 const full = buildPackage(material, opts); C.verified++;
-const diff = comparePackages(pkg, full, tpl.pkg);
+const diff = comparePackages(pkg, full, tpl);
 if (diff) { C.mismatch++; why('MISMATCH', `${material.name || material.type}: ${diff}`); return full; }
 C.hits++; return full;
 }
 }
 t0 = nowMs(); const pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.misses++;
 if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } C.wgslOf.set(w.key, k); }
-if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } C.map.set(w.key, t); }
+if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } C.map.set(w.key, t); }
 return pkg;
 }
 const strHash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
 // template validation + slot index: every non-shared binding must resolve to a walked node (else rebind would alias M0's data into M1 = wrong pixels).
-function templateBinds(t) {
-const { pkg, nodes } = t; const idx = new Map(nodes.map((n, i) => [n.uuid, i]));
+function templateBinds(t, material) {
+const { pkg, nodes } = t;
+t.slotOf = new Map(); for (const k of Object.keys(material)) if (material[k]?.isTexture) t.slotOf.set(material[k].uuid, k);
+t.slotMatrix = new Map(); t.slotTexNodes = new Set(); for (const n of pkg.tpl.updateNodes) if (n.isTextureNode && n.value?.uuid && t.slotOf.has(n.value.uuid) && !nodes.some((x) => x.uuid === n.uuid)) { t.slotTexNodes.add(n.uuid); if (n._matrixUniform) t.slotMatrix.set(n._matrixUniform.uuid, t.slotOf.get(n.value.uuid)); } const idx = new Map(nodes.map((n, i) => [n.uuid, i]));
 const lightKeys = new Set(); for (const n of pkg.tpl.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightKeys.add(v.uuid);
 t.texNode = new Map(); for (const n of nodes) if (n.isTextureNode && n.value?.uuid) t.texNode.set(n.value.uuid, n);
 t.bufNode = new Map(); for (const n of nodes) if (n.value?.isBufferAttribute) t.bufNode.set(n.value, n);
 t.uniNode = new Map(); for (const { key, node } of pkg.tpl.liveUniforms) if (node) t.uniNode.set(key, node);
 for (const g of pkg.bindGroups) for (const b of g.bindings) {
-if (b.textureUuid && !t.texNode.has(b.textureUuid)) return `texture-unmapped:${b.name}`;
+if (b.textureUuid && !t.texNode.has(b.textureUuid) && !t.slotOf.has(b.textureUuid)) return `texture-unmapped:${b.name}`;
 if (b.kind === 'storage-buffer') { const a = pkg.bufferSources[`${g.group}.${b.binding}`]; if (!t.bufNode.has(a)) return `buffer-unmapped:${b.name}`; }
 }
 if (Object.keys(pkg.attributeSources).length) return 'node-attributes';
-for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
+for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !t.slotMatrix.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
 return null;
 }
 const SHARED_OK = new Set(); // reserved: process-wide singleton uniform nodes proven shared
@@ -255,11 +258,12 @@ const obj = opts.object ?? new THREE.Mesh(opts.geometry ?? new THREE.BoxGeometry
 obj.updateMatrixWorld?.();
 const cam = opts.camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000), sc = opts.scene ?? new THREE.Scene();
 const textureSources = {}, bufferSources = {};
-const texUuid = (u) => { const n = t.texNode.get(u), n1 = map.get(n.uuid) ?? n; const tx = n1.value; textureSources[tx.uuid] = tx; return tx.uuid; };
+const texUuid = (u) => { let tx; if (t.texNode.has(u)) { const n = t.texNode.get(u), n1 = map.get(n.uuid) ?? n; tx = n1.value; } else tx = material[t.slotOf.get(u)]; if (!tx?.isTexture) throw new Error('slot texture missing: ' + t.slotOf.get(u)); textureSources[tx.uuid] = tx; return tx.uuid; };
 const groups = T.bindGroups.map((g) => ({ group: g.group, name: g.name, bindings: g.bindings.map((b) => {
 const o = { ...b };
 if (b.uniforms) o.uniforms = b.uniforms.map((u) => {
-const n0 = t.uniNode.get(u.key); const n1 = n0 && m(n0);
+const n0 = t.uniNode.get(u.key); if (n0 && t.slotMatrix.has(n0.uuid)) return { ...u, value: toPlain(material[t.slotMatrix.get(n0.uuid)]?.matrix) };
+const n1 = n0 && m(n0);
 if (!n0 || n1 === n0) return { ...u };
 const src = u.source?.kind === 'uniform' ? { ...u.source, uuid: n1.uuid, name: n1.name || null } : u.source;
 return { ...u, key: n1.uuid, source: src, value: toPlain(n1.value) };
@@ -273,17 +277,19 @@ material: { name: material.name, type: material.type, transparent: !!material.tr
 Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
 Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: false });
 Object.defineProperty(pkg, 'attributeSources', { value: {}, enumerable: false });
-const live = T.tpl.liveUniforms.map(({ key, node, get }) => { const n1 = node && m(node); return !node || n1 === node ? { key, get } : { key: n1.uuid, get: () => n1.value }; });
-const upd = T.tpl.updateNodes.map(m), updB = T.tpl.updateBeforeNodes.map(m);
+const live = T.tpl.liveUniforms.map(({ key, node, get }) => { if (node && t.slotMatrix.has(node.uuid)) { const sl = t.slotMatrix.get(node.uuid); return { key, get: () => material[sl]?.matrix }; } const n1 = node && m(node); return !node || n1 === node ? { key, get } : { key: n1.uuid, get: () => n1.value }; });
+const upd = T.tpl.updateNodes.filter((n) => !t.slotTexNodes.has(n.uuid)).map(m), updB = T.tpl.updateBeforeNodes.map(m);
+const pre = [...new Set(t.slotMatrix.values())].map((sl) => () => { const x = material[sl]; if (x?.matrixAutoUpdate) x.updateMatrix(); });
 const initial = new Map(); for (const g of groups) for (const b of g.bindings) for (const u of b.uniforms ?? []) if (u.key) initial.set(u.key, u.value);
-defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes: upd, updateBeforeNodes: updB, live, initial });
+defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes: upd, updateBeforeNodes: updB, live, initial, pre });
 Object.defineProperty(pkg, 'tpl', { enumerable: false, value: { updateNodes: upd, updateBeforeNodes: updB, liveUniforms: live } });
 return pkg;
 }
 // rebound vs fully built: identical WGSL + identical JSON except material meta; same texture/buffer sources; same uniform key sets. null = equal.
-function comparePackages(a, b, tplPkg) {
+function comparePackages(a, b, tpl) {
 if (a.vertex !== b.vertex || a.fragment !== b.fragment) return 'WGSL differs (struct key collision)';
 const ja = JSON.parse(JSON.stringify(a)), jb = JSON.parse(JSON.stringify(b)); delete ja.material.name; delete jb.material.name;
+for (const j of [ja, jb]) for (const g of j.bindGroups) for (const b of g.bindings) for (const u of b.uniforms ?? []) if (u.source?.kind === 'material' || u.source?.kind === 'reference' || tpl.slotMatrix?.has(u.key)) u.value = null; // builder-singleton reference uniforms hold the PREVIOUS material's value at ship time; live.update's first call corrects it (initial-map logic)
 const sa = JSON.stringify(ja), sb = JSON.stringify(jb);
 if (sa !== sb) { let i = 0; while (sa[i] === sb[i]) i++; return `JSON differs @${i}: rebound ${sa.slice(Math.max(0, i - 60), i + 80)} <> built ${sb.slice(Math.max(0, i - 60), i + 80)}`; }
 for (const k of ['textureSources', 'bufferSources']) { const ka = Object.keys(a[k]), kb = Object.keys(b[k]); if (ka.join() !== kb.join()) return `${k} keys differ`; for (const x of ka) if (a[k][x] !== b[k][x]) return `${k}[${x}] object differs`; }

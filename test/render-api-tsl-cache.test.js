@@ -58,6 +58,43 @@ test('material.map slot rebinds + verify equal', () => {
   const t5 = tex(99); t5.repeat.set(7, 7); t5.updateMatrix(); const p = exportNodeMaterial(mkS(0xabcdef, t5, 7), { THREE });
   assert.ok(structCache.hits >= 3);
   assert.equal(p.bindGroups.flatMap((g) => g.bindings).find((b) => b.textureUuid).textureUuid, t5.uuid);
-  const mat = p.bindGroups.flatMap((g) => g.bindings).filter((b) => b.uniforms).flatMap((b) => b.uniforms).find((u) => u.value?.length === 9);
-  assert.ok(mat && mat.value[0] === 7, JSON.stringify(mat));
+  // r10-6: the texture-matrix uniform is a setup-created node now (rebound by walk slot); like a full build it ships the pre-update value, the first live.update delivers THIS texture's matrix
+const ch = p.live.update({}); assert.ok(ch.some((c) => Array.isArray(c.value) && c.value.length === 9 && c.value[0] === 7), JSON.stringify(ch));
+});
+// r10-6: key computed at setup->analyze on the builder's own post-setup graph: setup-created uniforms + custom subclasses rebind by slot; hit skips analyze+generate
+import { bufferAttribute } from 'three/tsl';
+class SetupMat extends THREE.MeshBasicNodeMaterial { constructor(c) { super(); this.tint = c; } setupDiffuseColor(builder) { this.colorNode = uniform(new THREE.Color(this.tint)).mul(float(2)); super.setupDiffuseColor(builder); } }
+const live = (p) => new Map(p.live.update({}).map((c) => [c.key, c.value]));
+test('custom subclass w/ setup-created uniform: hit, rebinds to OWN uniform, == full build', () => {
+reset(); warm((c) => new SetupMat(c));
+const a = new SetupMat(0xff0000), b = new SetupMat(0x0000ff);
+const pa = exportNodeMaterial(a, { THREE }), pb = exportNodeMaterial(b, { THREE });
+assert.equal(structCache.misses, 0, JSON.stringify(structCache.reasons)); assert.equal(structCache.hits, 2);
+const full = exportNodeMaterial(new SetupMat(0x0000ff), { THREE, cache: 'off' });
+assert.equal(pb.fragment, full.fragment); assert.equal(pb.vertex, full.vertex);
+const cu = (p) => uni(p).filter((u) => u.source?.kind === 'uniform' && u.value?.length === 3).map((u) => u.value);
+assert.deepEqual(cu(pb), cu(full)); assert.notDeepEqual(cu(pa), cu(pb));
+assert.notDeepEqual(pa.live.keys, pb.live.keys);
+// own live closure per material: mutating b's setup-created uniform (reached through its colorNode) shows ONLY in pb
+const find = (n) => { if (n.isUniformNode) return n; for (const { childNode } of THREE.NodeUtils.getNodeChildren(n)) { const r = find(childNode); if (r) return r; } return null; }; const ub = find(b.colorNode); assert.ok(ub?.isUniformNode);
+ub.value.set(0, 1, 0); assert.deepEqual(pa.live.update({}).filter((c) => c.key === ub.uuid), []); assert.ok(pb.live.update({}).some((c) => c.key === ub.uuid && c.value[1] === 1));
+});
+test('custom subclass verify == 0 mismatches', () => {
+reset(); for (let i = 0; i < 4; i++) exportNodeMaterial(new SetupMat(0x101010 * (i + 1)), { THREE, cache: 'verify' });
+assert.equal(structCache.mismatch, 0, structCache.log.join('|')); assert.ok(structCache.verified >= 2, JSON.stringify(structCache.reasons));
+});
+test('node-held attribute (bufferAttribute node) rebinds to OWN attribute', () => {
+reset();
+const mkA = (n) => { const at = new THREE.Float32BufferAttribute(new Float32Array(n * 3), 3); const m = new THREE.MeshBasicNodeMaterial(); m.colorNode = bufferAttribute(at, 'vec3'); return [m, at]; };
+for (let i = 0; i < 2; i++) exportNodeMaterial(mkA(4)[0], { THREE });
+const [m3, at3] = mkA(8); const p = exportNodeMaterial(m3, { THREE }); const full = exportNodeMaterial(mkA(8)[0], { THREE, cache: 'off' });
+assert.ok(structCache.hits >= 1, JSON.stringify(structCache.reasons) + structCache.log.join('|'));
+assert.equal(p.fragment, full.fragment);
+assert.deepEqual(Object.values(p.attributeSources), [at3]); assert.equal(p.attributes.find((x) => x.source === 'node').key, Object.keys(p.attributeSources)[0]);
+});
+test('hit leaves material clean: fresh full build afterwards unchanged', () => {
+reset(); warm((c) => new SetupMat(c));
+const m = new SetupMat(0x123456), v = m.version; const p = exportNodeMaterial(m, { THREE });
+assert.equal(structCache.hits, 1); assert.equal(m.version, v);
+const again = exportNodeMaterial(m, { THREE, cache: 'off' }); assert.equal(again.fragment, p.fragment);
 });

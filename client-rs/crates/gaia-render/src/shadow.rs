@@ -452,6 +452,7 @@ impl ShadowSystem {
         meshes: &HashMap<u32, GpuMesh>,
         materials: &HashMap<u32, GpuMaterial>,
         blend: &HashSet<u32>,
+        three: &HashMap<u32, bool>,
         ts: Option<(&wgpu::QuerySet, u32, u32)>,
     ) -> bool {
         let n = self.opts.cascades as usize;
@@ -553,7 +554,7 @@ impl ShadowSystem {
                     if dmax < f.near || dmin > f.far {
                         continue;
                     }
-                    if blend.contains(&ca.material) || !meshes.contains_key(&ca.mesh) || !materials.contains_key(&ca.material) {
+                    if blend.contains(&ca.material) || !meshes.contains_key(&ca.mesh) || !(materials.contains_key(&ca.material) || three.contains_key(&ca.material)) {
                         continue; // BLEND never casts; dangling ids skipped
                     }
                     let k = data.len() as u32;
@@ -690,9 +691,13 @@ impl ShadowSystem {
                     let mut draws = 0u32;
                     let mut cur_alpha: Option<(bool, bool)> = None;
                     for (mesh, mat, range) in list {
-                        let (Some(m), Some(gm)) = (meshes.get(mesh), materials.get(mat)) else { continue };
-                        let masked = alpha_ok && gm.desc.as_ref().is_some_and(|d| d.alpha_cutoff.is_some());
-                        let cull = gm.shadow_cull_back;
+                        let Some(m) = meshes.get(mesh) else { continue };
+                        // r10-shadow-9: a three.js TSL package material (create_three_material) is NOT in `materials` -> it casts as an OPAQUE depth caster
+                        // (its colour/alpha lives in the package WGSL; cull-back follows MaterialFlags like the built-in path).
+                        let (gm, masked, cull) = match materials.get(mat) {
+                            Some(gm) => (Some(gm), alpha_ok && gm.desc.as_ref().is_some_and(|d| d.alpha_cutoff.is_some()), gm.shadow_cull_back),
+                            None => match three.get(mat) { Some(&c) => (None, false, c), None => continue },
+                        };
                         if cur_alpha != Some((masked, cull)) {
                             pass.set_pipeline(match (masked, cull) {
                                 (false, false) => &self.pipe_opaque,
@@ -702,7 +707,7 @@ impl ShadowSystem {
                             });
                             cur_alpha = Some((masked, cull));
                         }
-                        if masked {
+                        if let (true, Some(gm)) = (masked, gm) {
                             pass.set_bind_group(1, &gm.bind, &[]);
                         }
                         pass.set_vertex_buffer(0, m.vertices.slice(..));

@@ -29,8 +29,10 @@ b.lightsNode = lights.length ? r.lighting.createNode(lights) : null; b.environme
 // r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
 // The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
 // (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
-const restoreShadow = installCoreShadow(THREE, lights, r);
-try { b.build(); } finally { restoreShadow(); }
+const restoreShadow = installCoreShadow(THREE, lights, r), wasRecv = obj.receiveShadow;
+// three only builds the shadow term when builder.object.receiveShadow; a package is shared by every mesh using the material (and instanced/skinned export a stand-in Mesh) → build WITH it.
+if (lights.some((l) => l.isDirectionalLight && l.castShadow)) obj.receiveShadow = true;
+try { b.build(); } finally { restoreShadow(); obj.receiveShadow = wasRecv; }
 // uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
 const refs = new Map();
 for (const n of [...b.updateNodes, ...b.updateBeforeNodes]) if ('property' in n && 'reference' in n && n.node?.uuid) refs.set(n.node.uuid, n);

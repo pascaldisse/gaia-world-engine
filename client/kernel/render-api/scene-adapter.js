@@ -504,6 +504,7 @@ function destroyExpanded(p) { for (const n of p.expanded) backend.removeNode(n);
 return {
 stats,
 // r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
+matPkg(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e?.conv?.package ?? null; },
 matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
 sync(scene, camera = null) {

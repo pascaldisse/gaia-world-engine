@@ -20,6 +20,16 @@ export function packGiParams(open) {
   return Float32Array.from(p);
 }
 
+// r10-shadow-6: exported TSL packages carry the game's GI query node, whose storage binding is the SAME probe atlas three's compute writes (GPU-only: the CPU
+// array stays zero → query = 0 → hemi substitution cancels the ambient → black). Mirror the readback into that attribute's CPU array; the wgpu backend uploads on
+// userData.gpuMirrorVersion (never attr.version: that would make three re-upload stale CPU data over its own compute output).
+export function mirrorAtlas(attr, buf) {
+  const a = attr?.array; if (!a || a.byteLength !== buf.byteLength) return false;
+  new Uint8Array(a.buffer, a.byteOffset, a.byteLength).set(new Uint8Array(buf));
+  (attr.userData ??= {}).gpuMirrorVersion = (attr.userData.gpuMirrorVersion ?? 0) + 1;
+  return true;
+}
+
 export function createGiBridge({ backend, renderer, getController, everyFrames = 30 } = {}) {
   const st = { frames: 0, reads: 0, skipped: 0, errors: 0, inFlight: false, active: false, lastMs: 0, lastSetMs: 0, lastBytes: 0, lastError: null };
   let wasActive = false;
@@ -28,7 +38,7 @@ export function createGiBridge({ backend, renderer, getController, everyFrames =
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     try {
       const [ib, db] = await Promise.all([renderer.getArrayBufferAsync(open.atlases.irradiance.value), renderer.getArrayBufferAsync(open.atlases.depth.value)]);
-      const ts = now(); backend.setGiProbes(new Float32Array(ib), new Float32Array(db), params); st.lastSetMs = now() - ts; // wasm copy + texture upload (main-thread cost per readback)
+      const ts = now(); mirrorAtlas(open.atlases.irradiance.value, ib); mirrorAtlas(open.atlases.depth.value, db); backend.setGiProbes(new Float32Array(ib), new Float32Array(db), params); st.lastSetMs = now() - ts; // wasm copy + texture upload (main-thread cost per readback)
       st.reads++; st.lastBytes = ib.byteLength + db.byteLength; st.active = true; wasActive = true;
     } catch (e) { st.errors++; st.lastError = String(e?.message ?? e); }
     finally { st.inFlight = false; st.lastMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0; }

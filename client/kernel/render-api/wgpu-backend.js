@@ -137,10 +137,13 @@ const storByAttr = new Map(); // BufferAttribute -> { id, refs, version }
 const matStorage = new Map(); // MaterialId -> [{key, attr, h}]
 const storStats = { creates: 0, hits: 0, updates: 0 };
 const bytesOf = (a) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+// r10-shadow-6: a storage attribute whose authoritative data lives on THREE's GPU (compute-written probe atlases) carries a CPU readback mirror; its upload version is
+// userData.gpuMirrorVersion (bumped by gi-bridge per readback) — NOT attr.version, which three itself would re-upload (clobbering partial compute updates).
+const verOf = (attr) => attr.userData?.gpuMirrorVersion ?? attr.version;
 function acquireStorage(attr) {
 const c = storByAttr.get(attr);
 if (c) { c.refs++; storStats.hits++; return c; }
-const h = { id: gpu.createStorageBuffer(bytesOf(attr.array)), refs: 1, version: attr.version, attr };
+const h = { id: gpu.createStorageBuffer(bytesOf(attr.array)), refs: 1, version: verOf(attr), attr };
 storByAttr.set(attr, h); storStats.creates++;
 return h;
 }
@@ -391,7 +394,7 @@ threeSkipped() { return gpu.threeSkipped(); },
       }
       const stor = matStorage.get(id);
       if (!stor) return n;
-      for (const s of stor) if (s.h.version !== s.attr.version) { gpu.updateStorageBuffer(s.h.id, bytesOf(s.attr.array)); s.h.version = s.attr.version; n++; }
+      for (const s of stor) { const v = verOf(s.attr); if (s.h.version !== v) { gpu.updateStorageBuffer(s.h.id, bytesOf(s.attr.array)); s.h.version = v; n++; } }
       storStats.updates += n;
       return n;
     },

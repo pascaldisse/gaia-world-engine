@@ -98,3 +98,18 @@ const m = new SetupMat(0x123456), v = m.version; const p = exportNodeMaterial(m,
 assert.equal(structCache.hits, 1); assert.equal(m.version, v);
 const again = exportNodeMaterial(m, { THREE, cache: 'off' }); assert.equal(again.fragment, p.fragment);
 });
+// r10-7: never-repeating keys (per-mesh splits) must not pile up retained node graphs (Burnout: V8 OOM ~4 GB at ~900 exports with the cache on).
+test('template retention is bounded (FIFO) when every key is unique', () => {
+  reset(); const prev = structCache.maxTemplates; structCache.maxTemplates = 4; structCache.evicted = 0;
+  try {
+    for (let i = 0; i < 12; i++) { const m = mk(0x111111, tex(i), 1); m.colorNode = m.colorNode.add(float(i)).mul(vec3(...Array.from({ length: i + 1 }, () => 1)).length()); exportNodeMaterial(m, { THREE }); } // i-dependent graph shape => unique keys
+    assert.ok(structCache.map.size <= 4, 'map size ' + structCache.map.size);
+    assert.ok(structCache.evicted >= 1 || structCache.map.size < 4, 'evicted ' + structCache.evicted + ' size ' + structCache.map.size + ' misses ' + structCache.misses);
+  } finally { structCache.maxTemplates = prev; }
+});
+test('retainTemplate: FIFO eviction + hit refreshes recency', async () => {
+  const { retainTemplate } = await import('../client/kernel/render-api/tsl-export.js');
+  const C = { map: new Map(), maxTemplates: 2, evicted: 0 };
+  retainTemplate(C, 'a', 1); retainTemplate(C, 'b', 2); retainTemplate(C, 'a', 1); retainTemplate(C, 'c', 3);
+  assert.deepEqual([...C.map.keys()], ['a', 'c']); assert.equal(C.evicted, 1);
+});

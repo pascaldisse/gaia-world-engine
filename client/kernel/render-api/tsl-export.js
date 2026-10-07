@@ -198,7 +198,9 @@ function builtinSemantics(THREE) {
 // Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
 // cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map() };
+export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0 };
+// r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
+export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
 const fnIds = new WeakMap(); let fnN = 0;
 const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };
@@ -286,7 +288,7 @@ C.keyMs += nowMs() - t1;
 if (w.refuse) return;
 const tpl = C.map.get(w.key); if (!tpl || tpl.nodes.length !== w.nodes.length || tpl.noRebind) return;
 if (tpl.unproven?.size || tpl.unprovenBuf?.size) { decision = 'prove'; hit = tpl; return; }
-hit = tpl; throw HIT;
+hit = tpl; retainTemplate(C, w.key, tpl); throw HIT;
 };
 let pkg = null;
 try { pkg = buildPackage(material, opts, gate); } catch (e) { if (e !== HIT) throw e; }
@@ -309,7 +311,7 @@ if (!w) return pkg;
 if (decision === 'prove') { const tpl = hit; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
 for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
 if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } C.wgslOf.set(w.key, k); }
-if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } C.map.set(w.key, t); }
+if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } retainTemplate(C, w.key, t); }
 return pkg;
 }
 function strHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); }

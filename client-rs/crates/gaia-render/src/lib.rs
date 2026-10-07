@@ -57,6 +57,8 @@ pub struct RenderOptions {
     pub anisotropy: u16,
     /// r11-pipe: share three-material pipelines + shader modules by content key and sort opaque shader-material draws by pipeline (default true; `?wgpuPipeShare=0` off).
     pub pipe_share: bool,
+    /// r11-sort: sort opaque shader-material draws by pipeline key (default false; `?wgpuPipeSort=1` on). Needs pipe_share.
+    pub pipe_sort: bool,
     /// Camera fit when the glb has no camera: fraction of half-extent behind center,
     /// and fraction of half-height below center.
     pub fit_eye_back: f32,
@@ -90,6 +92,7 @@ impl Default for RenderOptions {
             tone_mapping: 2,
             anisotropy: 8,
             pipe_share: true,
+            pipe_sort: false,
             fit_eye_back: 0.6,
             fit_height_bias: 0.5,
             shadows: ShadowOptions::default(),
@@ -2008,7 +2011,7 @@ impl RenderCore {
         } else {
             let mut v: Vec<_> = self.instances.iter().filter(|(k, i)| self.three.is_three(i.material) && self.instance_group_visible(**k)).map(|(k, i)| (*k, i.material, i.transform)).collect();
             v.sort_by_key(|x| x.0);
-self.three.sort_by_pipeline(&mut v);
+if self.opts.pipe_sort { self.three.sort_by_pipeline(&mut v); }
 v
         };
         if !three_list.is_empty() {

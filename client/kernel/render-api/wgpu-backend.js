@@ -129,7 +129,9 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   await (wasmUrl ? wasm.default(wasmUrl) : wasm.default());
   // r11-pipe: ?wgpuPipeShare=0 turns off content-keyed three-material pipeline sharing + pipeline-sorted opaque draws (default on); options.pipeShare wins.
   const pipeShare = options.pipeShare ?? !(typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuPipeShare') === '0');
-  const gpu = await wasm.GaiaRender.create(canvas, { renderHeight, ...options, pipeShare });
+  // r11-sort: ?wgpuPipeSort=1 sorts opaque shader-mat draws by pipeline key (default OFF: lampas measured sort +1.5ms worse); options.pipeSort wins.
+  const pipeSort = options.pipeSort ?? (typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuPipeSort') === '1');
+  const gpu = await wasm.GaiaRender.create(canvas, { renderHeight, ...options, pipeShare, pipeSort });
 
   let next = 1;
   const nodes = new Map();      // NodeId → { id, kind, parent, children:Set, local, world, visible, mesh, material, rid }

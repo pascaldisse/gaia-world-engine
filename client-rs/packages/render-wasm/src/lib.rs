@@ -147,6 +147,9 @@ impl GaiaRender {
         if let Some(v) = Reflect::get(&options, &JsValue::from_str("pipeShare")).ok().and_then(|v| v.as_bool()) {
             opts.pipe_share = v;
         }
+        if let Some(v) = Reflect::get(&options, &JsValue::from_str("pipeSort")).ok().and_then(|v| v.as_bool()) {
+            opts.pipe_sort = v;
+        }
         if let Some(v) = opt_f32(&options, "exposure") {
             opts.exposure = v;
         }

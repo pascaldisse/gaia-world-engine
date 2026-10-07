@@ -42,5 +42,5 @@ test('adapter: one material, receiver + non-receiver (plain + instanced) → dis
   assert.equal(pkgs.length, 2, 'two exports for one material');
   assert.equal(pkgs.filter(hasShadow).length, 1, 'exactly the receiver variant carries gaia_sun_shadow (instanced stand-in shares it)');
   ad.sync(scene, cam); // idle: no re-export
-  assert.equal(pkgs.length, 2);
+  assert.equal(pkgs.length, 2); assert.equal(ad.stats.tsl.shadowReceivers, 1, "adapter counts receiver packages");
 });

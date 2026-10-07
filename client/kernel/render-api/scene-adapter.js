@@ -190,7 +190,7 @@ return e;
 function createMat(conv, m) {
 if (conv.kind === 'wgsl') {
   if (backend.createShaderMaterial) {
-    try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; return id; }
+    try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; if (conv.package.fragment.includes('gaia_sun_shadow')) tsl.shadowReceivers = (tsl.shadowReceivers ?? 0) + 1; return id; }
     catch (e) { tslRefuse(m, 'backend', e?.message ?? e, conv.package); stats.degraded.add('tsl-backend-refused:pbr-fallback'); conv.fellBack = true; return backend.createMaterial(conv.fallbackParams ?? {}, conv.fallbackTextures ?? null); }
   }
   stats.degraded.add('createShaderMaterial-missing:pbr-fallback');

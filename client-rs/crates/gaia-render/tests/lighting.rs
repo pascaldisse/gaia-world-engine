@@ -363,7 +363,7 @@ fn color_write_false_draws_no_colour_but_writes_depth() {
     let run = |no_cw: bool, dw: Option<bool>| {
         let f = MaterialFlags { unlit: true, depth_write: dw, ..Default::default() };
         let mut core = unlit_scene(&device, &queue, [1.0, 0.0, 0.0, 1.0], f, false);
-        core.set_material_no_color_write(1, no_cw);
+        core.set_material_no_color_write(&device, 1, no_cw);
         // far blue unlit quad (y=-1) behind the red occluder (y=0), same footprint
         core.create_material(&device, 2, MaterialDesc { base_color: [0.0, 0.0, 1.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
         core.set_material_flags(&device, 2, MaterialFlags { unlit: true, ..Default::default() });
@@ -381,4 +381,26 @@ fn color_write_false_draws_no_colour_but_writes_depth() {
     assert!(close(occluded, [occluded[0]; 3], 3) && occluded[0] > 60 && occluded[0] < 200, "colorWrite:false + depthWrite default: background only (no red, far blue rejected): {occluded:?}");
     let through = run(true, Some(false));
     assert!(through[2] > 200 && through[0] < 60, "colorWrite:false + depthWrite:false: far blue shows: {through:?}");
+}
+// r11-depth-2: three `depthTest:false` -> depth compare ALWAYS. Far blue quad (y=-1) drawn AFTER (render_order 1) the nearer red occluder (y=0): depth-tested it is rejected
+// (red stays); with no_depth_test it overdraws the nearer red.
+#[test]
+fn depth_test_false_draws_over_nearer_occluder() {
+    let (device, queue) = device();
+    let run = |no_dt: bool| {
+        let mut core = unlit_scene(&device, &queue, [1.0, 0.0, 0.0, 1.0], MaterialFlags { unlit: true, ..Default::default() }, false);
+        core.create_material(&device, 2, MaterialDesc { base_color: [0.0, 0.0, 1.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        core.set_material_flags(&device, 2, MaterialFlags { unlit: true, render_order: 1, ..Default::default() });
+        core.set_material_no_depth_test(&device, 2, no_dt);
+        let s = 4.0;
+        let pos = [-s, -1., -s, s, -1., -s, s, -1., s, -s, -1., s];
+        let n = [0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.];
+        core.create_mesh(&device, 2, &pos, &n, &[0.0; 8], &[0, 2, 1, 0, 3, 2]).unwrap();
+        core.create_instance(2, 2, 2, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        centre(&shoot(&device, &queue, &mut core))
+    };
+    let tested = run(false);
+    assert!(tested[0] > 200 && tested[2] < 60, "depth-tested far blue is rejected behind red: {tested:?}");
+    let over = run(true);
+    assert!(over[2] > 200 && over[0] < 60, "depthTest:false far blue overdraws nearer red: {over:?}");
 }

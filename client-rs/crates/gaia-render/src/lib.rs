@@ -413,6 +413,8 @@ pub struct MaterialFlags {
     pub depth_write: Option<bool>,
     /// true = three `colorWrite: false` (depth-only / occluder mesh): colour target write mask EMPTY, depth still written per `depth_write`. Default false = colour written.
     pub no_color_write: bool,
+    /// true = three `depthTest: false`: depth compare ALWAYS (drawn over nearer geometry; HUD/overlay/xray). Default false = depth-tested.
+    pub no_depth_test: bool,
     /// Lower draws first (sky = negative → everything else over it). Blended sort far→near inside a group.
     pub render_order: i32,
     /// None = default (opaque/MASK cast, blended never).
@@ -557,6 +559,8 @@ struct GpuMaterial {
     bind: wgpu::BindGroup,
     /// Some = external WGSL pipeline; None = built-in PBR pipeline.
     pipeline: Option<wgpu::RenderPipeline>,
+    /// Some = external WGSL source kept so the pipeline can be rebuilt when flags change.
+    custom: Option<CustomShader>,
     /// shadow caster pass culls back faces (MaterialFlags::shadow_cull_back)
     shadow_cull_back: bool,
 }
@@ -652,9 +656,11 @@ pub struct RenderCore {
     /// glTF BLEND: alpha-blended, depth-write off, drawn after opaque, sorted far→near.
     blend_pipeline: wgpu::RenderPipeline,
     /// (blend kind or None, depth write) → built-in pipeline variant (flags path).
-    variant_pipelines: HashMap<(Option<BlendKind>, bool), wgpu::RenderPipeline>,
+    /// ONE keyed cache for every built-in forward pipeline state variant (blend x depth write x colour write x depth test); filled lazily by `ensure_variants` as flags arrive.
+    variant_pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
+    forward_layout: wgpu::PipelineLayout,
+    forward_module: wgpu::ShaderModule,
     /// colorWrite:false variants (ColorWrites::empty()), keyed by depth_write.
-    depth_only_pipelines: HashMap<bool, wgpu::RenderPipeline>,
     material_flags: HashMap<u32, MaterialFlags>,
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
@@ -742,12 +748,9 @@ impl RenderCore {
         let mut variant_pipelines = HashMap::new();
         for kind in [None, Some(BlendKind::Alpha), Some(BlendKind::Additive), Some(BlendKind::Subtractive)] {
             for dw in [false, true] {
-                variant_pipelines.insert((kind, dw), forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", kind, dw, wgpu::ColorWrites::ALL, scene_format));
+                let key = PipelineKey { blend: kind, depth_write: dw, color_write: true, depth_test: true };
+                variant_pipelines.insert(key, key.build(device, &pl, &module, "vs_main", "fs_main", scene_format));
             }
-        }
-        let mut depth_only_pipelines = HashMap::new();
-        for dw in [false, true] {
-            depth_only_pipelines.insert(dw, forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", None, dw, color_write_mask(false), scene_format));
         }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("base color sampler"),
@@ -834,7 +837,8 @@ impl RenderCore {
             skin: Default::default(),
             blend_pipeline,
             variant_pipelines,
-            depth_only_pipelines,
+            forward_layout: pl,
+            forward_module: module,
             material_flags: HashMap::new(),
             blend_materials: Default::default(),
             opts,
@@ -1018,6 +1022,8 @@ impl RenderCore {
     /// Rebinds the material if it exists; blended kinds join the sorted transparent pass.
     pub fn set_material_flags(&mut self, device: &wgpu::Device, id: u32, flags: MaterialFlags) {
         self.material_flags.insert(id, flags);
+        self.ensure_variants(device, &flags);
+        self.rebuild_custom_pipeline(device, id);
         if flags.blend.is_some() {
             self.set_material_blend(id, true);
         }
@@ -1054,10 +1060,40 @@ impl RenderCore {
     }
 
     /// three `colorWrite: false` (depth-only / occluder): empty colour write mask, depth per `depth_write`. Call AFTER `set_material_flags` (which resets it). Built-in materials only.
-    pub fn set_material_no_color_write(&mut self, id: u32, on: bool) {
+    pub fn set_material_no_color_write(&mut self, device: &wgpu::Device, id: u32, on: bool) {
         let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
         f.no_color_write = on;
         self.material_flags.insert(id, f);
+        self.ensure_variants(device, &f);
+        self.rebuild_custom_pipeline(device, id);
+    }
+    /// three `depthTest: false`: depth compare ALWAYS. Call AFTER `set_material_flags` (which resets it). Built-in AND external-WGSL materials.
+    pub fn set_material_no_depth_test(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        f.no_depth_test = on;
+        self.material_flags.insert(id, f);
+        self.ensure_variants(device, &f);
+        self.rebuild_custom_pipeline(device, id);
+    }
+    /// Create every keyed built-in pipeline variant this material's flags can select at draw time (opaque + its blended kind).
+    fn ensure_variants(&mut self, device: &wgpu::Device, f: &MaterialFlags) {
+        for kind in [None, Some(f.blend.unwrap_or(BlendKind::Alpha))] {
+            let key = PipelineKey::of(f, kind, f.depth_write.unwrap_or(kind.is_none()));
+            if !self.variant_pipelines.contains_key(&key) {
+                let p = key.build(device, &self.forward_layout, &self.forward_module, "vs_main", "fs_main", self.scene_format);
+                self.variant_pipelines.insert(key, p);
+            }
+        }
+    }
+    /// External-WGSL material: its single pipeline follows the material flags (colour write / depth write / depth test) through the same `pipeline_state` helper as the built-in + three paths. Order-independent vs `create_shader_material`.
+    fn rebuild_custom_pipeline(&mut self, device: &wgpu::Device, id: u32) {
+        let f = self.material_flags.get(&id).copied().unwrap_or_default();
+        let scene_format = self.scene_format;
+        if let Some(m) = self.materials.get_mut(&id) {
+            if let Some(c) = &m.custom {
+                m.pipeline = Some(c.pipeline(device, &f, scene_format));
+            }
+        }
     }
     /// three has NOT attached probe GI to this material (plain non-node material): hemisphere ambient only. Call AFTER `set_material_flags` (which resets it).
     pub fn set_material_no_gi(&mut self, device: &wgpu::Device, id: u32, on: bool) {
@@ -1226,6 +1262,7 @@ impl RenderCore {
                 desc: Some(desc),
                 bind,
                 pipeline: None,
+                custom: None,
             },
         );
     }
@@ -1337,15 +1374,8 @@ impl RenderCore {
             bind_group_layouts: &[Some(&self.frame_layout), Some(&layout), Some(&self.shadow_receiver_layout)],
             immediate_size: 0,
         });
-        let pipeline = forward_pipeline(
-            device,
-            &pl,
-            &shader,
-            &desc.vertex_entry,
-            &desc.fragment_entry,
-            false,
-            self.scene_format,
-        );
+        let custom = CustomShader { layout: pl, module: shader, vs: desc.vertex_entry.clone(), fs: desc.fragment_entry.clone() };
+        let pipeline = custom.pipeline(device, &self.material_flags.get(&id).copied().unwrap_or_default(), self.scene_format);
         self.materials.insert(
             id,
             GpuMaterial {
@@ -1353,6 +1383,7 @@ impl RenderCore {
                 desc: None,
                 bind,
                 pipeline: Some(pipeline),
+                custom: Some(custom),
             },
         );
         Ok(())
@@ -2053,10 +2084,10 @@ impl RenderCore {
                         continue; // dangling ids: counted by caller via instance_count vs drawn
                     };
                     let builtin = match self.material_flags.get(material) {
-                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write => {
+                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
                             let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
                             let dw = f.depth_write.unwrap_or(kind.is_none());
-                            if f.no_color_write { &self.depth_only_pipelines[&dw] } else { &self.variant_pipelines[&(kind, dw)] }
+                            &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
                         }
                         _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
                     };
@@ -2432,9 +2463,44 @@ fn forward_pipeline(
     blend: bool,
     color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
-    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend, wgpu::ColorWrites::ALL, color_format)
+    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend, wgpu::ColorWrites::ALL, wgpu::CompareFunction::Less, color_format)
 }
 
+/// Key of the built-in forward pipeline cache: every state axis a material can vary (blend, depth write, colour write, depth test).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PipelineKey {
+    pub blend: Option<BlendKind>,
+    pub depth_write: bool,
+    pub color_write: bool,
+    pub depth_test: bool,
+}
+impl PipelineKey {
+    fn of(f: &MaterialFlags, blend: Option<BlendKind>, depth_write: bool) -> Self {
+        Self { blend, depth_write, color_write: !f.no_color_write, depth_test: !f.no_depth_test }
+    }
+    fn build(&self, device: &wgpu::Device, layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, vs: &str, fs: &str, color_format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+        let (mask, dw, cmp) = pipeline_state(self.color_write, self.depth_write, self.depth_test, wgpu::CompareFunction::Less);
+        forward_pipeline_variant(device, layout, module, vs, fs, self.blend, dw, mask, cmp, color_format)
+    }
+}
+/// External WGSL source of a custom material (kept to rebuild its pipeline when flags change).
+struct CustomShader {
+    layout: wgpu::PipelineLayout,
+    module: wgpu::ShaderModule,
+    vs: String,
+    fs: String,
+}
+impl CustomShader {
+    fn pipeline(&self, device: &wgpu::Device, f: &MaterialFlags, color_format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+        let (mask, dw, cmp) = pipeline_state(!f.no_color_write, f.depth_write.unwrap_or(true), !f.no_depth_test, wgpu::CompareFunction::Less);
+        forward_pipeline_variant(device, &self.layout, &self.module, &self.vs, &self.fs, None, dw, mask, cmp, color_format)
+    }
+}
+/// THE shared pipeline state helper (built-in PBR variants, external-WGSL custom pipelines, three TSL materials):
+/// three colorWrite/depthWrite/depthTest -> (colour write mask, depth write enabled, depth compare). depthTest:false => Always; `pass_compare` = the path's normal compare.
+pub(crate) fn pipeline_state(color_write: bool, depth_write: bool, depth_test: bool, pass_compare: wgpu::CompareFunction) -> (wgpu::ColorWrites, bool, wgpu::CompareFunction) {
+    (color_write_mask(color_write), depth_write, if depth_test { pass_compare } else { wgpu::CompareFunction::Always })
+}
 /// three `colorWrite` -> colour target write mask (false = empty: depth-only pass, nothing reaches the colour target).
 pub(crate) fn color_write_mask(color_write: bool) -> wgpu::ColorWrites {
     if color_write { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() }
@@ -2450,6 +2516,7 @@ fn forward_pipeline_variant(
     blend: Option<BlendKind>,
     depth_write: bool,
     write_mask: wgpu::ColorWrites,
+    depth_compare: wgpu::CompareFunction,
     color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2520,7 +2587,7 @@ fn forward_pipeline_variant(
                 format: DEPTH_FORMAT,
                 // transparent pass tests depth but does not write it (sorted back-to-front)
                 depth_write_enabled: Some(depth_write),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_compare: Some(depth_compare),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),

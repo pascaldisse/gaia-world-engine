@@ -315,8 +315,7 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
 pub(crate) fn pipeline_depth_color_state(material: &serde_json::Value) -> (wgpu::ColorWrites, bool, wgpu::CompareFunction) {
     let transparent = material["transparent"].as_bool().unwrap_or(false);
     let flag = |k: &str| material[k].as_bool().unwrap_or(true);
-    let compare = if flag("depthTest") { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always };
-    (crate::color_write_mask(flag("colorWrite")), !transparent && flag("depthWrite"), compare)
+    crate::pipeline_state(flag("colorWrite"), !transparent && flag("depthWrite"), flag("depthTest"), wgpu::CompareFunction::LessEqual)
 }
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
 /// Single mip level (core mipgen blit is sRGB-format only) → minified linear textures alias = NEXT.

@@ -435,6 +435,7 @@ fn parse_flags(extras: &gltf::json::Extras) -> crate::MaterialFlags {
     f.unlit = g.get("unlit").and_then(|b| b.as_bool()).unwrap_or(false);
     f.depth_write = g.get("depthWrite").and_then(|b| b.as_bool());
     f.no_color_write = g.get("colorWrite").and_then(|b| b.as_bool()) == Some(false);
+    f.no_depth_test = g.get("depthTest").and_then(|b| b.as_bool()) == Some(false);
     f.render_order = g.get("renderOrder").and_then(|b| b.as_i64()).unwrap_or(0) as i32;
     f.cast_shadow = g.get("castShadow").and_then(|b| b.as_bool());
     f

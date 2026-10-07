@@ -315,7 +315,12 @@ let core = RenderCore::new(&device, &queue, opts);
     /// three colorWrite:false (depth-only / occluder mesh): empty colour write mask, depth per depthWrite. Call after setMaterialFlags (which resets it).
     #[wasm_bindgen(js_name = setMaterialNoColorWrite)]
     pub fn set_material_no_color_write(&mut self, id: u32, on: bool) {
-        self.core.set_material_no_color_write(id, on);
+        self.core.set_material_no_color_write(&self.device, id, on);
+    }
+    /// three depthTest:false: depth compare ALWAYS (draws over nearer geometry). Call after setMaterialFlags (which resets it).
+    #[wasm_bindgen(js_name = setMaterialNoDepthTest)]
+    pub fn set_material_no_depth_test(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_depth_test(&self.device, id, on);
     }
     /// three FrontSide material: shadow caster pass culls back faces (r9). Call after setMaterialFlags (which resets it).
     #[wasm_bindgen(js_name = setMaterialShadowCullBack)]

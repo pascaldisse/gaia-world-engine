@@ -200,6 +200,7 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
 }
   // r8: three material state the core takes as FLAGS (setMaterialFlags): blend (transparent / opacity<1 / additive), unlit (plain Basic), depthWrite:false, per-object renderOrder
   // (core order is per MATERIAL: last node to set it wins — Eden sky layers have one material each), toneMapped (unlit only). No game names.
+  const flagStats = { noColorWrite: 0, noDepthTest: 0 }; // r11: counts of per-material colorWrite:false / depthTest:false pushes to the core (live-proof counters, generic)
   const matFlags = new Map(); // MaterialId → { blend, unlit, dw, toneMapped, ro, pushed }
   function flagsFromParams(params = {}) {
     const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
@@ -214,8 +215,8 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
       gpu.setMaterialFlags(id, f.blend, f.unlit, f.dw, f.ro, -1); reset = true; // resets every core flag incl. shadow_cull_back
       if (f.unlit) gpu.setMaterialUnlitToneMapped(id, f.toneMapped);
       if (f.norecv) gpu.setMaterialNoReceiveShadow(id, true);
-      if (f.nocw) gpu.setMaterialNoColorWrite?.(id, true); // r11: three colorWrite:false (depth-only occluder) → empty colour write mask; ?. = older wasm pkg draws colour
-      if (f.nodt) gpu.setMaterialNoDepthTest?.(id, true); // r11: three depthTest:false → depth compare ALWAYS (draws over nearer geometry); ?. = older wasm pkg stays depth-tested
+      if (f.nocw) { flagStats.noColorWrite++; gpu.setMaterialNoColorWrite?.(id, true); } // r11: three colorWrite:false (depth-only occluder) → empty colour write mask; ?. = older wasm pkg draws colour
+      if (f.nodt) { flagStats.noDepthTest++; gpu.setMaterialNoDepthTest?.(id, true); } // r11: three depthTest:false → depth compare ALWAYS (draws over nearer geometry); ?. = older wasm pkg stays depth-tested
       f.pushed = !!nondefault;
     }
     if (f.nogi) gpu.setMaterialNoGi?.(id, true); // r9: material not GI-eligible in three (plain non-node material) → hemisphere only. Default (eligible) materials push nothing.
@@ -327,6 +328,7 @@ function applyShadowFlags(node) {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
     capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    flagStats,
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
     createMesh(arrays) {

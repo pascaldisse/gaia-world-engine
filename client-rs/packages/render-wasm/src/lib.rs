@@ -743,6 +743,11 @@ o.into()
     pub fn set_render_height(&mut self, h: u32) {
         self.core.set_render_height(h);
     }
+    /// r11: [draws, pipeline changes, instanced draws, single-instance draws, instances (builtin path), shader-material draws] of the last main pass.
+    #[wasm_bindgen(js_name = passStats)]
+    pub fn pass_stats(&self) -> Vec<u32> {
+        self.core.last_pass_stats.to_vec()
+    }
     #[wasm_bindgen(js_name = drawCalls)]
     pub fn draw_calls(&self) -> u32 {
         self.core.last_draw_calls

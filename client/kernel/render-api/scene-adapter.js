@@ -142,6 +142,7 @@ return p;
 // Lights are baked into the package's lightsNode at export (scene passed below); their VALUES ride the same path.
 let frameScene = null, frameCamera = null;
 function syncLiveUniforms() {
+  let batch = null;
   for (const [, e] of mats) {
     const wg = e.conv?.kind === 'wgsl' && !e.fellBack && e.epoch === epoch;
 if (wg && backend.updateShaderBuffers) { const tb = now(); const n = backend.updateShaderBuffers(e.id); sub.updateShaderBuffers += now() - tb; if (n) stats.bufferWrites = (stats.bufferWrites ?? 0) + n; } // r6-tsl-2: storage buffers follow BufferAttribute.version
@@ -152,10 +153,12 @@ if (!live) continue;
     sub.liveUpdate += now() - tl;
     if (!changed.length) continue;
     const ts = now();
-    if (backend.setShaderUniforms) { backend.setShaderUniforms(e.id, changed); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; }
+    if (backend.setShaderUniformsBatch) { (batch ??= []).push([e.id, changed]); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; } // r10-5: one backend call per frame
+    else if (backend.setShaderUniforms) { backend.setShaderUniforms(e.id, changed); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; }
     else stats.degraded.add('setShaderUniforms-missing:tsl-values-frozen');
     sub.setShaderUniforms += now() - ts;
   }
+  if (batch) { const ts = now(); backend.setShaderUniformsBatch(batch); sub.setShaderUniforms += now() - ts; }
 }
 const hashStr = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
 function ensureMaterial(m, o = null) {

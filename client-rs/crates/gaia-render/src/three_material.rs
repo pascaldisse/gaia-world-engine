@@ -310,12 +310,16 @@ impl ThreeMaterial {
         let items: Vec<(String, Vec<f32>)> = v.as_array().ok_or("set_three_uniforms: array expected")?.iter()
             .map(|i| Ok((i["key"].as_str().ok_or("set_three_uniforms: item without key")?.to_string(), json_f32(&i["value"]))))
             .collect::<Result<_, String>>()?;
+        self.apply_uniforms(&items.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect::<Vec<_>>())
+    }
+    /// r10-5: already-parsed items (batch path: shared values parsed ONCE per frame, applied to every material). Unknown key = Err, nothing applied.
+    pub(crate) fn apply_uniforms(&mut self, items: &[(&str, &[f32])]) -> Result<usize, String> {
         let mut hits = vec![0usize; items.len()];
         for sl in &mut self.slots {
             if let Kind::Uniform { members, .. } = &mut sl.kind {
                 for m in members.iter_mut() {
                     if let Some(k) = &m.key {
-                        if let Some(j) = items.iter().position(|(ik, _)| ik == k) { m.value = items[j].1.clone(); hits[j] += 1; }
+                        if let Some(j) = items.iter().position(|(ik, _)| ik == k) { m.value = items[j].1.to_vec(); hits[j] += 1; }
                     }
                 }
             }

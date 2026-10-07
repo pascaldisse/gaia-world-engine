@@ -1340,6 +1340,27 @@ impl RenderCore {
     pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<usize, String> {
         self.three.mats.get_mut(&material).ok_or_else(|| format!("set_three_uniforms: {material} is not a three material"))?.set_uniforms(json)
     }
+    /// r10-5: ONE call per frame. `{"s":[{key,value}..], "m":[[material, [sharedIdx..], [{key,value}..]?]..]}` - shared values (identical node value reaching many materials) parsed once.
+    /// Per-material semantics = set_three_uniforms (unknown key = Err). Returns the number of materials updated.
+    pub fn set_three_uniforms_batch(&mut self, json: &str) -> Result<usize, String> {
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("set_three_uniforms_batch JSON: {e}"))?;
+        let kv = |i: &serde_json::Value| -> Result<(String, Vec<f32>), String> {
+            let f = |x: &serde_json::Value| -> Vec<f32> { match x { serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32], serde_json::Value::Bool(b) => vec![*b as u8 as f32], serde_json::Value::Array(a) => a.iter().map(|y| y.as_f64().unwrap_or(0.0) as f32).collect(), _ => vec![] } };
+            Ok((i["key"].as_str().ok_or("set_three_uniforms_batch: item without key")?.to_string(), f(&i["value"])))
+        };
+        let shared: Vec<(String, Vec<f32>)> = v["s"].as_array().ok_or("set_three_uniforms_batch: s array expected")?.iter().map(&kv).collect::<Result<_, String>>()?;
+        let mut n = 0;
+        for m in v["m"].as_array().ok_or("set_three_uniforms_batch: m array expected")? {
+            let id = m[0].as_u64().ok_or("set_three_uniforms_batch: material id")? as u32;
+            let own: Vec<(String, Vec<f32>)> = match m.get(2).and_then(|o| o.as_array()) { Some(o) => o.iter().map(&kv).collect::<Result<_, String>>()?, None => vec![] };
+            let mut items: Vec<(&str, &[f32])> = Vec::new();
+            for ix in m[1].as_array().ok_or("set_three_uniforms_batch: shared idx array")? { let (k, val) = shared.get(ix.as_u64().ok_or("idx")? as usize).ok_or("set_three_uniforms_batch: shared idx out of range")?; items.push((k.as_str(), val.as_slice())); }
+            for (k, val) in &own { items.push((k.as_str(), val.as_slice())); }
+            self.three.mats.get_mut(&id).ok_or_else(|| format!("set_three_uniforms_batch: {id} is not a three material"))?.apply_uniforms(&items)?;
+            n += 1;
+        }
+        Ok(n)
+    }
         /// r6-tsl-2: storage buffer behind TSL `storage()`/buffer nodes. Raw bytes (any element type), padded to 16 B (min 16).
     pub fn create_storage_buffer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, bytes: &[u8]) {
         let size = (bytes.len() as u64).max(16).next_multiple_of(16);

@@ -45,9 +45,10 @@ export const RENDER_API_METHODS = Object.freeze([
 //   updateMesh(MeshId, arrays) · updateMaterial(MaterialId, params, textures) · createInstanced(MeshId, MaterialId, mat4s:Float32Array(16n), count, flags{...,matrix}) → NodeId
 //   updateInstances(NodeId, mat4s, count, matrixWorld) · createShaderMaterial(pkg from tsl-export.js: {vertex,fragment,bindGroups,attributes,…}) → MaterialId
 //   setShaderUniforms(MaterialId, [{key,value}]) — r4: changed live TSL uniform values (tsl-export pkg.live.update()); keys = package uniform `key`
+//   setShaderUniformsBatch([[MaterialId, [{key,value}]]]) - r10-5: setShaderUniforms for many materials in ONE call (values shared across materials shipped once); optional
 //   setActiveGroups(active: int[] bit indices | {bits?:int[], words?:Uint32Array} | null) — visibility groups: instance drawn iff its group mask ∩ active ≠ ∅; no groups = always drawn;
 //     instance with groups.parent follows that node's mask; null = culling off (default). Applies to main AND shadow passes. Bit b of word w = group 32w+b (128+ groups ok).
-export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'updateShaderBuffers', 'setMeshAttribute', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh', 'setAmbient', 'setBackground', 'setGiProbes', 'setBackgroundTexture', 'setFog', 'setEnvironment', 'setActiveGroups']);
+export const RENDER_API_OPTIONAL_METHODS = Object.freeze(['updateMesh', 'updateMaterial', 'createInstanced', 'updateInstances', 'createShaderMaterial', 'setShaderUniforms', 'setShaderUniformsBatch', 'updateShaderBuffers', 'setMeshAttribute', 'createSkin', 'updateSkin', 'createSkinnedMesh', 'destroySkin', 'destroySkinnedMesh', 'setAmbient', 'setBackground', 'setGiProbes', 'setBackgroundTexture', 'setFog', 'setEnvironment', 'setActiveGroups']);
 export function assertRenderBackend(backend) {
   const missing = RENDER_API_METHODS.filter((m) => typeof backend?.[m] !== 'function');
   if (missing.length) throw new Error(`render backend missing: ${missing.join(', ')}`);

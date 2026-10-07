@@ -13,7 +13,7 @@ import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -223,8 +223,10 @@ return backend.createMaterial(conv.params, conv.textures);
 // shadowMask = OR of the sun's cascade-camera layer masks when three has built them (a mask of exactly layer 0 adopts the main camera's mask, as ShadowNode does); null = unknown -> a layer-gated caster is assumed to be meant for the shadow pass.
 let shadowMask = null;
 const isShadowOnly = (o) => !!o.castShadow && !!frameCamera?.layers && !!o.layers && !o.layers.test(frameCamera.layers) && (shadowMask === null || (o.layers.mask & shadowMask) !== 0);
-const nodeFlags = (o, vis) => ({ castShadow: !!o.castShadow, receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null) });
-const flagBits = (o, vis) => (o.castShadow ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0); // + renderOrder compared separately (no string alloc)
+// r10-shadow-11 DEBUG bisect (?wgpuDbgNoAlphaCast=1): objects whose material has alphaTest>0 do NOT cast -> isolates 'alpha-tested lattice casts as solid' (core casts package materials opaque)
+const dbgCast = (o) => !!o.castShadow && !(dbgNoAlphaCast && (Array.isArray(o.material) ? o.material : [o.material]).some((m) => m?.alphaTest > 0));
+const nodeFlags = (o, vis) => ({ castShadow: dbgCast(o), receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null) });
+const flagBits = (o, vis) => (dbgCast(o) ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0); // + renderOrder compared separately (no string alloc)
 
 function buildParts(o, rec, vis) {
 // returns false when nothing renderable

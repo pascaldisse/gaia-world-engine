@@ -247,7 +247,7 @@ if (n.isTextureNode) { const t = n.value; s += `T${t?.constructor?.name}:${t?.fo
 else if (n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode) { const a = n.value; s += `B${a?.constructor?.name}:${a?.itemSize}:${a?.array?.constructor?.name}:${a?.count ?? ''}`; }
 const tp0 = Pf ? nowMs() : 0;
 const leaf = n.isUniformNode; let kp = null, kk = null, ki = null; // pending children (property, index, node) -- flat arrays, no per-child objects
-const names = Object.getOwnPropertyNames(n);
+const names = Object.getOwnPropertyNames(n), en = typeof n === 'function' ? new Set(Object.keys(n)) : null; // function-valued nodes (FnNode): own non-enumerable length/name must not enter the signature (reference = Object.keys)
 for (let i = 0; i < names.length; i++) {
 const k = names[i]; if (k.charCodeAt(0) === 95) continue; // '_' private: neither signature nor child
 const v = n[k], t = typeof v;
@@ -257,7 +257,8 @@ if (leaf || v === null) continue;
 if (Array.isArray(v)) { for (let j = 0; j < v.length; j++) { const c = v[j]; if (c && c.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(c); (ki ??= []).push(j); } } }
 else if (v.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(v); (ki ??= []).push(undefined); }
 else if (Object.getPrototypeOf(v) === ObjProto) { for (const sp in v) { if (sp.charCodeAt(0) === 95) continue; const c = v[sp]; if (c && c.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(c); (ki ??= []).push(sp); }; } }
-} else if (t === 'boolean' || t === 'string' || t === 'number') { if (!SKIP_PROPS.has(k) && !(slot && k === 'value')) s += `${k}=${v};`; }
+} else if (en && !en.has(k)) continue;
+else if (t === 'boolean' || t === 'string' || t === 'number') { if (!SKIP_PROPS.has(k) && !(slot && k === 'value')) s += `${k}=${v};`; }
 else if (t === 'function') { if (!slot && !SKIP_PROPS.has(k)) s += `${k}=${fnHash(v)};`; }
 }
 if (Pf) { Pf.prim += nowMs() - tp0; Pf.nodes++; }

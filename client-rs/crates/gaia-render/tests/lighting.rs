@@ -353,3 +353,32 @@ fn no_gi_material_ignores_probes_and_stays_hemisphere_only() {
     assert!(close(got[0], lit(avg(&[16, 17, 32, 33]), 0.5), 1), "default material must sample GI: {:?}", got[0]);
     assert!(close(got[1], expect_rgb([0.5; 3]), 1), "no_gi must be hemisphere only: {:?}", got[1]);
 }
+
+// r11-depth: three `colorWrite:false` (depth-only occluder) -> empty colour write mask: no colour reaches the target (background stays) but depth IS written
+// (a far blue quad behind it is rejected); with depthWrite:false too the far quad shows through. Control (colorWrite true) draws the red quad.
+#[test]
+fn color_write_false_draws_no_colour_but_writes_depth() {
+    let (device, queue) = device();
+    let bg = [0.3f32; 3];
+    let run = |no_cw: bool, dw: Option<bool>| {
+        let f = MaterialFlags { unlit: true, depth_write: dw, ..Default::default() };
+        let mut core = unlit_scene(&device, &queue, [1.0, 0.0, 0.0, 1.0], f, false);
+        core.set_material_no_color_write(1, no_cw);
+        // far blue unlit quad (y=-1) behind the red occluder (y=0), same footprint
+        core.create_material(&device, 2, MaterialDesc { base_color: [0.0, 0.0, 1.0, 1.0], metallic: 0.0, roughness: 1.0, base_color_texture: None, alpha_cutoff: None, emissive: [0.0; 3], emissive_from_base: false });
+        core.set_material_flags(&device, 2, MaterialFlags { unlit: true, ..Default::default() });
+        let s = 4.0;
+        let pos = [-s, -1., -s, s, -1., -s, s, -1., s, -s, -1., s];
+        let n = [0., 1., 0., 0., 1., 0., 0., 1., 0., 0., 1., 0.];
+        core.create_mesh(&device, 2, &pos, &n, &[0.0; 8], &[0, 2, 1, 0, 3, 2]).unwrap();
+        core.create_instance(2, 2, 2, [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]);
+        core.set_background_color(bg);
+        centre(&shoot(&device, &queue, &mut core))
+    };
+    let control = run(false, None);
+    assert!(control[0] > 200 && control[2] < 60, "control draws red occluder: {control:?}");
+    let occluded = run(true, None);
+    assert!(close(occluded, [occluded[0]; 3], 3) && occluded[0] > 60 && occluded[0] < 200, "colorWrite:false + depthWrite default: background only (no red, far blue rejected): {occluded:?}");
+    let through = run(true, Some(false));
+    assert!(through[2] > 200 && through[0] < 60, "colorWrite:false + depthWrite:false: far blue shows: {through:?}");
+}

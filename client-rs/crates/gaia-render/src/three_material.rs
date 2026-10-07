@@ -265,6 +265,7 @@ Kind::Storage { read_only } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindi
         }
 let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     let transparent = pkg["material"]["transparent"].as_bool().unwrap_or(false);
+    let (write_mask, depth_write, depth_compare) = pipeline_depth_color_state(&pkg["material"]);
     let vm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three vertex"), source: wgpu::ShaderSource::Wgsl(vs.into()) });
     let fm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three fragment"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
     let mut lrefs: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().map(Some).collect();
@@ -286,7 +287,7 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
                 blend: transparent.then_some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
+                write_mask,
             })],
         }),
         primitive: wgpu::PrimitiveState {
@@ -297,8 +298,8 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: depth_format,
-            depth_write_enabled: Some(!transparent),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_write_enabled: Some(depth_write),
+            depth_compare: Some(depth_compare),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -309,6 +310,14 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot, shadow_group })
 }
 
+/// three material state -> (colour write mask, depth write, depth compare). colorWrite:false => empty mask (depth-only pass); depthWrite:false => no depth write
+/// (blended materials never write depth, as before); depthTest:false => compare Always. Missing keys = three defaults.
+pub(crate) fn pipeline_depth_color_state(material: &serde_json::Value) -> (wgpu::ColorWrites, bool, wgpu::CompareFunction) {
+    let transparent = material["transparent"].as_bool().unwrap_or(false);
+    let flag = |k: &str| material[k].as_bool().unwrap_or(true);
+    let compare = if flag("depthTest") { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always };
+    (crate::color_write_mask(flag("colorWrite")), !transparent && flag("depthWrite"), compare)
+}
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
 /// Single mip level (core mipgen blit is sRGB-format only) → minified linear textures alias = NEXT.
 fn json_f32(v: &serde_json::Value) -> Vec<f32> {
@@ -520,4 +529,30 @@ fn receiver_wgsl(group: u32) -> Result<String, String> {
     if b <= a { return Err("forward.wgsl: shadow receiver markers out of order".into()); }
     let body = FWD[a..b].replace("@group(2)", &format!("@group({group})"));
     Ok(format!("{body}\nfn gaia_sun_shadow_core(world: vec3<f32>, cam: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 {{ return sun_shadow(world, cam, n, nl); }}\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pipeline_depth_color_state as st;
+    use serde_json::json;
+    #[test]
+    fn defaults_write_colour_and_depth_with_less_equal() {
+        let (m, dw, c) = st(&json!({}));
+        assert_eq!((m, dw, c), (wgpu::ColorWrites::ALL, true, wgpu::CompareFunction::LessEqual));
+    }
+    #[test]
+    fn color_write_false_is_empty_mask_depth_still_written() {
+        let (m, dw, _) = st(&json!({ "colorWrite": false, "depthWrite": true }));
+        assert_eq!(m, wgpu::ColorWrites::empty());
+        assert!(dw);
+    }
+    #[test]
+    fn depth_write_false_and_transparent_drop_depth_write() {
+        assert!(!st(&json!({ "depthWrite": false })).1);
+        assert!(!st(&json!({ "transparent": true })).1);
+    }
+    #[test]
+    fn depth_test_false_is_always() {
+        assert_eq!(st(&json!({ "depthTest": false })).2, wgpu::CompareFunction::Always);
+    }
 }

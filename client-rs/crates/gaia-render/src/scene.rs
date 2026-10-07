@@ -421,7 +421,7 @@ fn to_rgba8(image: &gltf::image::Data) -> Result<Rgba8Image, LoadError> {
     })
 }
 
-/// `extras.gaia = {blend:"alpha"|"additive"|"subtractive", unlit, depthWrite, renderOrder, castShadow}`.
+/// `extras.gaia = {blend:"alpha"|"additive"|"subtractive", unlit, depthWrite, colorWrite, renderOrder, castShadow}`.
 fn parse_flags(extras: &gltf::json::Extras) -> crate::MaterialFlags {
     let mut f = crate::MaterialFlags::default();
     let Some(v) = extras.as_ref().and_then(|r| serde_json::from_str::<serde_json::Value>(r.get()).ok()) else { return f };
@@ -434,6 +434,7 @@ fn parse_flags(extras: &gltf::json::Extras) -> crate::MaterialFlags {
     };
     f.unlit = g.get("unlit").and_then(|b| b.as_bool()).unwrap_or(false);
     f.depth_write = g.get("depthWrite").and_then(|b| b.as_bool());
+    f.no_color_write = g.get("colorWrite").and_then(|b| b.as_bool()) == Some(false);
     f.render_order = g.get("renderOrder").and_then(|b| b.as_i64()).unwrap_or(0) as i32;
     f.cast_shadow = g.get("castShadow").and_then(|b| b.as_bool());
     f

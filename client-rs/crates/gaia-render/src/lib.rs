@@ -411,6 +411,8 @@ pub struct MaterialFlags {
     pub shadow_cull_back: bool,
     /// None = default (opaque writes, blended does not).
     pub depth_write: Option<bool>,
+    /// true = three `colorWrite: false` (depth-only / occluder mesh): colour target write mask EMPTY, depth still written per `depth_write`. Default false = colour written.
+    pub no_color_write: bool,
     /// Lower draws first (sky = negative → everything else over it). Blended sort far→near inside a group.
     pub render_order: i32,
     /// None = default (opaque/MASK cast, blended never).
@@ -651,6 +653,8 @@ pub struct RenderCore {
     blend_pipeline: wgpu::RenderPipeline,
     /// (blend kind or None, depth write) → built-in pipeline variant (flags path).
     variant_pipelines: HashMap<(Option<BlendKind>, bool), wgpu::RenderPipeline>,
+    /// colorWrite:false variants (ColorWrites::empty()), keyed by depth_write.
+    depth_only_pipelines: HashMap<bool, wgpu::RenderPipeline>,
     material_flags: HashMap<u32, MaterialFlags>,
     blend_materials: std::collections::HashSet<u32>,
     /// Downsample blit (sRGB-correct: sRGB views decode/encode) for GPU mip generation.
@@ -738,8 +742,12 @@ impl RenderCore {
         let mut variant_pipelines = HashMap::new();
         for kind in [None, Some(BlendKind::Alpha), Some(BlendKind::Additive), Some(BlendKind::Subtractive)] {
             for dw in [false, true] {
-                variant_pipelines.insert((kind, dw), forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", kind, dw, scene_format));
+                variant_pipelines.insert((kind, dw), forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", kind, dw, wgpu::ColorWrites::ALL, scene_format));
             }
+        }
+        let mut depth_only_pipelines = HashMap::new();
+        for dw in [false, true] {
+            depth_only_pipelines.insert(dw, forward_pipeline_variant(device, &pl, &module, "vs_main", "fs_main", None, dw, color_write_mask(false), scene_format));
         }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("base color sampler"),
@@ -826,6 +834,7 @@ impl RenderCore {
             skin: Default::default(),
             blend_pipeline,
             variant_pipelines,
+            depth_only_pipelines,
             material_flags: HashMap::new(),
             blend_materials: Default::default(),
             opts,
@@ -1044,6 +1053,12 @@ impl RenderCore {
         }
     }
 
+    /// three `colorWrite: false` (depth-only / occluder): empty colour write mask, depth per `depth_write`. Call AFTER `set_material_flags` (which resets it). Built-in materials only.
+    pub fn set_material_no_color_write(&mut self, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        f.no_color_write = on;
+        self.material_flags.insert(id, f);
+    }
     /// three has NOT attached probe GI to this material (plain non-node material): hemisphere ambient only. Call AFTER `set_material_flags` (which resets it).
     pub fn set_material_no_gi(&mut self, device: &wgpu::Device, id: u32, on: bool) {
         let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
@@ -2038,9 +2053,10 @@ impl RenderCore {
                         continue; // dangling ids: counted by caller via instance_count vs drawn
                     };
                     let builtin = match self.material_flags.get(material) {
-                        Some(f) if f.blend.is_some() || f.depth_write.is_some() => {
+                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write => {
                             let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
-                            &self.variant_pipelines[&(kind, f.depth_write.unwrap_or(kind.is_none()))]
+                            let dw = f.depth_write.unwrap_or(kind.is_none());
+                            if f.no_color_write { &self.depth_only_pipelines[&dw] } else { &self.variant_pipelines[&(kind, dw)] }
                         }
                         _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
                     };
@@ -2416,9 +2432,15 @@ fn forward_pipeline(
     blend: bool,
     color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
-    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend, color_format)
+    forward_pipeline_variant(device, layout, module, vs, fs, blend.then_some(BlendKind::Alpha), !blend, wgpu::ColorWrites::ALL, color_format)
 }
 
+/// three `colorWrite` -> colour target write mask (false = empty: depth-only pass, nothing reaches the colour target).
+pub(crate) fn color_write_mask(color_write: bool) -> wgpu::ColorWrites {
+    if color_write { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn forward_pipeline_variant(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -2427,6 +2449,7 @@ fn forward_pipeline_variant(
     fs: &str,
     blend: Option<BlendKind>,
     depth_write: bool,
+    write_mask: wgpu::ColorWrites,
     color_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2483,7 +2506,7 @@ fn forward_pipeline_variant(
                         alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
                     },
                 }),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask,
                 })],
                 compilation_options: Default::default(),
             }),

@@ -204,16 +204,17 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
   function flagsFromParams(params = {}) {
     const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
     // r9: three r180 renders `shadowSide ?? side` into the shadow map -> a FrontSide material casts only from its front faces (core caster pass culls back faces); Double/Back keep the double-sided caster
-    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi };
+    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, nocw: params.colorWrite === false, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi };
   }
   function pushFlags(id) {
     const f = matFlags.get(id); if (!f) return;
-    const nondefault = f.blend || f.unlit || f.dw >= 0 || f.ro || f.norecv;
+    const nondefault = f.blend || f.unlit || f.dw >= 0 || f.nocw || f.ro || f.norecv;
     let reset = false;
     if (nondefault || f.pushed) {
       gpu.setMaterialFlags(id, f.blend, f.unlit, f.dw, f.ro, -1); reset = true; // resets every core flag incl. shadow_cull_back
       if (f.unlit) gpu.setMaterialUnlitToneMapped(id, f.toneMapped);
       if (f.norecv) gpu.setMaterialNoReceiveShadow(id, true);
+      if (f.nocw) gpu.setMaterialNoColorWrite?.(id, true); // r11: three colorWrite:false (depth-only occluder) → empty colour write mask; ?. = older wasm pkg draws colour
       f.pushed = !!nondefault;
     }
     if (f.nogi) gpu.setMaterialNoGi?.(id, true); // r9: material not GI-eligible in three (plain non-node material) → hemisphere only. Default (eligible) materials push nothing.

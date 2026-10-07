@@ -312,6 +312,11 @@ let core = RenderCore::new(&device, &queue, opts);
         self.core.set_material_no_gi(&self.device, id, on);
     }
     
+    /// three colorWrite:false (depth-only / occluder mesh): empty colour write mask, depth per depthWrite. Call after setMaterialFlags (which resets it).
+    #[wasm_bindgen(js_name = setMaterialNoColorWrite)]
+    pub fn set_material_no_color_write(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_color_write(id, on);
+    }
     /// three FrontSide material: shadow caster pass culls back faces (r9). Call after setMaterialFlags (which resets it).
     #[wasm_bindgen(js_name = setMaterialShadowCullBack)]
     pub fn set_material_shadow_cull_back(&mut self, id: u32, on: bool) {

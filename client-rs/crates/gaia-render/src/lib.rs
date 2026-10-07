@@ -19,7 +19,7 @@ pub use groups::{GroupMask, InstanceGroups};
 pub use scene::{CameraData, SceneData};
 pub use shadow::{ShadowOptions, ShadowStats};
 mod post;
-pub use post::{BloomParams, Post};
+pub use post::{BloomParams, GtaoParams, Post};
 use wgpu::util::DeviceExt;
 
 pub const MAX_POINT_LIGHTS: usize = 64;
@@ -463,13 +463,15 @@ impl Camera {
             zfar: Some(radius * 4.0),
         }
     }
-    fn view_proj(&self, aspect: f32) -> Mat4 {
-        let proj = match self.zfar {
-            Some(f) => Mat4::perspective_rh(self.yfov, aspect, self.znear, f),
-            None => Mat4::perspective_infinite_rh(self.yfov, aspect, self.znear),
-        };
-        proj * self.world.inverse()
-    }
+    fn proj(&self, aspect: f32) -> Mat4 {
+match self.zfar {
+Some(f) => Mat4::perspective_rh(self.yfov, aspect, self.znear, f),
+None => Mat4::perspective_infinite_rh(self.yfov, aspect, self.znear),
+}
+}
+fn view_proj(&self, aspect: f32) -> Mat4 {
+self.proj(aspect) * self.world.inverse()
+}
 }
 
 struct Targets {
@@ -1770,7 +1772,12 @@ impl RenderCore {
     pub fn set_exposure(&mut self, e: f32) { self.frame.ambient[3] = e; self.opts.exposure = e; }
     pub fn exposure(&self) -> f32 { self.frame.ambient[3] }
     /// r10: three BloomNode(strength, radius, threshold[, smoothWidth]) in the post chain; None = off. Err without `hdr_scene`.
-    pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
+    /// r12: three GTAONode (+ engine rig composite) on the HDR scene, before auto-exposure/bloom/tone map. None = off. Err without `hdr_scene`. Normals are reconstructed from depth (no normal target in the core).
+pub fn set_gtao(&mut self, g: Option<GtaoParams>) -> Result<(), String> {
+match self.post.as_mut() { Some(p) => { p.gtao = g; Ok(()) } None => Err("set_gtao: core built without hdr_scene".into()) }
+}
+pub fn gtao_dims(&self) -> Option<(u32, u32)> { self.post.as_ref()?.gtao_dims() }
+pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         match self.post.as_mut() { Some(p) => { p.bloom = b; Ok(()) } None => Err("set_bloom: core built without hdr_scene".into()) }
     }
     /// r10 eye adaptation: `on` runs the GPU luminance meter (8x8 log2 grid); `mul` = host-adapted linear multiplier on the HDR scene before bloom/tone map. Err without `hdr_scene`.
@@ -1941,7 +1948,7 @@ impl RenderCore {
             }).create_view(&Default::default())
         });
         if let (Some(v), Some(p)) = (&hdr_view, self.post.as_mut()) {
-            p.resize(device, v, w, h);
+            p.resize(device, v, &depth.create_view(&Default::default()), w, h);
         }
         self.upscaler.resize(device, internal, output);
         self.targets = Some(Targets {
@@ -2143,7 +2150,12 @@ stats[11] = tgroups[3];
             self.last_draw_calls = draws;
         }
         if let (Some(p), Some(t)) = (self.post.as_mut(), self.targets.as_ref()) {
-            p.encode(queue, encoder, &t.color_view, self.frame.ambient[3]);
+            let aspect = t.internal.width as f32 / t.internal.height as f32;
+let proj = self.camera.proj(aspect);
+p.proj = proj.to_cols_array_2d();
+p.proj_inv = proj.inverse().to_cols_array_2d();
+p.ensure_ao(device);
+p.encode(queue, encoder, &t.color_view, self.frame.ambient[3]);
         }
     }
 

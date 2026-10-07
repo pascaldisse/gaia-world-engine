@@ -8,6 +8,59 @@ pub const BLOOM_MIPS: usize = 5;
 pub const BLOOM_KERNELS: [f32; BLOOM_MIPS] = [6.0, 10.0, 14.0, 18.0, 22.0];
 pub const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const POST_WGSL: &str = include_str!("post.wgsl");
+const GTAO_WGSL: &str = include_str!("gtao.wgsl");
+pub const GTAO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm; // three RenderTarget default (UnsignedByte RGBA)
+/// r12: three `GTAONode` uniforms (radius/thickness/samples/distanceExponent/distanceFallOff/scale + resolutionScale) + the engine rig composite (lighting/post.js: intensity + distance fade in metres).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GtaoParams {
+pub radius: f32,
+pub thickness: f32,
+pub samples: f32,
+pub distance_exponent: f32,
+pub distance_fall_off: f32,
+pub scale: f32,
+pub resolution_scale: f32,
+pub intensity: f32,
+pub fade_start: f32,
+pub fade_end: f32,
+}
+impl GtaoParams {
+/// GTAONode ctor defaults (radius .25, thickness 1, samples 16, exponent/falloff/scale 1, resolutionScale 1) + rig composite with fade effectively off (intensity 1).
+pub fn three_defaults() -> Self {
+Self { radius: 0.25, thickness: 1.0, samples: 16.0, distance_exponent: 1.0, distance_fall_off: 1.0, scale: 1.0, resolution_scale: 1.0, intensity: 1.0, fade_start: 1.0e9, fade_end: 2.0e9 }
+}
+}
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct AoUniform {
+proj: [[f32; 4]; 4],
+proj_inv: [[f32; 4]; 4],
+p0: [f32; 4],
+p1: [f32; 4],
+res: [f32; 4],
+}
+/// GTAONode generateMagicSquareNoise(5) + generateMagicSquare (GTAONode.js bottom): 25 RGBA8 texels.
+fn magic_square_noise() -> Vec<u8> {
+let n: i32 = 5;
+let nn = (n * n) as usize;
+let mut sq = vec![0i32; nn];
+let (mut i, mut j) = (n / 2, n - 1);
+let mut num = 1;
+while num <= n * n {
+if i == -1 && j == n { j = n - 2; i = 0; } else { if j == n { j = 0; } if i < 0 { i = n - 1; } }
+if sq[(i * n + j) as usize] != 0 { j -= 2; i += 1; continue; } else { sq[(i * n + j) as usize] = num; num += 1; }
+j += 1; i -= 1;
+}
+let mut data = vec![0u8; nn * 4];
+for k in 0..nn {
+let ang = 2.0 * std::f64::consts::PI * sq[k] as f64 / nn as f64;
+data[k * 4] = ((ang.cos() * 0.5 + 0.5) * 255.0) as u8;
+data[k * 4 + 1] = ((ang.sin() * 0.5 + 0.5) * 255.0) as u8;
+data[k * 4 + 2] = 127;
+data[k * 4 + 3] = 255;
+}
+data
+}
 /// three `BloomNode(strength, radius, threshold)` + `smoothWidth` uniform (default 0.01).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BloomParams {
@@ -27,6 +80,8 @@ struct PostUniform {
     tone: [f32; 4],
     bloom: [f32; 4],
     blur: [f32; 4],
+/// x = GTAO composite on (0/1), y = intensity
+ao: [f32; 4],
 }
 struct Sized {
     size: (u32, u32),
@@ -39,6 +94,12 @@ struct Sized {
     hs: Vec<wgpu::TextureView>,
     vs: Vec<wgpu::TextureView>,
     blur_u: Vec<wgpu::Buffer>,
+/// GTAO target (round(size*resolutionScale)) + its bind group
+ao_target: Option<wgpu::TextureView>,
+ao_bind: Option<wgpu::BindGroup>,
+ao_scale: f32,
+ao_buf: wgpu::Buffer,
+ao_dims: (u32, u32),
 }
 struct PostTiming {
     set: wgpu::QuerySet,
@@ -59,7 +120,17 @@ struct Meter {
     grid: std::sync::Arc<std::sync::Mutex<Option<Vec<f32>>>>,
 }
 pub struct Post {
-    layout: wgpu::BindGroupLayout,
+layout: wgpu::BindGroupLayout,
+ao_layout: wgpu::BindGroupLayout,
+p_ao: wgpu::RenderPipeline,
+noise: wgpu::TextureView,
+scene_view: Option<wgpu::TextureView>,
+depth_view: Option<wgpu::TextureView>,
+/// camera projection (WebGPU 0..1 depth) + inverse, pushed per frame by the core
+pub proj: [[f32; 4]; 4],
+pub proj_inv: [[f32; 4]; 4],
+/// r12 GTAO (None = off)
+pub gtao: Option<GtaoParams>,
     meter: Meter,
     /// host-driven: run the meter pass (off = zero cost)
     pub meter_on: bool,
@@ -95,6 +166,7 @@ impl Post {
             count: None,
         }];
         for b in 1..=6 { entries.push(tex_entry(b)); }
+entries.push(tex_entry(8)); // r12: GTAO term (R raw AO, G fade weight)
         entries.push(wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("gaia-render post"), entries: &entries });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("gaia-render post"), source: wgpu::ShaderSource::Wgsl(POST_WGSL.into()) });
@@ -115,6 +187,20 @@ impl Post {
         let p_high = mk("fs_highpass", BLOOM_FORMAT);
         let p_blur = mk("fs_blur", BLOOM_FORMAT);
         let p_resolve = mk("fs_resolve", out_format);
+let ao_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("gaia-render gtao"), entries: &[
+wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+] });
+let ao_module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("gaia-render gtao"), source: wgpu::ShaderSource::Wgsl(GTAO_WGSL.into()) });
+let ao_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("gaia-render gtao layout"), bind_group_layouts: &[Some(&ao_layout)], immediate_size: 0 });
+let p_ao = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+label: Some("gtao"), layout: Some(&ao_pl),
+vertex: wgpu::VertexState { module: &ao_module, entry_point: Some("vs_full"), buffers: &[], compilation_options: Default::default() },
+fragment: Some(wgpu::FragmentState { module: &ao_module, entry_point: Some("fs_gtao"), targets: &[Some(wgpu::ColorTargetState { format: GTAO_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview_mask: None, cache: None,
+});
+let noise = device.create_texture_with_data(queue, &wgpu::TextureDescriptor { label: Some("gtao noise"), size: wgpu::Extent3d { width: 5, height: 5, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] }, wgpu::util::TextureDataOrder::LayerMajor, &magic_square_noise()).create_view(&Default::default());
 let mtex = device.create_texture(&wgpu::TextureDescriptor { label: Some("ae meter"), size: wgpu::Extent3d { width: METER_GRID, height: METER_GRID, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
 let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: mtex.create_view(&Default::default()), tex: mtex, buf: device.create_buffer(&wgpu::BufferDescriptor { label: Some("ae meter readback"), size: 256 * METER_GRID as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }), armed: false, pending: Default::default(), grid: Default::default() };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("post sampler"), address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
@@ -132,7 +218,7 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             readback: device.create_buffer(&wgpu::BufferDescriptor { label: Some("post ts readback"), size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
             period_ns: queue.get_timestamp_period(),
         });
-        Self { layout, meter, meter_on: false, ae_mul: 1.0, p_high, p_blur, p_resolve, sampler, dummy, uniform, sized: None, tone_mapping, bloom: None, timing, timed: false }
+        Self { layout, ao_layout, p_ao, noise, scene_view: None, depth_view: None, proj: [[0.0; 4]; 4], proj_inv: [[0.0; 4]; 4], gtao: None, meter, meter_on: false, ae_mul: 1.0, p_high, p_blur, p_resolve, sampler, dummy, uniform, sized: None, tone_mapping, bloom: None, timing, timed: false }
     }
     fn mk_target(device: &wgpu::Device, w: u32, h: u32, label: &str) -> wgpu::TextureView {
         device
@@ -140,7 +226,9 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             .create_view(&Default::default())
     }
     /// (Re)build size-dependent targets + bind groups. BloomNode.setSize: bright/mip0 = round(size/2), mip i+1 = round(mip i / 2).
-    pub fn resize(&mut self, device: &wgpu::Device, scene: &wgpu::TextureView, w: u32, h: u32) {
+    pub fn resize(&mut self, device: &wgpu::Device, scene: &wgpu::TextureView, depth: &wgpu::TextureView, w: u32, h: u32) {
+self.scene_view = Some(scene.clone());
+self.depth_view = Some(depth.clone());
         let mut sizes = Vec::new();
         let (mut rx, mut ry) = (((w as f64) / 2.0).round() as u32, ((h as f64) / 2.0).round() as u32);
         for _ in 0..BLOOM_MIPS {
@@ -153,7 +241,7 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
         let vs: Vec<_> = sizes.iter().map(|s| Self::mk_target(device, s.0, s.1, "bloom v")).collect();
         let mut blur_u = Vec::new();
         let mk_u = |dev: &wgpu::Device, dir: [f32; 2], inv: [f32; 2], k: f32| {
-            let u = PostUniform { tone: [0.0; 4], bloom: [0.0; 4], blur: [dir[0] * inv[0], dir[1] * inv[1], k, 0.0] };
+            let u = PostUniform { tone: [0.0; 4], bloom: [0.0; 4], blur: [dir[0] * inv[0], dir[1] * inv[1], k, 0.0], ao: [0.0; 4] };
             dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("blur uniform"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM })
         };
         for i in 0..BLOOM_MIPS {
@@ -161,10 +249,21 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             blur_u.push(mk_u(device, [1.0, 0.0], inv, BLOOM_KERNELS[i]));
             blur_u.push(mk_u(device, [0.0, 1.0], inv, BLOOM_KERNELS[i]));
         }
-        let bg = |buf: &wgpu::Buffer, texs: [&wgpu::TextureView; 6]| {
+        let ao_scale = self.gtao.map_or(0.0, |g| g.resolution_scale);
+let ao_dims = ((((w as f64) * ao_scale as f64).round() as u32).max(1), (((h as f64) * ao_scale as f64).round() as u32).max(1)); // GTAONode.setSize
+let ao_target = (ao_scale > 0.0).then(|| device.create_texture(&wgpu::TextureDescriptor { label: Some("gtao"), size: wgpu::Extent3d { width: ao_dims.0, height: ao_dims.1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: GTAO_FORMAT, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] }).create_view(&Default::default()));
+let ao_buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("gtao uniform"), size: std::mem::size_of::<AoUniform>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+let ao_bind = ao_target.as_ref().map(|_| device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("gtao bind"), layout: &self.ao_layout, entries: &[
+wgpu::BindGroupEntry { binding: 0, resource: ao_buf.as_entire_binding() },
+wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(depth) },
+wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.noise) },
+] }));
+let ao_view = ao_target.as_ref().unwrap_or(&self.dummy);
+let bg = |buf: &wgpu::Buffer, texs: [&wgpu::TextureView; 6]| {
             let mut e = vec![wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() }];
             for (i, t) in texs.iter().enumerate() { e.push(wgpu::BindGroupEntry { binding: 1 + i as u32, resource: wgpu::BindingResource::TextureView(t) }); }
             e.push(wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&self.sampler) });
+e.push(wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(ao_view) });
             device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("post bind"), layout: &self.layout, entries: &e })
         };
         let d = &self.dummy;
@@ -177,9 +276,20 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             bind_v.push(bg(&blur_u[2 * i + 1], [&hs[i], d, d, d, d, d]));
         }
         let bind_resolve = bg(&self.uniform, [scene, &vs[0], &vs[1], &vs[2], &vs[3], &vs[4]]);
-        self.sized = Some(Sized { size: (w, h), bind_high, bind_h, bind_v, bind_resolve, bright, hs, vs, blur_u });
+        self.sized = Some(Sized { size: (w, h), bind_high, bind_h, bind_v, bind_resolve, bright, hs, vs, blur_u, ao_target, ao_bind, ao_scale, ao_buf, ao_dims });
     }
-    pub fn size(&self) -> Option<(u32, u32)> {
+    /// Rebuild the size-dependent targets when GTAO was switched on/off or its resolutionScale changed (call before `encode`; cheap no-op otherwise).
+pub fn ensure_ao(&mut self, device: &wgpu::Device) {
+let want = self.gtao.map_or(0.0, |g| g.resolution_scale);
+let Some(s) = self.sized.as_ref() else { return };
+if (s.ao_scale - want).abs() < 1e-6 { return }
+let (w, h) = s.size;
+let (Some(sc), Some(d)) = (self.scene_view.clone(), self.depth_view.clone()) else { return };
+self.resize(device, &sc, &d, w, h);
+}
+/// GTAO target size (testing/stats).
+pub fn gtao_dims(&self) -> Option<(u32, u32)> { self.sized.as_ref().and_then(|s| s.ao_target.as_ref().map(|_| s.ao_dims)) }
+pub fn size(&self) -> Option<(u32, u32)> {
         self.sized.as_ref().map(|s| s.size)
     }
     /// Encode the whole post chain: scene (bound at `resize`) -> `out` (sRGB view of the internal colour). `exposure` = three `toneMappingExposure`.
@@ -190,8 +300,9 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             tone: [exposure, self.tone_mapping as f32, if b.is_some() { 1.0 } else { 0.0 }, b.map_or(0.0, |b| b.strength)],
             bloom: b.map_or([0.0, 0.0, 0.0, self.ae_mul], |b| [b.radius, b.threshold, b.smooth_width, self.ae_mul]),
             blur: [0.0; 4],
-        };
-        queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
+ao: self.gtao.map_or([0.0; 4], |g| [if s.ao_target.is_some() { 1.0 } else { 0.0 }, g.intensity, 0.0, 0.0]),
+};
+queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
         let mut first = true;
         let timing = &self.timing;
         let mut pass = |encoder: &mut wgpu::CommandEncoder, label: &str, pipe: &wgpu::RenderPipeline, bind: &wgpu::BindGroup, view: &wgpu::TextureView, last: bool| {
@@ -212,8 +323,13 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             p.set_bind_group(0, bind, &[]);
             p.draw(0..3, 0..1);
         };
-        if b.is_some() {
-            pass(encoder, "bloom high", &self.p_high, &s.bind_high, &s.bright, false);
+        if let (Some(g), Some(ab), Some(t)) = (self.gtao, s.ao_bind.as_ref(), s.ao_target.as_ref()) {
+let au = AoUniform { proj: self.proj, proj_inv: self.proj_inv, p0: [g.radius, g.thickness, g.samples, g.distance_exponent], p1: [g.distance_fall_off, g.scale, g.fade_start, g.fade_end], res: [s.ao_dims.0 as f32, s.ao_dims.1 as f32, 0.0, 0.0] };
+queue.write_buffer(&s.ao_buf, 0, bytemuck::bytes_of(&au));
+pass(encoder, "gtao", &self.p_ao, ab, t, false);
+}
+if b.is_some() {
+pass(encoder, "bloom high", &self.p_high, &s.bind_high, &s.bright, false);
             for i in 0..BLOOM_MIPS {
                 pass(encoder, "bloom blur h", &self.p_blur, &s.bind_h[i], &s.hs[i], false);
                 pass(encoder, "bloom blur v", &self.p_blur, &s.bind_v[i], &s.vs[i], false);

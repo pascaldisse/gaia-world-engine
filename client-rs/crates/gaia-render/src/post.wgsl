@@ -4,6 +4,7 @@ struct PostU {
     tone: vec4<f32>,   // x exposure, y three tone-mapping constant (0 None 1 Linear 2 Reinhard 3 Cineon 4 ACESFilmic 6 AgX 7 Neutral), z bloom on (0/1), w bloom strength
     bloom: vec4<f32>,  // x radius, y threshold, z smoothWidth, w unused
     blur: vec4<f32>,   // xy = direction * invSize (target texel), z kernelRadius, w unused (blur passes only)
+ao: vec4<f32>,     // x GTAO composite on (0/1), y intensity
 };
 @group(0) @binding(0) var<uniform> pu: PostU;
 @group(0) @binding(1) var t0: texture_2d<f32>;
@@ -13,6 +14,13 @@ struct PostU {
 @group(0) @binding(5) var t4: texture_2d<f32>;
 @group(0) @binding(6) var t5: texture_2d<f32>;
 @group(0) @binding(7) var samp: sampler;
+@group(0) @binding(8) var t6: texture_2d<f32>; // r12 GTAO (R raw AO, G distance-fade weight)
+// lighting/post.js: aoTerm = mix(1, mix(1, rawAo, intensity), weight); colour * aoTerm happens BEFORE auto-exposure / bloom / tone map
+fn ao_term(uv: vec2<f32>) -> f32 {
+if (pu.ao.x < 0.5) { return 1.0; }
+let a = textureSampleLevel(t6, samp, uv, 0.0).rg;
+return mix(1.0, mix(1.0, a.r, pu.ao.y), a.g);
+}
 struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex
 fn vs_full(@builtin(vertex_index) i: u32) -> VO {
@@ -25,7 +33,7 @@ fn vs_full(@builtin(vertex_index) i: u32) -> VO {
 // BloomNode luminosityHighPass: mix(vec4(0), texel, smoothstep(threshold, threshold + smoothWidth, luminance(rgb)))
 @fragment
 fn fs_highpass(in: VO) -> @location(0) vec4<f32> {
-    let texel = textureSampleLevel(t0, samp, in.uv, 0.0) * pu.bloom.w; // bloom.w = host eye-adaptation multiplier (before bloom, like three expMul)
+    let texel = textureSampleLevel(t0, samp, in.uv, 0.0) * (pu.bloom.w * ao_term(in.uv)); // bloom.w = host eye-adaptation multiplier (before bloom, like three expMul)
     let v = dot(texel.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     let a = smoothstep(pu.bloom.y, pu.bloom.y + pu.bloom.z, v);
     return texel * a;
@@ -121,7 +129,7 @@ fn tone_map(c: vec3<f32>, mode: u32, e: f32) -> vec3<f32> {
 @fragment
 fn fs_resolve(in: VO) -> @location(0) vec4<f32> {
     let s = textureSampleLevel(t0, samp, in.uv, 0.0);
-    var c = s.rgb * pu.bloom.w;
+    var c = s.rgb * (pu.bloom.w * ao_term(in.uv));
     if (pu.tone.z > 0.5) {
         let r = pu.bloom.x;
         var sum = lerp_bloom(1.0, r) * textureSampleLevel(t1, samp, in.uv, 0.0).rgb;

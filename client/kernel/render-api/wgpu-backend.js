@@ -106,6 +106,12 @@ const DBG_EXPR = {
 };
 function debugOutPkg(pkg) {
   const term = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('wgpuDbg') : null;
+  // r10-shadow-16: ?wgpuDbg=gigrid packs the GI query into one colour: R = finest-cascade coverage weight, G = GI query .y (pre-hemi-substitution), B = irradiance.y (after substitution). Names are three's generated vars, found by shape (debug only).
+  if (term === 'gigrid') {
+    const m = /irradiance \+ \( vec3<f32>\( max\( max\( (\w+), (\w+) \), (\w+) \) \) \* \( (\w+) - mix\( /.exec(pkg.fragment);
+    if (!m || !/output\.color = [^;]+;/.test(pkg.fragment)) return pkg;
+    return { ...pkg, fragment: pkg.fragment.replace(/output\.color = [^;]+;/, `output.color = vec4<f32>(${m[3]}, ${m[4]}.y, irradiance.y, 1.0);`) };
+  }
   const expr = term && DBG_EXPR[term];
   if (!expr || !/output\.color = [^;]+;/.test(pkg.fragment)) return pkg;
   if (/gaiaSunDir/.test(expr) && !pkg.fragment.includes('object.gaiaSunDir')) return pkg; // non-receiver: left as lit

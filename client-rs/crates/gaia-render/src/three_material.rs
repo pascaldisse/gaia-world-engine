@@ -154,7 +154,9 @@ receiver: &wgpu::BindGroupLayout,
     let (vs, fs0) = (s("vertex")?, s("fragment")?);
     let mut slots = Vec::new();
     stage_globals(vs, wgpu::ShaderStages::VERTEX, &mut slots, "vertex")?;
-    stage_globals(fs0, wgpu::ShaderStages::FRAGMENT, &mut slots, "fragment")?;
+    // package-only reflection: the core receiver is appended below once the group index is known; here a stub satisfies naga.
+let fs_probe = if fs0.contains("gaia_sun_shadow(") { format!("{fs0}\nfn gaia_sun_shadow_core(world: vec3<f32>, cam: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 {{ return 1.0; }}\n") } else { fs0.to_string() };
+stage_globals(&fs_probe, wgpu::ShaderStages::FRAGMENT, &mut slots, "fragment")?;
     // package uniforms by (group, binding, member) → semantic + initial value
     let mut pv: HashMap<(u32, u32, String), (Option<String>, Option<String>, Vec<f32>)> = HashMap::new();
     for g in pkg["bindGroups"].as_array().into_iter().flatten() {

@@ -192,7 +192,10 @@ stage_globals(&fs_probe, wgpu::ShaderStages::FRAGMENT, &mut slots, "fragment")?;
     let fs_owned;
     let fs: &str = if let Some(g) = shadow_group {
         fs_owned = format!("{fs0}\n{}", receiver_wgsl(g)?);
-        stage_globals(&fs_owned, wgpu::ShaderStages::FRAGMENT, &mut Vec::new(), "fragment+shadow receiver")?;
+        { // the receiver's uniform struct holds arrays (stage_globals reflects scalar/vec/mat members only) → validate the combined module directly; its bind group is the core's, never package-reflected.
+            let m = naga::front::wgsl::parse_str(&fs_owned).map_err(|e| format!("fragment+shadow receiver: WGSL parse: {}", e.emit_to_string(&fs_owned)))?;
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&m).map_err(|e| format!("fragment+shadow receiver: naga validation: {}", e.emit_to_string(&fs_owned)))?;
+        }
         &fs_owned
     } else { fs0 };
     let layouts: Vec<wgpu::BindGroupLayout> = (0..ngroups)

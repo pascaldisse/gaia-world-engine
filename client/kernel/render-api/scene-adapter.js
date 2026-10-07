@@ -22,6 +22,7 @@ const mats = new Map();        // material → { id, sig, epoch, params, users:S
 const lights = new Map();      // Light → { id, kind, sig }
 const stats = { frames: 0, created: 0, updated: 0, removed: 0, uploadsGeometry: 0, updatedBy: {}, degraded: new Set(), unsupported: new Set() };
 // r6-tsl: every TSL NodeMaterial is accounted: ok (shader material created) | refused (stage + normalised reason; material drawn as PBR) | attribute gaps (draw skipped by the core).
+const sub = stats.sub = { updateShaderBuffers: 0, liveUpdate: 0, liveMats: 0, setShaderUniforms: 0, ensureMaterial: 0, feedMeshAttrs: 0, exportCalls: 0, materialToParams: 0 }; // r10: cumulative per-stage ms (stats.sub / frames = per-frame)
 const tsl = stats.tsl = { ok: 0, refused: 0, byReason: {}, samples: {}, detail: {}, missingAttr: {}, attrUploads: 0, instAttrRows: 0 };
 const normReason = (r) => String(r).replace(/\s+/g, ' ').replace(/0x[0-9a-f]+|\b\d+\b/gi, 'N').slice(0, 160);
 function tslRefuse(m, stage, reason, pkg = null) {
@@ -141,24 +142,37 @@ return p;
 // Lights are baked into the package's lightsNode at export (scene passed below); their VALUES ride the same path.
 let frameScene = null, frameCamera = null;
 function syncLiveUniforms() {
+  let batch = null;
   for (const [, e] of mats) {
     const wg = e.conv?.kind === 'wgsl' && !e.fellBack && e.epoch === epoch;
-if (wg && backend.updateShaderBuffers) { const n = backend.updateShaderBuffers(e.id); if (n) stats.bufferWrites = (stats.bufferWrites ?? 0) + n; } // r6-tsl-2: storage buffers follow BufferAttribute.version
+if (wg && backend.updateShaderBuffers) { const tb = now(); const n = backend.updateShaderBuffers(e.id); sub.updateShaderBuffers += now() - tb; if (n) stats.bufferWrites = (stats.bufferWrites ?? 0) + n; } // r6-tsl-2: storage buffers follow BufferAttribute.version
 const live = wg ? e.conv.package?.live : null;
 if (!live) continue;
-    const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined });
+    const tl = now(); sub.liveMats++;
+    const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined, frameToken: epoch });
+    sub.liveUpdate += now() - tl;
     if (!changed.length) continue;
-    if (backend.setShaderUniforms) { backend.setShaderUniforms(e.id, changed); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; }
+    const ts = now();
+    if (backend.setShaderUniformsBatch) { (batch ??= []).push([e.id, changed]); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; } // r10-5: one backend call per frame
+    else if (backend.setShaderUniforms) { backend.setShaderUniforms(e.id, changed); stats.uniformWrites = (stats.uniformWrites ?? 0) + changed.length; }
     else stats.degraded.add('setShaderUniforms-missing:tsl-values-frozen');
+    sub.setShaderUniforms += now() - ts;
   }
+  if (batch) { const ts = now(); backend.setShaderUniformsBatch(batch); sub.setShaderUniforms += now() - ts; }
 }
+const hashStr = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
 function ensureMaterial(m, o = null) {
 let e = mats.get(m);
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
 const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh ? { geometry: o.geometry } : { object: o }) : {};
-const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
+sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
+{ const dt = now() - tmp; sub.materialToParams += dt; // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
+ const x = stats.exportWhy ??= { newMat: 0, versionBump: 0, sigChange: 0, ms: { newMat: 0, versionBump: 0, sigChange: 0 }, keys: new Map(), log: [] };
+ const why = !e ? 'newMat' : (conv.kind === 'wgsl' && e.conv?.kind === 'wgsl' ? 'versionBump' : 'sigChange'); x[why]++; x.ms[why] += dt;
+ if (conv.package) { const k = conv.package.vertex.length + ':' + conv.package.fragment.length + ':' + hashStr(conv.package.vertex + conv.package.fragment); const r = x.keys.get(k) ?? { n: 0, ms: 0, name: m.name || m.type }; r.n++; r.ms += dt; x.keys.set(k, r); }
+ if (x.log.length < 40) x.log.push({ why, ms: +dt.toFixed(1), name: m.name || m.type, ver: m.version }); }
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (!e) {
 const id = createMat(conv, m);
@@ -476,7 +490,7 @@ if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || 
 }
 if (u) { backend.updateNode(p.node, u); upd('node'); }
 // refresh material conversion (property edits) — cheap, once per material per frame (epoch-gated inside)
-{ const me = ensureMaterial(p.mat, o); const gpp = geos.get(p.geo)?.parts.get(p.geoKey); if (gpp) feedMeshAttrs(gpp, p.geo, me, p.mat); }
+{ const ta = now(); const me = ensureMaterial(p.mat, o); const tb = now(); const gpp = geos.get(p.geo)?.parts.get(p.geoKey); if (gpp) feedMeshAttrs(gpp, p.geo, me, p.mat); sub.ensureMaterial += tb - ta; sub.feedMeshAttrs += now() - tb; }
 }
 if (moved) rec.matrix.set(o.matrixWorld.elements);
 rec.fbits = fb; rec.fro = fro;

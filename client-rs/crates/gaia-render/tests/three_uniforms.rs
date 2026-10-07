@@ -75,6 +75,14 @@ fn three_live_uniforms_and_lights() {
         let view = out.create_view(&Default::default());
         for (fi, changed) in case["frames"].as_array().unwrap().iter().enumerate() {
             if !changed.as_array().unwrap().is_empty() { core.set_three_uniforms(9, &changed.to_string()).unwrap_or_else(|e| panic!("{name} f{fi}: {e}")); }
+            // r10-5: batched path (shared table + index list) must accept the same payload and report 1 material; identical values re-applied = same pixels.
+            if !changed.as_array().unwrap().is_empty() {
+                let n = changed.as_array().unwrap().len();
+                let batch = serde_json::json!({ "s": changed, "m": [[9, (0..n).collect::<Vec<_>>()]] });
+                assert_eq!(core.set_three_uniforms_batch(&batch.to_string()).unwrap_or_else(|e| panic!("{name} f{fi} batch: {e}")), 1);
+                let bad = serde_json::json!({ "s": [{"key": "no-such-key", "value": 1.0}], "m": [[9, [0]]] });
+                assert!(core.set_three_uniforms_batch(&bad.to_string()).is_err(), "unknown key must be loud");
+            }
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let mut enc = device.create_command_encoder(&Default::default());
             core.render(&device, &queue, &mut enc, &view, UpscaleSize { width: size, height: size });
@@ -92,4 +100,16 @@ fn three_live_uniforms_and_lights() {
             println!("THREE-R4 {name} f{fi}: changed={} draws={} covered_px={lit}", changed.as_array().unwrap().len(), core.last_draw_calls);
         }
     }
+}
+
+/// r10-5: batch API fails LOUD (never silently drops): bad JSON, wrong shape, unknown material, bad shared index. Valid-but-empty batch = Ok(0).
+#[test]
+fn r10_batch_malformed_is_loud() {
+    let (device, queue) = device();
+    let mut core = RenderCore::new(&device, &queue, RenderOptions::default());
+    assert_eq!(core.set_three_uniforms_batch(r#"{"s":[],"m":[]}"#), Ok(0));
+    assert!(core.set_three_uniforms_batch("not json").is_err());
+    assert!(core.set_three_uniforms_batch(r#"{"s":[]}"#).is_err());
+    assert!(core.set_three_uniforms_batch(r#"{"s":[{"key":"k","value":1}],"m":[[77,[0]]]}"#).unwrap_err().contains("not a three material"));
+    assert!(core.set_three_uniforms_batch(r#"{"s":[],"m":[[77,[3]]]}"#).unwrap_err().contains("out of range"));
 }

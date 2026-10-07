@@ -13,6 +13,13 @@ import { textureData, arrayTextureData } from './material-map.js';
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 // '#rrggbb' | 0xrrggbb are authoring (sRGB) colors → linear (three ColorManagement); [r,g,b] arrays are taken as linear.
+// r10-5: exact equality of live uniform plain values (number | number[] | bool) - shared-value dedupe must be lossless.
+function sameNum(a, b) {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || !a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
 function colorOf(c, fallback = [1, 1, 1]) {
   if (c == null) return fallback;
   if (Array.isArray(c) || ArrayBuffer.isView(c)) return [c[0], c[1], c[2]];
@@ -398,6 +405,25 @@ threeSkipped() { return gpu.threeSkipped(); },
     setShaderTime(seconds) { gpu.setThreeTime(seconds); },
     // r4: changed live uniform values [{key,value}] (tsl-export pkg.live.update()) → core reflected uniform buffer.
     setShaderUniforms(id, changed) { if (changed.length) gpu.setThreeUniforms(id, JSON.stringify(changed)); },
+    // r10-5: one wasm call per frame. list = [[materialId, changed[]]]; values identical across materials (shared camera/light/viewport nodes) are shipped + parsed once ("s"), materials reference them by index. batch.on=false -> legacy per-material calls (A/B flag, live: backend.uniBatch.on).
+    uniBatch: { on: true, calls: 0, mats: 0, shared: 0, own: 0 },
+    setShaderUniformsBatch(list) {
+      const B = backend.uniBatch;
+      if (!B.on) { for (const [id, ch] of list) backend.setShaderUniforms(id, ch); return; }
+      const s = [], at = new Map(), m = [];
+      for (const [id, ch] of list) {
+        const idx = [], own = [];
+        for (const c of ch) {
+          const h = at.get(c.key);
+          if (h === undefined) { at.set(c.key, { i: s.length, v: c.value }); idx.push(s.length); s.push(c); }
+          else if (sameNum(h.v, c.value)) idx.push(h.i);
+          else own.push(c);
+        }
+        m.push(own.length ? [id, idx, own] : [id, idx]);
+      }
+      B.calls++; B.mats += m.length; B.shared += s.length; B.own += m.reduce((a, x) => a + (x[2]?.length ?? 0), 0);
+      if (m.length) gpu.setThreeUniformsBatch(JSON.stringify({ s, m }));
+    },
     destroyMaterial(id) {
       gpu.destroyMaterial(id); matFlags.delete(id); recvUsers.delete(id);
       for (const h of matTextures.get(id) || []) releaseTexture(h);

@@ -465,6 +465,11 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_three_uniforms(&mut self, material: u32, json: &str) -> Result<u32, JsValue> {
         self.core.set_three_uniforms(material, json).map(|n| n as u32).map_err(|e| JsValue::from_str(&e))
     }
+    /// r10-5: batched live uniforms, one call per frame (see RenderCore::set_three_uniforms_batch).
+    #[wasm_bindgen(js_name = setThreeUniformsBatch)]
+    pub fn set_three_uniforms_batch(&mut self, json: &str) -> Result<u32, JsValue> {
+        self.core.set_three_uniforms_batch(json).map(|n| n as u32).map_err(|e| JsValue::from_str(&e))
+    }
     /// r6-tsl: extra named per-vertex attribute (uv1, colour, custom, node buffer attribute: `node:<uuid>`) for TSL materials.
     #[wasm_bindgen(js_name = setMeshAttribute)]
     pub fn set_mesh_attribute(&mut self, mesh: u32, name: &str, item_size: u32, data: &[f32]) -> Result<(), JsError> {

@@ -5,3 +5,5 @@
 - scene.background CubeTexture + scene.environment cube ALREADY implemented at HEAD (r6-scene: readCube → backend.setBackgroundTexture kind cube; scene-adapter.js:448 'unsupported' = only non-Texture / unreadable bg).
 - three flipEnvMap(-1 x) is applied by the TSL node in generated WGSL → core uploads faces raw, +X -X +Y -Y +Z -Z.
 ## S2 Rust (18:13): CubeTex store + create_texture_cube (6 faces, GPU mips) + white_cube fallback + three_material Cube bind + wasm createTextureCube + tests/texture_cube.rs
+## S3 JS (18:19): material-map.js cubeTextureData (readCube; refuses render-target/compressed/HDR/unreadable LOUD) + wgpu-backend createShaderMaterial 'texture-cube' + acquireTexture t.cube → gpu.createTextureCube. test/render-api-cube.test.js 4 pass (real TSL cubeTexture() export). bun render-api-*+gi-attach: 101 pass 0 fail.
+- REFUSED remainder: dynamic CubeCamera/render-to-cube (loud), HDR/float/compressed cubes (loud), builtin-PBR material.envMap (not forwarded; scene.environment SH diffuse only), cube upload mips = GPU-generated (not three's own mipmaps[]).

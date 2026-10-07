@@ -9,7 +9,7 @@
 // the core only knows flat world-space instances, so node hierarchy (parent × local) + visibility are resolved in JS and
 // pushed down as world mat4s. Capabilities are the honest subset gaia-render has TODAY (see NOTES in crates/gaia-render).
 import { RENDER_API_VERSION, validateMeshArrays, isMat4, IDENTITY_MAT4, normalizeGroups, bitsToWords } from './interface.js';
-import { textureData, arrayTextureData } from './material-map.js';
+import { textureData, arrayTextureData, cubeTextureData } from './material-map.js';
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 // '#rrggbb' | 0xrrggbb are authoring (sRGB) colors → linear (three ColorManagement); [r,g,b] arrays are taken as linear.
@@ -157,10 +157,11 @@ return { id: c.id, key: t.key };
 }
 }
 const data = t.data;
-if (!data || !(t.width > 0) || !(t.height > 0)) throw new Error('createMaterial: texture map needs { width, height, data }');
+if (!data || !(t.cube ? t.size > 0 : (t.width > 0 && t.height > 0))) throw new Error('createMaterial: texture map needs { width, height, data }');
 const bytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer ?? data);
 let id;
-if (t.array) { id = gpu.createTextureArray(t.width, t.height, t.layers, bytes, t.srgb !== false); t.takeLayerUpdates?.(); }
+if (t.cube) id = gpu.createTextureCube(t.size, bytes, t.srgb !== false);
+else if (t.array) { id = gpu.createTextureArray(t.width, t.height, t.layers, bytes, t.srgb !== false); t.takeLayerUpdates?.(); }
 else id = t.srgb === false ? gpu.createTextureLinear(t.width, t.height, bytes) : gpu.createTexture(t.width, t.height, bytes); // colour space flag honored (three colorSpace)
 texStats.uploads++;
 if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version, fresh: t.fresh ?? null });
@@ -404,6 +405,10 @@ threeSkipped() { return gpu.threeSkipped(); },
         if (kind === 'texture-2d-array') {
           const d = t && arrayTextureData(t);
           if (!d || d.refused) fail(`createShaderMaterial: texture array '${b.name}' (uuid ${b.textureUuid}) ${d?.refused ?? 'has no readable layer data'}`);
+          h = acquireTexture(d);
+        } else if (kind === 'texture-cube') { // r12-water: static CubeTexture (6 faces + GPU mips); render-target cube (CubeCamera) = loud refusal
+          const d = t && cubeTextureData(t);
+          if (!d || d.refused) fail(`createShaderMaterial: texture cube '${b.name}' (uuid ${b.textureUuid}) ${d?.refused ?? 'has no readable faces'}`);
           h = acquireTexture(d);
         } else if (kind === 'texture-2d') {
           // r5 adapter texture cache: ONE CPU read per (texture, version), GPU texture shared + refcounted across materials. three samples non-sRGB textures without decode (r4) → linear upload.

@@ -1,5 +1,6 @@
 // render-api/material-map.js — three Material → render-api material description. NO three import (duck-typed).
 import { arrayMirror } from './gpu-mirror.js';
+import { readCube } from './env-image.js';
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
@@ -68,6 +69,19 @@ export function arrayTextureData(t) {
   if (!isBytes(im.data) || im.data.length !== im.width * im.height * 4 * im.depth) return { array: true, refused: `array texture data is not rgba8 (${im.data.constructor?.name} len ${im.data.length} vs ${im.width}x${im.height}x4x${im.depth})` };
   return { array: true, width: im.width, height: im.height, layers: im.depth, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:array`, version: t.version, data: new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.length),
     takeLayerUpdates() { const s = t.layerUpdates; const d = s && s.size ? [...s] : null; t.clearLayerUpdates?.(); return d; } };
+}
+// r12-water: three CubeTexture (image = 6 faces +X -X +Y -Y +Z -Z) -> cube descriptor {cube,size,srgb,key,version,data(6 faces RGBA8, top-first)}. Generic three type, no game contract.
+// Static cubes only: a render-target cube (CubeCamera / WebGLCubeRenderTarget texture) or unreadable faces = LOUD { cube, refused } (caller throws), never a silent skip.
+const cubeCache = new WeakMap();
+export function cubeTextureData(t) {
+  if (!t) return null;
+  if (t.isRenderTargetTexture || t.isCompressedCubeTexture) return { cube: true, refused: t.isCompressedCubeTexture ? 'compressed CubeTexture (BC/ASTC upload not implemented)' : 'render-target cube (dynamic CubeCamera / PMREM render-to-cube not implemented; only static CubeTexture)' };
+  const c = cubeCache.get(t); if (c && c.version === t.version && c.image === t.image) return c.desc;
+  let r; try { r = readCube(t); } catch (e) { return { cube: true, refused: String(e?.message ?? e) }; }
+  if (r.hdrClamped) return { cube: true, refused: 'HDR/float CubeTexture (RGBA8 upload only; clamping would be a silent downgrade)' };
+  const desc = { cube: true, size: r.size, srgb: r.srgb, key: `${t.uuid}:cube:${t.version}`, version: t.version, data: r.faces };
+  cubeCache.set(t, { version: t.version, image: t.image, desc });
+  return desc;
 }
 export { textureData };
 export function pbrParams(m) {

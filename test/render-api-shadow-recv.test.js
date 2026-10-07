@@ -36,7 +36,7 @@ test('adapter: one material, receiver + non-receiver (plain + instanced) → dis
   const be = createMockBackend(); const pkgs = [];
   const orig = be.createShaderMaterial?.bind(be); be.createShaderMaterial = (p) => { pkgs.push(p); return orig ? orig(p) : pkgs.length; };
   scene.add(a, b, inst);
-  const ad = createSceneAdapter(be, { three: THREE, exportNodeMaterial, tslOptions: { THREE } });
+  const ad = createSceneAdapter(be, { three: THREE, exportNodeMaterial, tslOptions: { THREE }, recvVariants: true });
   const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100); cam.position.set(0, 0, 5);
   ad.sync(scene, cam);
   assert.equal(pkgs.length, 2, 'two exports for one material');

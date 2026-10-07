@@ -21,7 +21,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' }, hdrScene: params.get('wgpuPost') === '0' ? 0 : 1 } });
-  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE }, nativeInstancing: params.get('wgpuInst') !== '0' });
+  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE, coreShadow: params.get('wgpuCoreShadow') !== '0' }, nativeInstancing: params.get('wgpuInst') !== '0', recvVariants: params.get('wgpuRecvVar') === '1' });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)

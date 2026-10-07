@@ -11,7 +11,7 @@ const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture
 
 // builder → data package. `THREE` = three/webgpu namespace; `WGSLNodeBuilder` is not exported publicly, so we reach it
 // through three's own backend factory (WebGPUBackend.prototype.createNodeBuilder) without constructing a device.
-export function exportNodeMaterial(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null, receiveShadow = false, castShadow = false } = {}) {
+export function exportNodeMaterial(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null, receiveShadow = false, castShadow = false, coreShadow = true } = {}) {
 if (!material?.isNodeMaterial) throw new Error('exportNodeMaterial: material.isNodeMaterial required');
 const Ctor = wgslBuilderCtor ?? headlessRenderer(THREE)._ctor;
 const r = renderer ?? headlessRenderer(THREE);
@@ -31,7 +31,7 @@ b.lightsNode = lights.length ? r.lighting.createNode(lights) : null; b.environme
 // r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
 // The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
 // (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
-const restoreShadow = installCoreShadow(THREE, lights, r);
+const restoreShadow = coreShadow === false ? () => {} : installCoreShadow(THREE, lights, r); // coreShadow:false = A/B switch (?wgpuCoreShadow=0)
 try { b.build(); } finally { restoreShadow(); }
 // uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
 const refs = new Map();

@@ -13,7 +13,7 @@ import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -156,7 +156,7 @@ if (!live) continue;
 const recvVariants = new WeakMap();
 function matKey(m0, o) {
 const src = m0?.__gwSrc ?? m0;
-if (!o || !o.receiveShadow || !exportNodeMaterial || !src?.isNodeMaterial || !customNodeMaterial(src)) return src;
+if (!useRecvVariants || !o || !o.receiveShadow || !exportNodeMaterial || !src?.isNodeMaterial || !customNodeMaterial(src)) return src;
 let v = recvVariants.get(src); if (!v) { v = Object.create(src); Object.defineProperty(v, '__gwSrc', { value: src }); recvVariants.set(src, v); }
 return v;
 }

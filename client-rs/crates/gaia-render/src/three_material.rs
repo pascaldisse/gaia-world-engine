@@ -488,10 +488,11 @@ Kind::Storage { .. } => storage[&mat.storage[&format!("{}.{}", s.group, s.bindin
     }
         /// Inside the forward pass: one draw per three instance (per-object uniforms). Returns (draws, skipped): an instance is SKIPPED
     /// (counted, surfaced by the host) when its material needs a vertex attribute the mesh/instance does not provide — never drawn with garbage.
-    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>, receiver: &wgpu::BindGroup) -> (u32, u32, u32, u32) {
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>, receiver: &wgpu::BindGroup) -> (u32, u32, u32, u32, [u32; 3]) {
         let (mut n, mut skipped) = (0, 0);
         let mut last_pipe: *const wgpu::RenderPipeline = std::ptr::null();
         let (mut changes, mut distinct) = (0u32, std::collections::HashSet::<*const wgpu::RenderPipeline>::new());
+let mut groups = std::collections::HashMap::<(u32, u32), u32>::new(); // r11-floor: (material, mesh) -> member draws; per-material uniform values are shared, only model-derived members differ
         for &(iid, mat_id, _) in instances {
             let Some(mat) = self.mats.get(&mat_id) else { continue };
 let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
@@ -510,6 +511,7 @@ let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
             let pp: *const wgpu::RenderPipeline = &mat.pipeline;
             if pp != last_pipe { changes += 1; last_pipe = pp; }
             distinct.insert(pp);
+*groups.entry((mat_id, *inst_mesh.get(&iid).unwrap_or(&0))).or_default() += 1;
             pass.set_pipeline(&mat.pipeline);
             for (i, bg) in g.groups.iter().enumerate() {
                 pass.set_bind_group(i as u32, bg, &[]);
@@ -521,7 +523,8 @@ let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
             pass.draw_indexed(0..gm.index_count, 0, 0..1);
             n += 1;
         }
-        (n, skipped, changes, distinct.len() as u32)
+        let multi: Vec<u32> = groups.values().copied().filter(|&c| c > 1).collect();
+(n, skipped, changes, distinct.len() as u32, [multi.len() as u32, multi.iter().sum(), groups.len() as u32])
     }
 }
 

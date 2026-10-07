@@ -650,7 +650,7 @@ pub struct RenderCore {
     /// draw_indexed calls issued by the last `render` (one per mesh+material batch).
     pub last_draw_calls: u32,
     /// r11 GPU-floor stats of the last main pass: [draws, pipeline CHANGES, instanced draws (instance range > 1), single-instance draws, instances drawn by the builtin path, three-material (shader) draws, shader-material pipeline changes, distinct shader-material pipelines].
-    pub last_pass_stats: [u32; 8],
+    pub last_pass_stats: [u32; 11],
     frame: FrameUniform,
     targets: Option<Targets>,
     upscaler: Box<dyn Upscaler>,
@@ -869,7 +869,7 @@ impl RenderCore {
             batches: Vec::new(),
             instances_dirty: true,
             last_draw_calls: 0,
-            last_pass_stats: [0; 8],
+            last_pass_stats: [0; 11],
             frame,
             targets: None,
             timing,
@@ -2055,7 +2055,7 @@ impl RenderCore {
             pass.set_bind_group(0, &self.frame_bind, &[]);
             pass.set_bind_group(2, self.shadow.receiver_bind(), &[]);
             let mut draws = 0u32;
-            let mut stats = [0u32; 8];
+            let mut stats = [0u32; 11];
             let mut last_pipe: *const wgpu::RenderPipeline = &self.pipeline;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
@@ -2119,11 +2119,14 @@ impl RenderCore {
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
-                let (n, skipped, tchanges, tdistinct) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs, self.shadow.receiver_bind());
+                let (n, skipped, tchanges, tdistinct, tgroups) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs, self.shadow.receiver_bind());
                 draws += n;
                 stats[5] = n;
                 stats[6] = tchanges;
                 stats[7] = tdistinct;
+stats[8] = tgroups[0];
+stats[9] = tgroups[1];
+stats[10] = tgroups[2];
                 self.three_skipped = skipped;
             }
             stats[0] = draws;

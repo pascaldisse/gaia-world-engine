@@ -44,3 +44,10 @@ test('auto-exposure: no rig / backend without the methods -> bridge untouched (n
   c.tick(); assert.equal(c.stats.ae.on, false);
 });
 test('auto-exposure methods are declared optional', () => { for (const m of ['setAutoExposure', 'autoExposureGrid']) assert.ok(RENDER_API_OPTIONAL_METHODS.includes(m)); });
+test('auto-exposure: rig comes from getAutoExposure (LightingPost owns it; the raw game post has none)', () => {
+  const g = graph(); const calls = [];
+  const backend = { ...mock(), setAutoExposure: (on, mul) => calls.push([on, mul]), autoExposureGrid: () => new Float32Array(0) };
+  const rig = { ae: { cfg: {}, expMul: { value: 1.5 }, ingest() {} } };
+  const br = createPostBridge({ backend, renderer: { toneMapping: 4, toneMappingExposure: 1 }, getPost: () => ({ postProcessing: { outputNode: g.outputNode } }), getAutoExposure: () => rig });
+  br.tick(); assert.deepEqual(calls[0], [true, 1.5]);
+});

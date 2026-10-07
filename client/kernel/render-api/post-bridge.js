@@ -32,11 +32,11 @@ export function readPostState({ renderer, post }) {
     bloom: b ? { strength: b.strength.value, radius: b.radius.value, threshold: b.threshold.value, smoothWidth: b.smoothWidth?.value ?? 0.01 } : null,
   };
 }
-export function createPostBridge({ backend, renderer, getPost = () => null }) {
+export function createPostBridge({ backend, renderer, getPost = () => null, getAutoExposure = null }) {
   const stats = { pushes: 0, toneMapping: null, exposure: null, bloom: null, unsupported: new Set(), error: null, ae: { on: false, mul: 1, grids: 0, pushes: 0 } };
   let sig = '';
 const tickAE = () => {
-const rig = getPost()?.autoExposure, ae = rig?.ae;
+const rig = getAutoExposure?.() ?? getPost()?.autoExposure, ae = rig?.ae; // LightingPost owns the rig; the raw game `post` has none
 if (!ae?.expMul || typeof backend.setAutoExposure !== 'function' || typeof backend.autoExposureGrid !== 'function') return false;
 let pushed = false;
 if (!stats.ae.on) { backend.setAutoExposure(true, ae.expMul.value); stats.ae.on = true; stats.ae.mul = ae.expMul.value; pushed = true; }

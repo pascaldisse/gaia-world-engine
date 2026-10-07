@@ -8,7 +8,7 @@ import { exportNodeMaterial, structCache } from './tsl-export.js';
 import { createGiBridge } from './gi-bridge.js';
 import { createPostBridge } from './post-bridge.js';
 
-export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, params = new URLSearchParams(location.search) }) {
+export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = await import(/* @vite-ignore */ pkg);
   installGpuMirror(renderer); // array pages the game writes straight into three's device stay readable for the wgpu core
@@ -30,7 +30,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)
-  const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost });
+  const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure });
   addEventListener('resize', size);
   const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {

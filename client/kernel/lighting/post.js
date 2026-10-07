@@ -103,7 +103,9 @@ const near = reference('near', 'float', camera);
 const far = reference('far', 'float', camera);
 const dist = perspectiveDepthToViewZ(depthSample.r, near, far).negate();
 const weight = float(1).sub(smoothstep(fadeStart, fadeEnd, dist));
-aoFade = { fadeStart, fadeEnd, near, far, dist, weight, depthSample };
+aoFade = { fadeStart, fadeEnd, near, far, dist, weight, depthSample, intensity: C.ao.intensity };
+// r12: the rig's composite parameters ride on the GTAONode so the wgpu post bridge (render-api/post-bridge.js) can mirror them without a second channel
+aoPass.rigComposite = { intensity: C.ao.intensity, fadeStart, fadeEnd, debug: C.ao.debug ?? null };
 const aoTerm = mix(float(1), mix(float(1), rawAo, float(C.ao.intensity)), weight);
 lit = color.mul(aoTerm);
         if (C.ao.debug === 'mask') {

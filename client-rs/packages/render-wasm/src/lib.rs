@@ -707,6 +707,13 @@ o.into()
         let b = (strength >= 0.0).then_some(gaia_render::BloomParams { strength, radius, threshold, smooth_width });
         self.core.set_bloom(b).map_err(|e| err(&e))
     }
+    /// r12-post: three GTAONode + engine rig composite; `on=false` = off. Needs options.hdrScene = 1. Normals reconstructed from depth.
+    #[wasm_bindgen(js_name = setGtao)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_gtao(&mut self, on: bool, radius: f32, thickness: f32, samples: f32, distance_exponent: f32, distance_fall_off: f32, scale: f32, resolution_scale: f32, intensity: f32, fade_start: f32, fade_end: f32) -> Result<(), JsError> {
+        let g = on.then_some(gaia_render::GtaoParams { radius, thickness, samples, distance_exponent, distance_fall_off, scale, resolution_scale, intensity, fade_start, fade_end });
+        self.core.set_gtao(g).map_err(|e| err(&e))
+    }
     /// r10: eye adaptation. `on` = run the GPU meter; `mul` = host-adapted linear multiplier (scene before bloom/tone map).
     #[wasm_bindgen(js_name = setAutoExposure)]
     pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), JsError> {

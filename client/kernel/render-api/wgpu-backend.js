@@ -88,6 +88,23 @@ export function texturePixels(t) {
   const c = new OffscreenCanvas(w, h).getContext('2d'); c.drawImage(img, 0, 0);
   return { width: w, height: h, data: new Uint8Array(c.getImageData(0, 0, w, h).data.buffer) };
 }
+// r10-shadow-8: ?wgpuDbg=<term> = diagnostic bisect, generic (NO game edits): every exported package's final colour is replaced by ONE lighting term, so a
+// wrong term shows up as a flat/black image. Terms: normal (world N*.5+.5) | ndl (clamp(N.sunDir)) | shadow (core CSM factor) | direct | indirect | albedo | gi (indirect only).
+const DBG_EXPR = {
+  normal: 'normalWorld * 0.5 + vec3<f32>(0.5)',
+  ndl: 'vec3<f32>(clamp(dot(normalWorld, object.gaiaSunDir), 0.0, 1.0))',
+  shadow: 'vec3<f32>(gaia_sun_shadow_core(v_positionWorld, render.cameraPosition, normalWorld, max(dot(normalWorld, object.gaiaSunDir), 0.0)))',
+  combo: 'vec3<f32>(clamp(dot(normalWorld, object.gaiaSunDir), 0.0, 1.0), gaia_sun_shadow_core(v_positionWorld, render.cameraPosition, normalWorld, max(dot(normalWorld, object.gaiaSunDir), 0.0)), clamp(dot(directDiffuse, vec3<f32>(0.3333)) * 3.0, 0.0, 1.0))', // R=N.L G=core shadow B=direct lum*3
+  direct: 'directDiffuse', indirect: 'indirectDiffuse', albedo: 'DiffuseColor.xyz',
+};
+function debugOutPkg(pkg) {
+  const term = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('wgpuDbg') : null;
+  const expr = term && DBG_EXPR[term];
+  if (!expr || !/output\.color = [^;]+;/.test(pkg.fragment)) return pkg;
+  if (/gaiaSunDir/.test(expr) && !pkg.fragment.includes('object.gaiaSunDir')) return pkg; // non-receiver: left as lit
+  return { ...pkg, fragment: pkg.fragment.replace(/output\.color = [^;]+;/, `output.color = vec4<f32>(${expr}, 1.0);`) };
+}
+
 // r4-browser (additive): `options.shadows` = ShadowOptions object (camelCase keys, passed to wasm create). `staticInstances`:
 // 'none' (default) = every instance DYNAMIC in the shadow system (safe for moving games) · 'non-skinned' = every instance whose mesh is NOT a
 // skinned mesh is marked static (cached shadow layers; moving one re-renders the cache) — per-node override: flags.static / updateNode({static}).
@@ -376,7 +393,7 @@ threeSkipped() { return gpu.threeSkipped(); },
         owned.push(h); names.push(b.name); ids.push(h.id);
       }
       let id;
-      try { id = gpu.createThreeMaterial(JSON.stringify(pkg), names, Uint32Array.from(ids)); } catch (e) { fail(String(e?.message ?? e)); }
+      try { id = gpu.createThreeMaterial(JSON.stringify(debugOutPkg(pkg)), names, Uint32Array.from(ids)); } catch (e) { fail(String(e?.message ?? e)); }
       for (const s of stor) gpu.bindThreeStorage(id, s.key, s.h.id);
       if (owned.length) matTextures.set(id, owned);
       if (stor.length) matStorage.set(id, stor);

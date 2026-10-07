@@ -2,11 +2,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
-import { texture, uniform, float, vec3 } from 'three/tsl';
+import { texture, uniform, float, vec3, Fn } from 'three/tsl';
 import { exportNodeMaterial, structCache } from '../client/kernel/render-api/tsl-export.js';
 const tex = (v) => { const t = new THREE.DataTexture(new Uint8Array(16).fill(v), 2, 2, THREE.RGBAFormat); t.needsUpdate = true; return t; };
 const mk = (c, t, f, op = 1) => { const m = new THREE.MeshBasicNodeMaterial(); m.opacity = op; m.transparent = true; m.colorNode = texture(t).rgb.mul(uniform(new THREE.Color(c))).add(float(f)); return m; };
-const reset = () => { for (const k of ['hits', 'misses', 'uncacheable', 'rebindFail', 'mismatch', 'verified']) structCache[k] = 0; structCache.map.clear(); structCache.log.length = 0; structCache.reasons = {}; };
+const reset = () => { for (const k of ['hits', 'misses', 'uncacheable', 'rebindFail', 'mismatch', 'layoutMismatch', 'valueMismatch', 'verified']) structCache[k] = 0; structCache.map.clear(); structCache.log.length = 0; structCache.reasons = {}; };
 // builder-side singleton uniforms (materialOpacity & co) need a 2nd build to be PROVEN shared before the key rebinds -> warm with 2 builds
 const warm = (f = mk) => { exportNodeMaterial(f(0x111111, tex(1), 1), { THREE }); exportNodeMaterial(f(0x222222, tex(2), 1), { THREE }); for (const k of ['hits', 'misses']) structCache[k] = 0; };
 const uni = (p) => p.bindGroups.flatMap((g) => g.bindings).filter((b) => b.uniforms).flatMap((b) => b.uniforms);
@@ -112,4 +112,18 @@ test('retainTemplate: FIFO eviction + hit refreshes recency', async () => {
   const C = { map: new Map(), maxTemplates: 2, evicted: 0 };
   retainTemplate(C, 'a', 1); retainTemplate(C, 'b', 2); retainTemplate(C, 'a', 1); retainTemplate(C, 'c', 3);
   assert.deepEqual([...C.map.keys()], ['a', 'c']); assert.equal(C.evicted, 1);
+});
+
+// r10-8: Burnout-like -- every material builds its OWN closure of the same Fn source (fresh jsFunc identity) -> must key identically (was 1 key / material).
+const mkFn = (c, t, f, op = 1) => { const m = new THREE.MeshBasicNodeMaterial(); m.opacity = op; m.transparent = true; const k = uniform(new THREE.Color(c)); const tx = texture(t); const body = Fn(() => tx.rgb.mul(k).add(float(f))); m.colorNode = body(); return m; };
+test('r10-8: per-material Fn closures of equal source -> 1 build', () => {
+  reset(); warm(mkFn);
+  const ps = [0xff0000, 0x00ff00, 0x0000ff, 0x123456].map((c, i) => exportNodeMaterial(mkFn(c, tex(i * 50), 1, 0.2 + i / 10), { THREE }));
+  assert.equal(structCache.misses, 0, JSON.stringify(structCache.reasons) + structCache.log.join('|')); assert.equal(structCache.hits, 4);
+  assert.ok(ps.every((p) => p.fragment === ps[0].fragment));
+});
+test('r10-8: verify compares WGSL + layout, uniform VALUES checked after first update (0 mismatches of every kind)', () => {
+  reset(); warm(mkFn);
+  for (let i = 0; i < 4; i++) exportNodeMaterial(mkFn(0x101010 * (i + 1), tex(i * 40), 1, 0.1 * (i + 1)), { THREE, cache: 'verify' });
+  assert.equal(structCache.mismatch + structCache.layoutMismatch + structCache.valueMismatch, 0, structCache.log.join('|')); assert.equal(structCache.verified, 4, JSON.stringify({h: structCache.hits, m: structCache.misses, r: structCache.reasons, rf: structCache.rebindFail}) + structCache.log.join('|'));
 });

@@ -198,13 +198,13 @@ function builtinSemantics(THREE) {
 // Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
 // cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0 };
+export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null };
 // r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
 export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
 const fnIds = new WeakMap(); let fnN = 0;
 const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };
-const SKIP_PROPS = new Set(['uuid', 'id', 'name', 'version', 'userData', 'needsUpdate']);
+const SKIP_PROPS = new Set(['uuid', 'id', 'name', 'version', 'userData', 'needsUpdate', 'object3d']);
 const primSig = (o, skipValue, fnBySource, skipFn, skipKeys) => { let s = ''; for (const k of Object.keys(o)) { if (k[0] === '_' || SKIP_PROPS.has(k) || skipKeys?.has(k) || (skipValue && k === 'value')) continue; const v = o[k]; const t = typeof v; if (t === 'boolean' || t === 'string') s += `${k}=${v};`; else if (t === 'number') s += `${k}=${v};`; else if (t === 'function') { if (!skipFn) s += fnBySource ? `${k}=${strHash(Function.prototype.toString.call(v))};` : `${k}=f${fnId(v)};`; } else if (v === null) s += `${k}=null;`; } return s; };
 // r10-6: key = structure of the builder's OWN post-setup graph (builder.nodes after the setup stage: material-owned nodes + everything setup() created,
 // custom subclasses + setup-created uniforms included). Slot nodes (uniform/texture/buffer/attribute) contribute type only, never value/uuid.
@@ -214,7 +214,7 @@ const parts = [];
 for (const k of Object.keys(material).sort()) { const v = material[k]; if (v && v.isTexture) parts.push(`S:${k}:${v.constructor?.name}:${v.format}:${v.type}:${v.colorSpace}:${+!!v.isDepthTexture}:${+!!v.isArrayTexture}:${+!!v.isCubeTexture}:${v.image?.depth ?? ''}`); }
 parts.push(`M:${material.type}:${material.constructor?.name}:${primSig(material, false, true, false, customKeys(THREE, material)).replace(/(opacity|roughness|metalness|ior|thickness|clearcoat\w*|sheen\w*|iridescence\w*|emissiveIntensity|envMapIntensity|reflectivity|specularIntensity|dispersion|anisotropy\w*|attenuationDistance|lightMapIntensity|aoMapIntensity|bumpScale|displacementScale|displacementBias|shininess|linewidth|size|dashSize|gapSize|scale|polygonOffsetFactor|polygonOffsetUnits|alphaTest|blendAlpha|stencilRef|depthFunc)=[^;]*;/g, (m, k2) => (k2 === 'alphaTest' ? `alphaTest=${material.alphaTest > 0 ? 1 : 0};` : ''))}`);
 const g = object?.geometry ?? geometry; const o = object;
-parts.push(`O:${o ? (o.isInstancedMesh ? 'I' : '') + (o.isSkinnedMesh ? 'S' : '') + (o.isBatchedMesh ? 'B' : '') + (o.isPoints ? 'P' : '') + (o.isLine ? 'L' : '') + (o.isSprite ? 'Q' : '') : 'M'}`);
+parts.push(`O:${o ? (o.isInstancedMesh ? 'I' : '') + (o.isSkinnedMesh ? 'S' : '') + (o.isBatchedMesh ? 'B' : '') + (o.isPoints ? 'P' : '') + (o.isLine ? 'L' : '') + (o.isSprite ? 'Q' : '') : ''}`);
 if (g?.attributes) for (const n of Object.keys(g.attributes).sort()) { const a = g.attributes[n]; parts.push(`a:${n}:${a.itemSize}:${a.isInstancedBufferAttribute ? 1 : 0}${a.normalized ? 'n' : ''}`); }
 parts.push(`ix:${g?.index ? 1 : 0}:mo:${g?.morphAttributes ? Object.keys(g.morphAttributes).length : 0}`);
 const L = []; scene?.traverse?.((x) => { if (x.isLight && (x.isDirectionalLight || x.isPointLight || x.isAmbientLight || x.isHemisphereLight)) L.push(x.type + (x.castShadow ? 's' : '')); }); parts.push('L:' + L.join(','));
@@ -241,7 +241,7 @@ const slot = isSlot(n);
 let s = `(${n.constructor?.name}:${n.type ?? ''}:${n.nodeType ?? ''}:${n.updateType ?? ''}${n.updateBeforeType ?? ''}${n.updateAfterType ?? ''}:`;
 if (n.isTextureNode) { const t = n.value; s += `T${t?.constructor?.name}:${t?.format}:${t?.type}:${t?.colorSpace}:${+!!t?.isDepthTexture}:${+!!t?.isArrayTexture}:${+!!t?.isCubeTexture}:${t?.image?.depth ?? ''}`; }
 else if (n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode) { const a = n.value; s += `B${a?.constructor?.name}:${a?.itemSize}:${a?.array?.constructor?.name}:${a?.count ?? ''}`; }
-s += primSig(n, slot, false, slot);
+s += primSig(n, slot, true, slot); // r10-8: function props keyed by SOURCE (not identity) -- Burnout: every material's ShaderNodeInternal.jsFunc is a fresh closure of the same source -> 1415 keys / 22 WGSL. What the closure captured is already in the post-setup graph (constants/slots); verify mode proves it.
 parts.push(s);
 if (!n.isUniformNode) {
 for (const { property, index, childNode } of NU.getNodeChildren(n)) { parts.push(`.${property}${index ?? ''}`); visit(childNode); }
@@ -250,7 +250,7 @@ const props = b.getNodeProperties(n); for (const k of Object.keys(props)) { cons
 parts.push(')');
 };
 for (const n of b.nodes) visit(n);
-return { key: parts.join(''), nodes };
+return { key: parts.join(''), nodes, parts };
 }
 // builder subclass: build() = three r180 NodeBuilder.build with ONE addition -- after the setup stage, this._gate(builder) may throw to skip analyze+generate.
 // The builder (and every builder-side Map: nodeData/uniforms/bindings) is dropped by the caller; node objects only carry what a full setup would have left.
@@ -300,7 +300,7 @@ if (rb) {
 if (mode !== 'verify') { C.hits++; return rb; }
 const full = buildPackage(material, opts); C.verified++;
 const diff = comparePackages(rb, full, tpl);
-if (diff) { C.mismatch++; why('MISMATCH', `${material.name || material.type}: ${diff}`); return full; }
+if (diff) { if (diff.startsWith('WGSL')) C.mismatch++; else if (diff.startsWith('VALUE')) C.valueMismatch++; else C.layoutMismatch++; why('MISMATCH', `${material.name || material.type}: ${diff}`); return full; }
 C.hits++; return full;
 }
 t0 = nowMs(); pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.misses++; return pkg;
@@ -308,6 +308,7 @@ t0 = nowMs(); pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.m
 if (w?.refuse) { C.uncacheable++; why('uncacheable:' + w.refuse.split(':')[0], w.refuse); return pkg; }
 C.misses++;
 if (!w) return pkg;
+if (C.keySamples) { const h = strHash(pkg.vertex + pkg.fragment); const e = C.keySamples.get(h) ?? { n: 0, s: [] }; C.keySamples.set(h, e); e.n++; if (e.s.length < 8) e.s.push({ name: material.name || material.type, parts: w.parts }); } // diagnostic (?wgpuTslKeyDump=1): per-WGSL-hash key parts, for diffing over-split terms
 if (decision === 'prove') { const tpl = hit; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
 for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
 if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } C.wgslOf.set(w.key, k); }
@@ -375,12 +376,15 @@ return pkg;
 function comparePackages(a, b, tpl) {
 if (a.vertex !== b.vertex || a.fragment !== b.fragment) return 'WGSL differs (struct key collision)';
 const ja = JSON.parse(JSON.stringify(a)), jb = JSON.parse(JSON.stringify(b)); delete ja.material.name; delete jb.material.name;
-for (const j of [ja, jb]) for (const g of j.bindGroups) for (const b of g.bindings) for (const u of b.uniforms ?? []) if (u.source?.kind === 'material' || u.source?.kind === 'reference' || tpl.slotMatrix?.has(u.key)) u.value = null; // builder-singleton reference uniforms hold the PREVIOUS material's value at ship time; live.update's first call corrects it (initial-map logic)
+for (const j of [ja, jb]) for (const g of j.bindGroups) for (const b of g.bindings) for (const u of b.uniforms ?? []) if (true) u.value = null; // r10-8: LAYOUT compare only (keys/names/types/offsets/sources) -- uniform VALUES are rebind's job, checked below against the material's own after the first live.update // builder-singleton reference uniforms hold the PREVIOUS material's value at ship time; live.update's first call corrects it (initial-map logic)
 // node uuids are per-build identities (setup-created nodes differ between two independent setups): compare by first-appearance order
 const canon = (j) => { const ids = new Map(); return JSON.stringify(j).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, (u) => { if (!ids.has(u)) ids.set(u, 'U' + ids.size); return ids.get(u); }); };
 const sa = canon(ja), sb = canon(jb);
 if (sa !== sb) { let i = 0; while (sa[i] === sb[i]) i++; return `JSON differs @${i}: rebound ${sa.slice(Math.max(0, i - 60), i + 80)} <> built ${sb.slice(Math.max(0, i - 60), i + 80)}`; }
 for (const k of ['textureSources', 'bufferSources']) { const ka = Object.keys(a[k]), kb = Object.keys(b[k]); if (ka.join() !== kb.join()) return `${k} keys differ`; for (const x of ka) if (a[k][x] !== b[k][x]) return `${k}[${x}] object differs`; }
-if (a.live.keys.length !== b.live.keys.length || canon(a.live.keys) !== canon(b.live.keys)) return 'live keys differ';
+if (a.live.keys.length !== b.live.keys.length || canon(a.live.keys) !== canon(b.live.keys)) return 'LAYOUT live keys differ';
+// values: after the first live.update the rebound package must carry the SAME effective uniform values as the full build of the same material (position-ordered; uuids differ per build)
+const eff = (p) => { const m = new Map(); for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) m.set(u.key, u.value); for (const c of p.live.update()) m.set(c.key, c.value); const o = []; for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) o.push(m.get(u.key)); return JSON.stringify(o); };
+const ea = eff(a), eb = eff(b); if (ea !== eb) { let i = 0; while (ea[i] === eb[i]) i++; return `VALUE differs after first update @${i}: rebound ${ea.slice(Math.max(0, i - 40), i + 40)} <> built ${eb.slice(Math.max(0, i - 40), i + 40)}`; }
 return null;
 }

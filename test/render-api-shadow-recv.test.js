@@ -44,3 +44,21 @@ test('adapter: one material, receiver + non-receiver (plain + instanced) → dis
   ad.sync(scene, cam); // idle: no re-export
   assert.equal(pkgs.length, 2); assert.equal(ad.stats.tsl.shadowReceivers, 1, "adapter counts receiver packages");
 });
+
+test('r10-shadow-5: shared material, NON-receiver visited first → package still becomes a receiver once ANY user receives (latch, 1 re-export, idle stable)', () => {
+  const scene = sunScene(), m = tslMat(), g = tri();
+  const first = new THREE.Mesh(g, m); first.receiveShadow = false;
+  const second = new THREE.Mesh(g, m); second.receiveShadow = true; second.position.x = 3;
+  scene.add(first, second);
+  const be = createMockBackend(); const pkgs = [];
+  const orig = be.createShaderMaterial?.bind(be); be.createShaderMaterial = (p) => { pkgs.push(p); return orig ? orig(p) : pkgs.length; };
+  const ad = createSceneAdapter(be, { three: THREE, exportNodeMaterial, tslOptions: { THREE } }); // default: variants OFF
+  const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100); cam.position.set(0, 0, 5);
+  ad.sync(scene, cam);
+  assert.ok(!hasShadow(pkgs[0]), 'frame 1: exported from the non-receiver first user (the old, wrong, final state)');
+  ad.sync(scene, cam); const n = pkgs.length;
+  assert.ok(hasShadow(pkgs[n - 1]), 'latched package has the hook');
+  assert.ok(n <= 2, 'at most one re-export');
+  ad.sync(scene, cam); assert.equal(pkgs.length, n, 'idle: no further export');
+  assert.equal(ad.matInfo(m).shadow, true);
+});

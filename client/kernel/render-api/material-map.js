@@ -110,9 +110,10 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
   if (m.isNodeMaterial && customNode(m)) {
     if (!exportNodeMaterial) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
     let c = nodeCache.get(m);
-    if (!c || c.version !== m.version) {
+    const recv = !!tslOptions?.receiveShadow; // r10-shadow-5: the package depends on the receiver flag (hook) → part of the cache key
+if (!c || c.version !== m.version || c.recv !== recv) {
   // r6: an export failure is a LOUD per-material refusal (adapter counts + logs it, material drops to PBR) — never a thrown frame
-  try { c = { version: m.version, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, error: String(e?.message ?? e) }; }
+  try { c = { version: m.version, recv, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, recv, error: String(e?.message ?? e) }; }
   nodeCache.set(m, c);
 }
 if (c.error) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };

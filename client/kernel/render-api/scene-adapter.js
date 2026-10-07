@@ -154,6 +154,7 @@ if (!live) continue;
 }
 // r10-shadow-4: three semantics are per OBJECT (object.receiveShadow) but a TSL package is per MATERIAL → a custom-TSL material used by receivers gets its own export (variant key = Object.create(material), reads through live); non-receivers keep the base entry.
 const recvVariants = new WeakMap();
+const recvAny = new WeakSet();
 function matKey(m0, o) {
 const src = m0?.__gwSrc ?? m0;
 if (!useRecvVariants || !o || !o.receiveShadow || !exportNodeMaterial || !src?.isNodeMaterial || !customNodeMaterial(src)) return src;
@@ -163,16 +164,20 @@ return v;
 function ensureMaterial(m0, o = null) {
 const m = matKey(m0, o);
 let e = mats.get(m);
+const srcM = m0?.__gwSrc ?? m0; // r10-shadow-5 latch (see below): flips BEFORE the once-per-frame early return so a receiver visited after a non-receiver still re-exports
+if (!useRecvVariants && o?.receiveShadow && exportNodeMaterial && srcM?.isNodeMaterial && !recvAny.has(srcM)) { recvAny.add(srcM); if (e) e.epoch = -1; }
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
-const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no params/texture work
+// r10-shadow-5: a TSL package is per MATERIAL, three's receiveShadow per OBJECT. Package = receiver as soon as ANY user object receives (one-way latch, <=1 re-export per material) -- NOT the first user's flag (road: 13 receivers / 85 non-receivers, first exporter a non-receiver -> never received). Same 'mixed = receives' rule as the core's per-material flag (r8).
+const anyRecv = recvAny.has(srcM), sigSfx = anyRecv ? '|rcv' : '';
+const sig = materialSig(m, { exportNodeMaterial }) + sigSfx;          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
-const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh ? { geometry: o.geometry } : { object: o }) : {};
-if (o) { exportCtx.receiveShadow = !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
+const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
+if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
 const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (!e) {
 const id = createMat(conv, m);
-e = { id, sig: conv.sig, conv, users: new Set(), epoch, degraded: conv.degraded };
+e = { id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.degraded, first: o ? { name: o.name, recv: !!o.receiveShadow } : null };
 e.fellBack = !!conv.fellBack;
 mats.set(m, e); stats.created++;
 } else {
@@ -182,7 +187,7 @@ const old = e.id; e.id = createMat(conv, m); e.fellBack = !!conv.fellBack;
 for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); }
 backend.destroyMaterial(old);
 }
-e.sig = conv.sig; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
+e.sig = conv.sig + sigSfx; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
 }
 if (conv.degraded) stats.degraded.add(conv.degraded);
 return e;
@@ -498,6 +503,8 @@ function destroyExpanded(p) { for (const n of p.expanded) backend.removeNode(n);
 
 return {
 stats,
+// r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
+matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
 sync(scene, camera = null) {
 const t0 = now();

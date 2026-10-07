@@ -11,12 +11,14 @@ const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture
 
 // builder → data package. `THREE` = three/webgpu namespace; `WGSLNodeBuilder` is not exported publicly, so we reach it
 // through three's own backend factory (WebGPUBackend.prototype.createNodeBuilder) without constructing a device.
-export function exportNodeMaterial(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null } = {}) {
+export function exportNodeMaterial(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null, receiveShadow = false, castShadow = false } = {}) {
 if (!material?.isNodeMaterial) throw new Error('exportNodeMaterial: material.isNodeMaterial required');
 const Ctor = wgslBuilderCtor ?? headlessRenderer(THREE)._ctor;
 const r = renderer ?? headlessRenderer(THREE);
 // `object` = the real mesh (its geometry attributes decide which TSL attribute() nodes resolve); `geometry` = same without the object (InstancedMesh/Skinned: instancing is expanded by the adapter, never exported).
 const obj = object ?? new THREE.Mesh(geometry ?? new THREE.BoxGeometry(1, 1, 1), material);
+// r10-shadow-4: the stand-in Mesh (instanced/skinned) carries the SOURCE object's three shadow flags; a real object already has its own.
+if (!object) { obj.receiveShadow = !!receiveShadow; obj.castShadow = !!castShadow; }
 obj.updateMatrixWorld?.();
 const cam = camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000);
 const sc = scene ?? new THREE.Scene();
@@ -29,10 +31,8 @@ b.lightsNode = lights.length ? r.lighting.createNode(lights) : null; b.environme
 // r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
 // The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
 // (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
-const restoreShadow = installCoreShadow(THREE, lights, r), wasRecv = obj.receiveShadow;
-// three only builds the shadow term when builder.object.receiveShadow; a package is shared by every mesh using the material (and instanced/skinned export a stand-in Mesh) → build WITH it.
-if (lights.some((l) => l.isDirectionalLight && l.castShadow)) obj.receiveShadow = true;
-try { b.build(); } finally { restoreShadow(); obj.receiveShadow = wasRecv; }
+const restoreShadow = installCoreShadow(THREE, lights, r);
+try { b.build(); } finally { restoreShadow(); }
 // uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
 const refs = new Map();
 for (const n of [...b.updateNodes, ...b.updateBeforeNodes]) if ('property' in n && 'reference' in n && n.node?.uuid) refs.set(n.node.uuid, n);

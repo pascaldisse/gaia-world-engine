@@ -7,7 +7,7 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams, materialSig } from './material-map.js';
+import { materialToParams, materialSig, customNodeMaterial } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
 
@@ -152,12 +152,22 @@ if (!live) continue;
     else stats.degraded.add('setShaderUniforms-missing:tsl-values-frozen');
   }
 }
-function ensureMaterial(m, o = null) {
+// r10-shadow-4: three semantics are per OBJECT (object.receiveShadow) but a TSL package is per MATERIAL → a custom-TSL material used by receivers gets its own export (variant key = Object.create(material), reads through live); non-receivers keep the base entry.
+const recvVariants = new WeakMap();
+function matKey(m0, o) {
+const src = m0?.__gwSrc ?? m0;
+if (!o || !o.receiveShadow || !exportNodeMaterial || !src?.isNodeMaterial || !customNodeMaterial(src)) return src;
+let v = recvVariants.get(src); if (!v) { v = Object.create(src); Object.defineProperty(v, '__gwSrc', { value: src }); recvVariants.set(src, v); }
+return v;
+}
+function ensureMaterial(m0, o = null) {
+const m = matKey(m0, o);
 let e = mats.get(m);
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
 const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh ? { geometry: o.geometry } : { object: o }) : {};
+if (o) { exportCtx.receiveShadow = !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
 const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (!e) {
@@ -210,11 +220,12 @@ if (!m) continue;
 const start = grp.start + (dr.start ?? 0) * 0, count = grp.count === Infinity ? (dr.count ?? Infinity) : grp.count;
 const gp = ensureGeometry(rec, g, start, count);
 if (!gp) continue;
-const me = ensureMaterial(m, o);
+const mk = matKey(m, o);
+const me = ensureMaterial(mk, o);
 me.users.add(rec);
 feedMeshAttrs(gp, g, me, m);
 const flags = nodeFlags(o, vis);
-const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: m, flags, node: 0, gp };
+const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: mk, flags, node: 0, gp };
 if (o.isInstancedMesh) {
 // native instance blocks carry matrix + colour only; a TSL material reading per-INSTANCE custom attributes takes the expanded path (rows per instance)
 const hasInstAttrs = (me) => { const pkg = me?.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; return !!pkg?.attributes?.some((a) => a.instanced); };
@@ -305,10 +316,11 @@ const ibm = new Float32Array(nb * 16);
 for (let i = 0; i < nb; i++) ibm.set(mul4(sk.boneInverses[i].elements, o.bindMatrix.elements), i * 16);
 const skin = backend.createSkin(ibm, nb);
 const mesh = backend.createSkinnedMesh({ positions, normals, uvs, joints, weights, indices }, skin);
-const me = ensureMaterial(Array.isArray(o.material) ? o.material[0] : o.material);
+const skMat = matKey(Array.isArray(o.material) ? o.material[0] : o.material, o);
+const me = ensureMaterial(skMat, o);
 const node = backend.createInstance(mesh, me.id, IDENTITY_MAT4.slice(), nodeFlags(o, vis));
 const rr = {}; me.users.add(rr);
-r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: Array.isArray(o.material) ? o.material[0] : o.material, pal: new Float32Array(nb * 16), fbits: flagBits(o, vis), fro: o.renderOrder ?? 0, sk, lastWorld: new Float64Array(16).fill(NaN), lastBind: new Float64Array(16).fill(NaN), seenSkel: -1 });
+r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: skMat, pal: new Float32Array(nb * 16), fbits: flagBits(o, vis), fro: o.renderOrder ?? 0, sk, lastWorld: new Float64Array(16).fill(NaN), lastBind: new Float64Array(16).fill(NaN), seenSkel: -1 });
 skinRecs.set(o, r); stats.created++; stats.uploadsGeometry++;
 }
 // per-SKELETON change detection (once per frame, shared by every SkinnedMesh on that skeleton): bone.matrixWorld vs last frame.
@@ -330,7 +342,7 @@ const ts0 = now(); backend.updateSkin(r.skin, pal); skinMs += now() - ts0; skinC
 }
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0;
 if (fb !== r.fbits || fro !== r.fro) { backend.updateNode(r.node, nodeFlags(o, vis)); r.fbits = fb; r.fro = fro; upd('skinFlags'); }
-ensureMaterial(r.mat);
+ensureMaterial(r.mat, o);
 }
 function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNode(r.node); backend.destroySkinnedMesh?.(r.mesh); backend.destroySkin?.(r.skin); stats.removed++; }
 // ---- BatchedMesh: one native instance block per geometryIndex (shared material); per-geometry vertex/index slice uploaded ONCE (geometryInfo is append-only),
@@ -460,7 +472,7 @@ if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); re
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0, flagsChanged = fb !== rec.fbits || fro !== rec.fro, moved = !eqArr(rec.matrix, o.matrixWorld.elements);
 const f = flagsChanged || o.isInstancedMesh ? nodeFlags(o, vis) : null;
 const single = rec.parts.length === 1 && !Array.isArray(o.material);
-let swapped = single && rec.parts[0].mat !== o.material;
+let swapped = single && rec.parts[0].mat !== matKey(o.material, o);
 for (const p of rec.parts) {
 if (p.expanded) { // instanced fallback
 const isg = instAttrSig(mats.get(p.mat)); if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instSig !== isg) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...f, instAttrs: instAttrRow(me, i) })); p.instV = o.instanceMatrix.version; p.instCount = o.count; p.instSig = isg; upd('expandedRebuild'); }
@@ -470,7 +482,7 @@ if (!p.gp || !geoSame(p.geo, p.start, p.count, p.gp.sig)) { const gp2 = ensureGe
 let u = null;
 if (moved && !o.isInstancedMesh) (u ??= {}).mat4 = Array.from(o.matrixWorld.elements);
 if (flagsChanged) u = Object.assign(u ?? {}, f);
-if (swapped) { const me = ensureMaterial(o.material); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = o.material; (u ??= {}).material = me.id; rec.mref = o.material; }
+if (swapped) { const mk2 = matKey(o.material, o), me = ensureMaterial(mk2, o); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = mk2; (u ??= {}).material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
 const ic = o.instanceColor?.version ?? -1;
 if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const c = instColors(o); backend.updateInstances(p.node, instanceMats(o), o.count, o.matrixWorld.elements, c.colors ?? null, c.colorStride); p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }

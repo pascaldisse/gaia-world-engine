@@ -51,3 +51,14 @@ test('auto-exposure: rig comes from getAutoExposure (LightingPost owns it; the r
   const br = createPostBridge({ backend, renderer: { toneMapping: 4, toneMappingExposure: 1 }, getPost: () => ({ postProcessing: { outputNode: g.outputNode } }), getAutoExposure: () => rig });
   br.tick(); assert.deepEqual(calls[0], [true, 1.5]);
 });
+test('auto-exposure kill switch (?wgpuAE=0 / bridge.autoExposure=false, live): meter off + mul 1, never re-armed; back on re-arms', () => {
+  const g = graph(); const calls = [];
+  const backend = { ...mock(), setAutoExposure: (on, mul) => calls.push([on, mul]), autoExposureGrid: () => new Float32Array(0) };
+  const rig = { ae: { cfg: {}, expMul: { value: 1.5 }, ingest() {} } };
+  const mk = (autoExposure) => createPostBridge({ backend, renderer: { toneMapping: 4, toneMappingExposure: 1 }, getPost: () => ({ postProcessing: { outputNode: g.outputNode } }), getAutoExposure: () => rig, autoExposure });
+  const off = mk(false); off.tick(); assert.equal(calls.length, 0); assert.equal(off.stats.ae.on, false);
+  const br = mk(true); br.tick(); assert.deepEqual(calls.at(-1), [true, 1.5]);
+  br.autoExposure = false; br.tick(); assert.deepEqual(calls.at(-1), [false, 1]); assert.equal(br.stats.ae.on, false);
+  const n = calls.length; br.tick(); assert.equal(calls.length, n);
+  br.autoExposure = true; br.tick(); assert.deepEqual(calls.at(-1), [true, 1.5]);
+});

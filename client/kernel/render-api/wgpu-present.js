@@ -30,7 +30,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)
-  const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure });
+  const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure, autoExposure: params.get('wgpuAE') !== '0' });
   addEventListener('resize', size);
   const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {

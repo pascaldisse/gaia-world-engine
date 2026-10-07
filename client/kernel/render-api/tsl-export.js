@@ -26,7 +26,11 @@ b.scene = sc; b.material = material; b.camera = cam; b.context.material = materi
 // Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
 const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
 b.lightsNode = lights.length ? r.lighting.createNode(lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
-b.build();
+// r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
+// The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
+// (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
+const restoreShadow = installCoreShadow(THREE, lights, r);
+try { b.build(); } finally { restoreShadow(); }
 // uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
 const refs = new Map();
 for (const n of [...b.updateNodes, ...b.updateBeforeNodes]) if ('property' in n && 'reference' in n && n.node?.uuid) refs.set(n.node.uuid, n);
@@ -145,4 +149,21 @@ function builtinSemantics(THREE) {
   for (const n of ['modelWorldMatrix', 'modelNormalMatrix', 'modelWorldMatrixInverse', 'modelPosition', 'modelScale', 'modelViewPosition', 'modelDirection',
     'cameraNear', 'cameraFar', 'time', 'deltaTime', 'frameId']) put(T[n], n);
   return m;
+}
+
+// light.shadow.shadowNode hook (AnalyticLightNode.setupShadow): swap the sun's shadow node for the core-CSM sampler for the duration of one build.
+let warnedNoWgslFn = false;
+function installCoreShadow(THREE, lights, r) {
+  const sun = lights.find((l) => l.isDirectionalLight && l.castShadow && l.shadow);
+  const T = THREE.TSL ?? THREE;
+  if (!sun) return () => {};
+  if (!T.wgslFn || !T.positionWorld || !T.normalWorld || !T.cameraPosition) { if (!warnedNoWgslFn) { warnedNoWgslFn = true; console.warn('[tsl-export] core sun shadow NOT exported: this three build lacks wgslFn/positionWorld/normalWorld/cameraPosition'); } return () => {}; }
+  const toLight = new THREE.Vector3();
+  const dirOf = (v) => v.copy(sun.position).sub(sun.target?.position ?? toLight.set(0, 0, 0)).normalize();
+  const sunDir = T.uniform(dirOf(new THREE.Vector3())).setName('gaiaSunDir').onRenderUpdate((f, self) => dirOf(self.value));
+  const call = T.wgslFn('fn gaia_sun_shadow(world: vec3<f32>, cam: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 { return gaia_sun_shadow_core(world, cam, n, nl); }');
+  const node = call({ world: T.positionWorld, cam: T.cameraPosition, n: T.normalWorld, nl: T.max(T.dot(T.normalWorld, sunDir), 0.0) });
+  const prev = sun.shadow.shadowNode, prevEnabled = r.shadowMap.enabled;
+  sun.shadow.shadowNode = node; r.shadowMap.enabled = true;
+  return () => { if (prev === undefined) delete sun.shadow.shadowNode; else sun.shadow.shadowNode = prev; r.shadowMap.enabled = prevEnabled; };
 }

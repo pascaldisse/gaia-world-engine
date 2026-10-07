@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCascades, cascadeBaseCell, totalProbes } from '../client/kernel/gi/cascade.js';
-import { packGiParams, createGiBridge, GI_PARAM_HEADER, GI_PARAM_CASCADE } from '../client/kernel/render-api/gi-bridge.js';
+import { packGiParams, createGiBridge, mirrorAtlas, GI_PARAM_HEADER, GI_PARAM_CASCADE } from '../client/kernel/render-api/gi-bridge.js';
 
 function fakeOpen(ambientMode = 'replace') {
   const cascades = buildCascades({ count: 3, spacings: [2, 6, 18], dims: [{ x: 16, y: 8, z: 16 }, { x: 16, y: 8, z: 16 }, { x: 16, y: 8, z: 16 }] });
@@ -54,4 +54,16 @@ test('bridge: readback failure is counted, never throws, in-flight released', as
 test('bridge: backend without setGiProbes → inert (mock/three backends)', () => {
   const br = createGiBridge({ backend: {}, renderer: { getArrayBufferAsync() {} }, getController: () => ({ resources: { open: fakeOpen() } }) });
   assert.equal(br.tick(), null);
+});
+
+// r10-shadow-6: exported TSL packages bind the same GPU-only atlas attribute three computes into; the readback is mirrored into its CPU array and versioned OUTSIDE attr.version.
+test('mirrorAtlas: copies readback into the attribute CPU array, bumps userData.gpuMirrorVersion, never attr.version; size mismatch refused', () => {
+  const attr = { array: new Float32Array(8), version: 7 };
+  const src = Float32Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(mirrorAtlas(attr, src.buffer), true);
+  assert.deepEqual([...attr.array], [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(attr.userData.gpuMirrorVersion, 1); assert.equal(attr.version, 7);
+  mirrorAtlas(attr, src.buffer); assert.equal(attr.userData.gpuMirrorVersion, 2);
+  assert.equal(mirrorAtlas(attr, new ArrayBuffer(4)), false); assert.equal(attr.userData.gpuMirrorVersion, 2);
+  assert.equal(mirrorAtlas(null, src.buffer), false);
 });

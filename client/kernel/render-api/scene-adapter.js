@@ -7,13 +7,13 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams, materialSig } from './material-map.js';
+import { materialToParams, materialSig, customNodeMaterial } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -161,12 +161,27 @@ if (!live) continue;
   if (batch) { const ts = now(); backend.setShaderUniformsBatch(batch); sub.setShaderUniforms += now() - ts; }
 }
 const hashStr = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
-function ensureMaterial(m, o = null) {
+// r10-shadow-4: three semantics are per OBJECT (object.receiveShadow) but a TSL package is per MATERIAL → a custom-TSL material used by receivers gets its own export (variant key = Object.create(material), reads through live); non-receivers keep the base entry.
+const recvVariants = new WeakMap();
+const recvAny = new WeakSet();
+function matKey(m0, o) {
+const src = m0?.__gwSrc ?? m0;
+if (!useRecvVariants || !o || !o.receiveShadow || !exportNodeMaterial || !src?.isNodeMaterial || !customNodeMaterial(src)) return src;
+let v = recvVariants.get(src); if (!v) { v = Object.create(src); Object.defineProperty(v, '__gwSrc', { value: src }); recvVariants.set(src, v); }
+return v;
+}
+function ensureMaterial(m0, o = null) {
+const m = matKey(m0, o);
 let e = mats.get(m);
+const srcM = m0?.__gwSrc ?? m0; // r10-shadow-5 latch (see below): flips BEFORE the once-per-frame early return so a receiver visited after a non-receiver still re-exports
+if (!useRecvVariants && o?.receiveShadow && exportNodeMaterial && srcM?.isNodeMaterial && !recvAny.has(srcM)) { recvAny.add(srcM); if (e) e.epoch = -1; }
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
-const sig = materialSig(m, { exportNodeMaterial });          // cheap string, no params/texture work
+// r10-shadow-5: a TSL package is per MATERIAL, three's receiveShadow per OBJECT. Package = receiver as soon as ANY user object receives (one-way latch, <=1 re-export per material) -- NOT the first user's flag (road: 13 receivers / 85 non-receivers, first exporter a non-receiver -> never received). Same 'mixed = receives' rule as the core's per-material flag (r8).
+const anyRecv = recvAny.has(srcM), sigSfx = anyRecv ? '|rcv' : '';
+const sig = materialSig(m, { exportNodeMaterial }) + sigSfx;          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
-const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh ? { geometry: o.geometry } : { object: o }) : {};
+const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
+if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
 sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
 { const dt = now() - tmp; sub.materialToParams += dt; // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
  const x = stats.exportWhy ??= { newMat: 0, versionBump: 0, sigChange: 0, ms: { newMat: 0, versionBump: 0, sigChange: 0 }, keys: new Map(), log: [] };
@@ -176,7 +191,7 @@ sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, 
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (!e) {
 const id = createMat(conv, m);
-e = { id, sig: conv.sig, conv, users: new Set(), epoch, degraded: conv.degraded };
+e = { id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.degraded, first: o ? { name: o.name, recv: !!o.receiveShadow } : null };
 e.fellBack = !!conv.fellBack;
 mats.set(m, e); stats.created++;
 } else {
@@ -186,7 +201,7 @@ const old = e.id; e.id = createMat(conv, m); e.fellBack = !!conv.fellBack;
 for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); }
 backend.destroyMaterial(old);
 }
-e.sig = conv.sig; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
+e.sig = conv.sig + sigSfx; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
 }
 if (conv.degraded) stats.degraded.add(conv.degraded);
 return e;
@@ -194,7 +209,7 @@ return e;
 function createMat(conv, m) {
 if (conv.kind === 'wgsl') {
   if (backend.createShaderMaterial) {
-    try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; return id; }
+    try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; if (conv.package.fragment.includes('gaia_sun_shadow')) tsl.shadowReceivers = (tsl.shadowReceivers ?? 0) + 1; return id; }
     catch (e) { tslRefuse(m, 'backend', e?.message ?? e, conv.package); stats.degraded.add('tsl-backend-refused:pbr-fallback'); conv.fellBack = true; return backend.createMaterial(conv.fallbackParams ?? {}, conv.fallbackTextures ?? null); }
   }
   stats.degraded.add('createShaderMaterial-missing:pbr-fallback');
@@ -224,11 +239,12 @@ if (!m) continue;
 const start = grp.start + (dr.start ?? 0) * 0, count = grp.count === Infinity ? (dr.count ?? Infinity) : grp.count;
 const gp = ensureGeometry(rec, g, start, count);
 if (!gp) continue;
-const me = ensureMaterial(m, o);
+const mk = matKey(m, o);
+const me = ensureMaterial(mk, o);
 me.users.add(rec);
 feedMeshAttrs(gp, g, me, m);
 const flags = nodeFlags(o, vis);
-const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: m, flags, node: 0, gp };
+const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: mk, flags, node: 0, gp };
 if (o.isInstancedMesh) {
 // native instance blocks carry matrix + colour only; a TSL material reading per-INSTANCE custom attributes takes the expanded path (rows per instance)
 const hasInstAttrs = (me) => { const pkg = me?.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; return !!pkg?.attributes?.some((a) => a.instanced); };
@@ -319,10 +335,11 @@ const ibm = new Float32Array(nb * 16);
 for (let i = 0; i < nb; i++) ibm.set(mul4(sk.boneInverses[i].elements, o.bindMatrix.elements), i * 16);
 const skin = backend.createSkin(ibm, nb);
 const mesh = backend.createSkinnedMesh({ positions, normals, uvs, joints, weights, indices }, skin);
-const me = ensureMaterial(Array.isArray(o.material) ? o.material[0] : o.material);
+const skMat = matKey(Array.isArray(o.material) ? o.material[0] : o.material, o);
+const me = ensureMaterial(skMat, o);
 const node = backend.createInstance(mesh, me.id, IDENTITY_MAT4.slice(), nodeFlags(o, vis));
 const rr = {}; me.users.add(rr);
-r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: Array.isArray(o.material) ? o.material[0] : o.material, pal: new Float32Array(nb * 16), fbits: flagBits(o, vis), fro: o.renderOrder ?? 0, sk, lastWorld: new Float64Array(16).fill(NaN), lastBind: new Float64Array(16).fill(NaN), seenSkel: -1 });
+r = Object.assign(rr, { geo: g, ver: attrVer(g), nb, mref: o.material, skin, mesh, node, mat: skMat, pal: new Float32Array(nb * 16), fbits: flagBits(o, vis), fro: o.renderOrder ?? 0, sk, lastWorld: new Float64Array(16).fill(NaN), lastBind: new Float64Array(16).fill(NaN), seenSkel: -1 });
 skinRecs.set(o, r); stats.created++; stats.uploadsGeometry++;
 }
 // per-SKELETON change detection (once per frame, shared by every SkinnedMesh on that skeleton): bone.matrixWorld vs last frame.
@@ -344,7 +361,7 @@ const ts0 = now(); backend.updateSkin(r.skin, pal); skinMs += now() - ts0; skinC
 }
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0;
 if (fb !== r.fbits || fro !== r.fro) { backend.updateNode(r.node, nodeFlags(o, vis)); r.fbits = fb; r.fro = fro; upd('skinFlags'); }
-ensureMaterial(r.mat);
+ensureMaterial(r.mat, o);
 }
 function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNode(r.node); backend.destroySkinnedMesh?.(r.mesh); backend.destroySkin?.(r.skin); stats.removed++; }
 // ---- BatchedMesh: one native instance block per geometryIndex (shared material); per-geometry vertex/index slice uploaded ONCE (geometryInfo is append-only),
@@ -398,6 +415,7 @@ const treeVis = parentVis && o.visible !== false; // children inherit this; laye
 // r10: three draws (main pass AND shadow pass — ShadowNode adopts camera.layers.mask when the shadow camera sits on layer 0 only) only objects whose layers intersect the camera's. Honour it, else layer-gated helpers (depth-only proxies) draw in the main view.
 const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frameCamera.layers) || ((o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) && isShadowOnly(o)));
 if (!vis && treeVis && (o.isMesh || o.isLight)) stats.layerCulled = (stats.layerCulled ?? 0) + 1;
+if (vis && treeVis && o.isMesh && isShadowOnly(o)) { stats.shadowOnly = (stats.shadowOnly ?? 0) + 1; if (o.isInstancedMesh) stats.shadowOnlyInst = (stats.shadowOnlyInst ?? 0) + (o.count ?? 0); } // r10 census
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
@@ -473,7 +491,7 @@ if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); re
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0, flagsChanged = fb !== rec.fbits || fro !== rec.fro, moved = !eqArr(rec.matrix, o.matrixWorld.elements);
 const f = flagsChanged || o.isInstancedMesh ? nodeFlags(o, vis) : null;
 const single = rec.parts.length === 1 && !Array.isArray(o.material);
-let swapped = single && rec.parts[0].mat !== o.material;
+let swapped = single && rec.parts[0].mat !== matKey(o.material, o);
 for (const p of rec.parts) {
 if (p.expanded) { // instanced fallback
 const isg = instAttrSig(mats.get(p.mat)); if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instSig !== isg) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...f, instAttrs: instAttrRow(me, i) })); p.instV = o.instanceMatrix.version; p.instCount = o.count; p.instSig = isg; upd('expandedRebuild'); }
@@ -483,7 +501,7 @@ if (!p.gp || !geoSame(p.geo, p.start, p.count, p.gp.sig)) { const gp2 = ensureGe
 let u = null;
 if (moved && !o.isInstancedMesh) (u ??= {}).mat4 = Array.from(o.matrixWorld.elements);
 if (flagsChanged) u = Object.assign(u ?? {}, f);
-if (swapped) { const me = ensureMaterial(o.material); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = o.material; (u ??= {}).material = me.id; rec.mref = o.material; }
+if (swapped) { const mk2 = matKey(o.material, o), me = ensureMaterial(mk2, o); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = mk2; (u ??= {}).material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
 const ic = o.instanceColor?.version ?? -1;
 if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const c = instColors(o); backend.updateInstances(p.node, instanceMats(o), o.count, o.matrixWorld.elements, c.colors ?? null, c.colorStride); p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
@@ -499,11 +517,14 @@ function destroyExpanded(p) { for (const n of p.expanded) backend.removeNode(n);
 
 return {
 stats,
+// r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
+matPkg(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e?.conv?.package ?? null; },
+matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
-epoch++; stats.frames++; stats.layerCulled = 0; frameScene = scene; frameCamera = camera;
+epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();
 const seen = new Set();

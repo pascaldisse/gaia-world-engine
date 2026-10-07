@@ -11,12 +11,14 @@ const kindOf = (b) => (b.isUniformsGroup ? 'uniform-buffer' : b.isSampledTexture
 
 // builder → data package. `THREE` = three/webgpu namespace; `WGSLNodeBuilder` is not exported publicly, so we reach it
 // through three's own backend factory (WebGPUBackend.prototype.createNodeBuilder) without constructing a device.
-function buildPackage(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null } = {}, gate = null) {
+function buildPackage(material, { THREE, object = null, geometry = null, camera = null, scene = null, wgslBuilderCtor = null, renderer = null, receiveShadow = false, castShadow = false, coreShadow = true } = {}, gate = null) {
 const Ctor0 = wgslBuilderCtor ?? headlessRenderer(THREE)._ctor;
 const Ctor = gate ? gatedCtor(THREE, Ctor0) : Ctor0;
 const r = renderer ?? headlessRenderer(THREE);
 // `object` = the real mesh (its geometry attributes decide which TSL attribute() nodes resolve); `geometry` = same without the object (InstancedMesh/Skinned: instancing is expanded by the adapter, never exported).
 const obj = object ?? new THREE.Mesh(geometry ?? new THREE.BoxGeometry(1, 1, 1), material);
+// r10-shadow-4: the stand-in Mesh (instanced/skinned) carries the SOURCE object's three shadow flags; a real object already has its own.
+if (!object) { obj.receiveShadow = !!receiveShadow; obj.castShadow = !!castShadow; }
 obj.updateMatrixWorld?.();
 const cam = camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000);
 const sc = scene ?? new THREE.Scene();
@@ -27,7 +29,11 @@ b.scene = sc; b.material = material; b.camera = cam; b.context.material = materi
 // Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
 const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
 b.lightsNode = lights.length ? sharedLightsNode(r, sc, lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
-b.build();
+// r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
+// The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
+// (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
+const restoreShadow = coreShadow === false ? () => {} : installCoreShadow(THREE, lights, r); // coreShadow:false = A/B switch (?wgpuCoreShadow=0)
+try { b.build(); } finally { restoreShadow(); }
 // uniform node uuid → ReferenceNode that drives it (material.opacity, color, …) for source tags
 const refs = new Map();
 for (const n of [...b.updateNodes, ...b.updateBeforeNodes]) if ('property' in n && 'reference' in n && n.node?.uuid) refs.set(n.node.uuid, n);
@@ -431,4 +437,21 @@ if (a.live.keys.length !== b.live.keys.length || canon(a.live.keys) !== canon(b.
 const eff = (p) => { const m = new Map(); for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) m.set(u.key, u.value); for (const c of p.live.update()) m.set(c.key, c.value); const o = []; for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) o.push(u.key == null ? undefined : m.get(u.key)); return o; }; // r10-9: host-semantic uniforms (key null: camera*/time) are supplied by the HOST backend per frame, never by the package -> their shipped value is build-time noise (the singleton's last-updated state), not compared; (was: m.set(null,..) collapsed them all into one phantom -> 1330 false VALUE mismatches)
 const ea = eff(a), eb = eff(b); const sj = (x) => JSON.stringify(x); if (sj(ea) !== sj(eb)) { let i = 0; while (i < ea.length && sj(ea[i]) === sj(eb[i])) i++; const ids = []; for (const g of b.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) ids.push(`${x.name}.${u.name ?? u.key}(${u.source?.kind}${u.source?.name ? ':' + u.source.name : ''})`); return `VALUE differs after first update @uniform ${i} ${ids[i]}: rebound ${sj(ea[i])?.slice(0, 120)} <> built ${sj(eb[i])?.slice(0, 120)}`; }
 return null;
+}
+
+// light.shadow.shadowNode hook (AnalyticLightNode.setupShadow): swap the sun's shadow node for the core-CSM sampler for the duration of one build.
+let warnedNoWgslFn = false;
+function installCoreShadow(THREE, lights, r) {
+  const sun = lights.find((l) => l.isDirectionalLight && l.castShadow && l.shadow);
+  const T = THREE.TSL ?? THREE;
+  if (!sun) return () => {};
+  if (!T.wgslFn || !T.positionWorld || !T.normalWorld || !T.cameraPosition) { if (!warnedNoWgslFn) { warnedNoWgslFn = true; console.warn('[tsl-export] core sun shadow NOT exported: this three build lacks wgslFn/positionWorld/normalWorld/cameraPosition'); } return () => {}; }
+  const toLight = new THREE.Vector3();
+  const dirOf = (v) => v.copy(sun.position).sub(sun.target?.position ?? toLight.set(0, 0, 0)).normalize();
+  const sunDir = T.uniform(dirOf(new THREE.Vector3())).setName('gaiaSunDir').onRenderUpdate((f, self) => dirOf(self.value));
+  const call = T.wgslFn('fn gaia_sun_shadow(world: vec3<f32>, cam: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 { return gaia_sun_shadow_core(world, cam, n, nl); }');
+  const node = call({ world: T.positionWorld, cam: T.cameraPosition, n: T.normalWorld, nl: T.max(T.dot(T.normalWorld, sunDir), 0.0) });
+  const prev = sun.shadow.shadowNode, prevEnabled = r.shadowMap.enabled;
+  sun.shadow.shadowNode = node; r.shadowMap.enabled = true;
+  return () => { if (prev === undefined) delete sun.shadow.shadowNode; else sun.shadow.shadowNode = prev; r.shadowMap.enabled = prevEnabled; };
 }

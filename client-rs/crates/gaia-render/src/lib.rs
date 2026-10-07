@@ -1353,10 +1353,11 @@ impl RenderCore {
         package_json: &str,
         textures: HashMap<String, u32>,
     ) -> Result<(), String> {
-        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT)?;
+        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT, &self.shadow_receiver_layout)?;
         self.materials.remove(&id);
         self.three.remove(id);
         self.three.mats.insert(id, m);
+        self.static_gen += 1; // static shadow cache: this id now casts (opaque depth caster)
         Ok(())
     }
     /// Live three uniform values (tsl-export `pkg.live.update()` → `[{key,value}]`, changed only) → material's reflected
@@ -1419,6 +1420,7 @@ impl RenderCore {
     pub fn remove_material(&mut self, id: u32) {
         self.three.remove(id);
         self.materials.remove(&id);
+        self.static_gen += 1;
     }
 
     // ---- instances: column-major 4x4 world transform ----
@@ -1922,6 +1924,8 @@ impl RenderCore {
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&self.frame));
         self.background.prepare(queue, self.camera.view_proj(aspect), eye, self.frame.ambient[3]);
         // sun shadow cascades first (own passes, before the forward pass samples them)
+        // r10-shadow-9: three TSL package materials are absent from `materials` -> hand the caster pass their ids + cull-back flag (else every such caster is dropped)
+        let three_casters: HashMap<u32, bool> = self.three.mats.keys().map(|&id| (id, self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back))).collect();
         self.shadow_timed = self.shadow.encode(
             device,
             queue,
@@ -1937,6 +1941,7 @@ impl RenderCore {
             &self.meshes,
             &self.materials,
             &self.blend_materials,
+            &three_casters,
             self.timing.as_ref().map(|tm| (&tm.set, 4, 5)),
         );
         let three_list: Vec<(u32, u32, [f32; 16])> = if self.three.mats.is_empty() {
@@ -2045,7 +2050,7 @@ impl RenderCore {
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
-                let (n, skipped) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs);
+                let (n, skipped) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs, self.shadow.receiver_bind());
                 draws += n;
                 self.three_skipped = skipped;
             }

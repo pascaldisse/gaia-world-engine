@@ -519,6 +519,15 @@ pub struct MaterialMaps {
     pub normal_scale: f32,
     pub side: u32,
 }
+/// r12-water: cube texture (6 square RGBA8 faces +X -X +Y -Y +Z -Z as array layers, GPU mips per face). Bound to three-material `texture_cube` slots.
+#[allow(dead_code)] // size/levels/srgb = retained metadata (cube re-upload / diagnostics)
+pub struct CubeTex {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: u32,
+    levels: u32,
+    srgb: bool,
+}
 pub struct ArrayTex {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -677,6 +686,8 @@ pub struct RenderCore {
     mipgen_linear: BilinearBlit,
     /// array textures (D2Array views) by id; ids here are NOT in `textures`.
     array_textures: HashMap<u32, ArrayTex>,
+    cube_textures: HashMap<u32, CubeTex>,
+    white_cube: wgpu::TextureView,
     /// r6-tsl-2: host buffers behind TSL storage bindings (shared across materials).
     storage_buffers: HashMap<u32, three_material::StorageBuf>,
     white_array: wgpu::TextureView,
@@ -777,6 +788,10 @@ impl RenderCore {
             let t = device.create_texture_with_data(queue, &wgpu::TextureDescriptor { label: Some("white array"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] }, wgpu::util::TextureDataOrder::LayerMajor, &[255, 255, 255, 255]);
             t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() })
         };
+        let white_cube = {
+            let t = device.create_texture_with_data(queue, &wgpu::TextureDescriptor { label: Some("white cube"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] }, wgpu::util::TextureDataOrder::LayerMajor, &[255u8; 24]);
+            t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() })
+        };
         let white = upload_rgba8(device, queue, None, 1, 1, &[255; 4]);
         let mut frame: FrameUniform = bytemuck::Zeroable::zeroed();
         frame.post = [if opts.hdr_scene { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
@@ -835,6 +850,8 @@ impl RenderCore {
             mipgen,
             mipgen_linear,
             array_textures: HashMap::new(),
+            cube_textures: HashMap::new(),
+            white_cube,
             storage_buffers: HashMap::new(),
             white_array,
             material_maps: HashMap::new(),
@@ -1174,6 +1191,32 @@ impl RenderCore {
         self.rebind_users_of(device, id);
         Ok(())
     }
+    /// r12-water: cube texture from 6 faces (+X -X +Y -Y +Z -Z, each size x size RGBA8, rows top-first, face-major) + GPU-generated mips per face.
+    /// Faces are uploaded in three's WebGPU order (no flip here: TSL cubeTexture nodes apply three's own flipEnvMap in the generated WGSL). srgb=false = linear sampling.
+    pub fn create_texture_cube(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, size: u32, faces: &[u8], srgb: bool) -> Result<(), String> {
+        let face = (size * size * 4) as usize;
+        if size == 0 || faces.len() != face * 6 { return Err(format!("texture cube {id}: {} bytes != 6x{size}x{size}x4", faces.len())); }
+        let levels = 32 - size.max(1).leading_zeros();
+        let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
+        let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("texture cube"), size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 6 }, mip_level_count: levels, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        for l in 0..6u32 {
+            let o = l as usize * face;
+            queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: 0, z: l }, aspect: wgpu::TextureAspect::All }, &faces[o..o + face],
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * size), rows_per_image: Some(size) }, wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 });
+        }
+        if levels > 1 {
+            let blit = if srgb { &self.mipgen } else { &self.mipgen_linear };
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("cube mipgen") });
+            for layer in 0..6u32 {
+                let lv = |l: u32| texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: l, mip_level_count: Some(1), base_array_layer: layer, array_layer_count: Some(1), ..Default::default() });
+                for l in 1..levels { blit.encode_view(device, &mut enc, &lv(l - 1), &lv(l)); }
+            }
+            queue.submit(Some(enc.finish()));
+        }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
+        self.cube_textures.insert(id, CubeTex { texture, view, size, levels, srgb });
+        Ok(())
+    }
     /// Re-upload one layer (+ its mip chain). Bind groups stay valid (same texture).
     pub fn update_texture_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, layer: u32, rgba: &[u8]) -> Result<(), String> {
         let a = self.array_textures.get(&id).ok_or_else(|| format!("update_texture_layer: no array texture {id}"))?;
@@ -1198,6 +1241,7 @@ impl RenderCore {
     pub fn remove_texture(&mut self, id: u32) {
         self.textures.remove(&id);
         self.array_textures.remove(&id);
+        self.cube_textures.remove(&id);
     }
 
     // ---- materials (create == update) ----
@@ -2021,7 +2065,7 @@ v
                 None => Mat4::perspective_infinite_rh(self.camera.yfov, aspect, self.camera.znear),
             };
             let frame = ThreeFrame { view: self.camera.world.inverse(), proj, camera_world: self.camera.world, near: self.camera.znear, far, time: self.three_time };
-            self.three.prepare(device, queue, &three_list, &frame, &three_material::Resources { tex: &self.textures, arrays: &self.array_textures, storage: &self.storage_buffers, white: &self.white, white_array: &self.white_array, sampler: &self.sampler });
+            self.three.prepare(device, queue, &three_list, &frame, &three_material::Resources { tex: &self.textures, arrays: &self.array_textures, cubes: &self.cube_textures, white_cube: &self.white_cube, storage: &self.storage_buffers, white: &self.white, white_array: &self.white_array, sampler: &self.sampler });
         }
         let t = self.targets.as_ref().expect("targets");
         let c = self.opts.clear_color;

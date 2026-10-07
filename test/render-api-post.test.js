@@ -23,3 +23,24 @@ test('bridge pushes once, then only on change; unsupported constant is reported 
   r.toneMapping = 5; const n = b.calls.length; br.tick(); assert.ok(br.stats.unsupported.has('toneMapping:5')); assert.ok(!b.calls.slice(n).some((c) => c[0] === 'tm'));
   const off = createPostBridge({ backend: b, renderer: r, getPost: () => null }); b.calls.length = 0; off.tick(); assert.deepEqual(b.calls.find((c) => c[0] === 'bloom'), ['bloom', null]);
 });
+// r10-shadow-18: eye adaptation. wgpu never runs three's GPU meter (post.render() not called) -> the bridge feeds the rig from the core's 8x8 log2-luma grid and mirrors ae.expMul.
+test('auto-exposure: grid -> trimmed mean -> ae.ingest; live multiplier pushed only on change', () => {
+  const g = graph(); const calls = []; const grids = [];
+  const backend = { ...mock(), setAutoExposure: (on, mul) => calls.push(['ae', on, mul]), autoExposureGrid: () => grids.shift() ?? new Float32Array(0) };
+  const ae = { cfg: { centerWeight: 0, lowPct: 0, highPct: 1 }, expMul: { value: 1 }, got: [], ingest(m) { this.got.push(m); this.expMul.value = 2 ** (Math.log2(0.18) - m); } };
+  const br = createPostBridge({ backend, renderer: { toneMapping: 4, toneMappingExposure: 1 }, getPost: () => ({ postProcessing: { outputNode: g.outputNode }, autoExposure: { ae } }) });
+  br.tick(); assert.deepEqual(calls[0], ['ae', true, 1]); assert.equal(br.stats.ae.on, true);
+  const n = calls.length; assert.equal(br.tick(), false); assert.equal(calls.length, n); // no grid, same mul -> nothing
+  grids.push(new Float32Array(64).fill(Math.log2(0.045))); // uniform scene luma 0.045 -> mean log2 = log2(0.045)
+  assert.equal(br.tick(), true); assert.ok(Math.abs(ae.got[0] - Math.log2(0.045)) < 1e-5); assert.equal(br.stats.ae.grids, 1);
+  assert.deepEqual(calls.at(-1).slice(0, 2), ['ae', true]); assert.ok(Math.abs(calls.at(-1)[2] - 4) < 1e-3); // 0.18/0.045 = 4x
+  assert.equal(br.tick(), false); // stable mul -> no re-push
+});
+test('auto-exposure: no rig / backend without the methods -> bridge untouched (no ae pushes, old behaviour)', () => {
+  const g = graph(); const b = mock();
+  const a = createPostBridge({ backend: { ...b, setAutoExposure() { throw new Error('no'); }, autoExposureGrid: () => null }, renderer: { toneMapping: 4, toneMappingExposure: 1 }, getPost: () => ({ postProcessing: { outputNode: g.outputNode } }) });
+  a.tick(); assert.equal(a.stats.error, null); assert.equal(a.stats.ae.on, false);
+  const c = createPostBridge({ backend: b, renderer: { toneMapping: 4, toneMappingExposure: 1 }, getPost: () => ({ postProcessing: { outputNode: g.outputNode }, autoExposure: { ae: { cfg: {}, expMul: { value: 1 }, ingest() {} } } }) });
+  c.tick(); assert.equal(c.stats.ae.on, false);
+});
+test('auto-exposure methods are declared optional', () => { for (const m of ['setAutoExposure', 'autoExposureGrid']) assert.ok(RENDER_API_OPTIONAL_METHODS.includes(m)); });

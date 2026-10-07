@@ -691,6 +691,16 @@ o.into()
         let b = (strength >= 0.0).then_some(gaia_render::BloomParams { strength, radius, threshold, smooth_width });
         self.core.set_bloom(b).map_err(|e| err(&e))
     }
+    /// r10: eye adaptation. `on` = run the GPU meter; `mul` = host-adapted linear multiplier (scene before bloom/tone map).
+    #[wasm_bindgen(js_name = setAutoExposure)]
+    pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), JsError> {
+        self.core.set_auto_exposure(on, mul).map_err(|e| err(&e))
+    }
+    /// r10: newest 8x8 grid (64 f32, mean log2 luminance per cell, raw HDR) or empty when none arrived since the last call. Call once per frame after render().
+    #[wasm_bindgen(js_name = autoExposureGrid)]
+    pub fn auto_exposure_grid(&mut self) -> Vec<f32> {
+        self.core.auto_exposure_grid().unwrap_or_default()
+    }
     #[wasm_bindgen(js_name = hdrScene)]
     pub fn hdr_scene(&self) -> bool {
         self.core.hdr_scene()

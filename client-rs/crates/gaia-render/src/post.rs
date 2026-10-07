@@ -46,8 +46,25 @@ struct PostTiming {
     readback: wgpu::Buffer,
     period_ns: f32,
 }
+/// r10 eye adaptation: GPU meter (8x8 grid of mean log2 luminance of the HDR scene, pre-exposure) + async readback. The host runs the adaptation
+/// (autoexposure.js state machine) and hands back one linear multiplier (`ae_mul`) that scales the HDR scene BEFORE bloom + tone map, like three's `expMul`.
+pub const METER_GRID: u32 = 8;
+struct Meter {
+    pipe: wgpu::RenderPipeline,
+    tex: wgpu::Texture,
+    view: wgpu::TextureView,
+    buf: wgpu::Buffer,
+    armed: bool,
+    pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    grid: std::sync::Arc<std::sync::Mutex<Option<Vec<f32>>>>,
+}
 pub struct Post {
     layout: wgpu::BindGroupLayout,
+    meter: Meter,
+    /// host-driven: run the meter pass (off = zero cost)
+    pub meter_on: bool,
+    /// linear multiplier on the HDR scene before bloom + tone map (1 = off)
+    pub ae_mul: f32,
     p_high: wgpu::RenderPipeline,
     p_blur: wgpu::RenderPipeline,
     p_resolve: wgpu::RenderPipeline,
@@ -98,6 +115,8 @@ impl Post {
         let p_high = mk("fs_highpass", BLOOM_FORMAT);
         let p_blur = mk("fs_blur", BLOOM_FORMAT);
         let p_resolve = mk("fs_resolve", out_format);
+let mtex = device.create_texture(&wgpu::TextureDescriptor { label: Some("ae meter"), size: wgpu::Extent3d { width: METER_GRID, height: METER_GRID, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
+let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: mtex.create_view(&Default::default()), tex: mtex, buf: device.create_buffer(&wgpu::BufferDescriptor { label: Some("ae meter readback"), size: 256 * METER_GRID as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }), armed: false, pending: Default::default(), grid: Default::default() };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("post sampler"), address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
         let dummy_tex = device.create_texture_with_data(
             queue,
@@ -113,7 +132,7 @@ impl Post {
             readback: device.create_buffer(&wgpu::BufferDescriptor { label: Some("post ts readback"), size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
             period_ns: queue.get_timestamp_period(),
         });
-        Self { layout, p_high, p_blur, p_resolve, sampler, dummy, uniform, sized: None, tone_mapping, bloom: None, timing, timed: false }
+        Self { layout, meter, meter_on: false, ae_mul: 1.0, p_high, p_blur, p_resolve, sampler, dummy, uniform, sized: None, tone_mapping, bloom: None, timing, timed: false }
     }
     fn mk_target(device: &wgpu::Device, w: u32, h: u32, label: &str) -> wgpu::TextureView {
         device
@@ -169,7 +188,7 @@ impl Post {
         let b = self.bloom;
         let u = PostUniform {
             tone: [exposure, self.tone_mapping as f32, if b.is_some() { 1.0 } else { 0.0 }, b.map_or(0.0, |b| b.strength)],
-            bloom: b.map_or([0.0; 4], |b| [b.radius, b.threshold, b.smooth_width, 0.0]),
+            bloom: b.map_or([0.0, 0.0, 0.0, self.ae_mul], |b| [b.radius, b.threshold, b.smooth_width, self.ae_mul]),
             blur: [0.0; 4],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
@@ -201,6 +220,15 @@ impl Post {
             }
         }
         pass(encoder, "post resolve", &self.p_resolve, &s.bind_resolve, out, true);
+if self.meter_on && !self.meter.armed && !self.meter.pending.load(std::sync::atomic::Ordering::Acquire) {
+pass(encoder, "ae meter", &self.meter.pipe, &s.bind_high, &self.meter.view, false);
+encoder.copy_texture_to_buffer(
+wgpu::TexelCopyTextureInfo { texture: &self.meter.tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+wgpu::TexelCopyBufferInfo { buffer: &self.meter.buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(METER_GRID) } },
+wgpu::Extent3d { width: METER_GRID, height: METER_GRID, depth_or_array_layers: 1 },
+);
+self.meter.armed = true;
+}
         if let Some(t) = &self.timing {
             encoder.resolve_query_set(&t.set, 0..2, &t.resolve, 0);
             self.timed = true;
@@ -226,4 +254,26 @@ impl Post {
         t.readback.unmap();
         Some(ts[1].saturating_sub(ts[0]) as f64 * t.period_ns as f64 / 1e6)
     }
+/// Map the meter copy written by the last `encode` (call after submit; at most one in flight). Result lands in `take_meter`.
+pub fn request_meter_async(&mut self) {
+use std::sync::atomic::Ordering;
+if !self.meter.armed || self.meter.pending.swap(true, Ordering::AcqRel) { return; }
+self.meter.armed = false;
+let (buf, pending, grid) = (self.meter.buf.clone(), self.meter.pending.clone(), self.meter.grid.clone());
+let b2 = buf.clone();
+buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+if r.is_ok() {
+if let Ok(m) = b2.slice(..).get_mapped_range() {
+let mut v = Vec::with_capacity((METER_GRID * METER_GRID) as usize);
+for row in 0..METER_GRID as usize { for col in 0..METER_GRID as usize { let o = row * 256 + col * 4; v.push(f32::from_le_bytes([m[o], m[o + 1], m[o + 2], m[o + 3]])); } }
+drop(m);
+*grid.lock().unwrap() = Some(v);
+}
+}
+b2.unmap();
+pending.store(false, Ordering::Release);
+});
+}
+/// Latest metered 8x8 grid (row-major, mean log2 luminance per cell) once, then None until the next readback.
+pub fn take_meter(&self) -> Option<Vec<f32>> { self.meter.grid.lock().unwrap().take() }
 }

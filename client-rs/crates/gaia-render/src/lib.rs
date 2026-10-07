@@ -1717,6 +1717,12 @@ impl RenderCore {
     pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         match self.post.as_mut() { Some(p) => { p.bloom = b; Ok(()) } None => Err("set_bloom: core built without hdr_scene".into()) }
     }
+    /// r10 eye adaptation: `on` runs the GPU luminance meter (8x8 log2 grid); `mul` = host-adapted linear multiplier on the HDR scene before bloom/tone map. Err without `hdr_scene`.
+    pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), String> {
+        match self.post.as_mut() { Some(p) => { p.meter_on = on; p.ae_mul = if mul.is_finite() && mul > 0.0 { mul } else { 1.0 }; Ok(()) } None => Err("set_auto_exposure: core built without hdr_scene".into()) }
+    }
+    /// r10: kick the async meter readback (after submit) and take the newest 8x8 log2-luminance grid, if one arrived.
+    pub fn auto_exposure_grid(&mut self) -> Option<Vec<f32>> { let p = self.post.as_mut()?; p.request_meter_async(); p.take_meter() }
     pub fn hdr_scene(&self) -> bool { self.opts.hdr_scene }
     /// r10: GPU ms of the post chain (high pass + mip blur + resolve). Call after `encode_post_timing_readback` + submit. Native.
     #[cfg(not(target_arch = "wasm32"))]

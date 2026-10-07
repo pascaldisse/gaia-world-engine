@@ -25,7 +25,7 @@ fn vs_full(@builtin(vertex_index) i: u32) -> VO {
 // BloomNode luminosityHighPass: mix(vec4(0), texel, smoothstep(threshold, threshold + smoothWidth, luminance(rgb)))
 @fragment
 fn fs_highpass(in: VO) -> @location(0) vec4<f32> {
-    let texel = textureSampleLevel(t0, samp, in.uv, 0.0);
+    let texel = textureSampleLevel(t0, samp, in.uv, 0.0) * pu.bloom.w; // bloom.w = host eye-adaptation multiplier (before bloom, like three expMul)
     let v = dot(texel.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     let a = smoothstep(pu.bloom.y, pu.bloom.y + pu.bloom.z, v);
     return texel * a;
@@ -121,7 +121,7 @@ fn tone_map(c: vec3<f32>, mode: u32, e: f32) -> vec3<f32> {
 @fragment
 fn fs_resolve(in: VO) -> @location(0) vec4<f32> {
     let s = textureSampleLevel(t0, samp, in.uv, 0.0);
-    var c = s.rgb;
+    var c = s.rgb * pu.bloom.w;
     if (pu.tone.z > 0.5) {
         let r = pu.bloom.x;
         var sum = lerp_bloom(1.0, r) * textureSampleLevel(t1, samp, in.uv, 0.0).rgb;
@@ -132,4 +132,20 @@ fn fs_resolve(in: VO) -> @location(0) vec4<f32> {
         c = c + sum * pu.tone.w;
     }
     return vec4<f32>(tone_map(c, u32(pu.tone.y + 0.5), pu.tone.x), 1.0);
+}
+
+// r10 eye adaptation meter: 8x8 cells, 8x8 taps each, mean log2(luma) of the RAW HDR scene (pre ae multiplier, like three autoexposure.js stage 0)
+@fragment
+fn fs_meter(in: VO) -> @location(0) vec4<f32> {
+    let cell = floor(in.pos.xy);
+    var acc = 0.0;
+    for (var j = 0; j < 8; j = j + 1) {
+        for (var i = 0; i < 8; i = i + 1) {
+            let uv = (cell + (vec2<f32>(f32(i), f32(j)) + 0.5) / 8.0) / 8.0;
+            let c = textureSampleLevel(t0, samp, uv, 0.0).rgb;
+            let l = max(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
+            acc = acc + clamp(log2(l), -13.287712, 14.0);
+        }
+    }
+    return vec4<f32>(acc / 64.0, 0.0, 0.0, 1.0);
 }

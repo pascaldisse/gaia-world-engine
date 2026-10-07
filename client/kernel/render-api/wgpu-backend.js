@@ -568,6 +568,9 @@ createNode(mat4, parent = 0) {
     setToneMapping(mode) { gpu.setToneMapping(mode); },
     setExposure(e) { gpu.setExposure(e); },
     setBloom(b) { if (b) gpu.setBloom(b.strength, b.radius, b.threshold, b.smoothWidth ?? 0.01); else gpu.setBloom(-1, 0, 0, 0); },
+    // r10-shadow-18 eye adaptation: GPU meter on/off + host multiplier; grid = Float32Array(64) mean log2 luma (raw HDR) or empty
+    setAutoExposure(on, mul) { gpu.setAutoExposure(!!on, mul); },
+    autoExposureGrid() { return gpu.autoExposureGrid(); },
     setBackground(rgb) { gpu.setBackgroundColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0)); },
     renderFrame(/* dt */) {
     if (lightsDirty) pushLights();

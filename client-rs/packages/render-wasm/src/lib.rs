@@ -274,6 +274,13 @@ let core = RenderCore::new(&device, &queue, opts);
         self.core.create_texture_array(&self.device, &self.queue, id, width, height, layers, rgba, srgb).map_err(err)?;
         Ok(id)
     }
+    /// r12-water: cube texture, 6 faces (+X -X +Y -Y +Z -Z, face-major RGBA8, size x size) + GPU mips per face. srgb=false = linear sampling.
+    #[wasm_bindgen(js_name = createTextureCube)]
+    pub fn create_texture_cube(&mut self, size: u32, faces: &[u8], srgb: bool) -> Result<u32, JsError> {
+        let id = self.id("texture");
+        self.core.create_texture_cube(&self.device, &self.queue, id, size, faces, srgb).map_err(err)?;
+        Ok(id)
+    }
     #[wasm_bindgen(js_name = updateTextureLayer)]
     pub fn update_texture_layer(&mut self, id: u32, layer: u32, rgba: &[u8]) -> Result<(), JsError> {
         self.core.update_texture_layer(&self.device, &self.queue, id, layer, rgba).map_err(err)

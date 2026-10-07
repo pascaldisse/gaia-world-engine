@@ -445,6 +445,8 @@ pub(crate) size: u64,
 pub(crate) struct Resources<'a> {
 pub(crate) tex: &'a HashMap<u32, wgpu::TextureView>,
 pub(crate) arrays: &'a HashMap<u32, super::ArrayTex>,
+pub(crate) cubes: &'a HashMap<u32, super::CubeTex>,
+pub(crate) white_cube: &'a wgpu::TextureView,
 pub(crate) storage: &'a HashMap<u32, StorageBuf>,
 pub(crate) white: &'a wgpu::TextureView,
 pub(crate) white_array: &'a wgpu::TextureView,
@@ -479,7 +481,7 @@ pub(crate) fn remove(&mut self, material: u32) {
         frame: &ThreeFrame,
         res: &Resources,
 ) {
-let Resources { tex, arrays, storage, white, white_array, sampler } = *res;
+let Resources { tex, arrays, cubes, white_cube, storage, white, white_array, sampler } = *res;
         for &(iid, mat_id, xf) in instances {
             let Some(mat) = self.mats.get(&mat_id) else { continue };
             let model = Mat4::from_cols_array(&xf);
@@ -510,7 +512,9 @@ if mat.slots.iter().any(|s| matches!(s.kind, Kind::Storage { .. }) && !mat.stora
                                 binding: s.binding,
                                 resource: match &s.kind {
                                     Kind::Uniform { .. } => buffers.iter().find(|(i, _)| *i == k).expect("buffer").1.as_entire_binding(),
-                                    Kind::Texture { dim, .. } => wgpu::BindingResource::TextureView(if *dim == wgpu::TextureViewDimension::D2Array {
+                                    Kind::Texture { dim, .. } => wgpu::BindingResource::TextureView(if *dim == wgpu::TextureViewDimension::Cube {
+mat.textures.get(&s.name).and_then(|id| cubes.get(id)).map(|c| &c.view).unwrap_or(white_cube)
+} else if *dim == wgpu::TextureViewDimension::D2Array {
 mat.textures.get(&s.name).and_then(|id| arrays.get(id)).map(|a| &a.view).unwrap_or(white_array)
 } else {
 mat.textures.get(&s.name).and_then(|id| tex.get(id)).unwrap_or(white)

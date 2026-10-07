@@ -11,7 +11,7 @@ async function fakeWgpu() {
   const calls = []; let id = 0;
   const rec = (n) => (...a) => { calls.push([n, ...a]); return ++id; };
   const gpu = new Proxy({ hasTimestamps: () => false, createMaterial: rec('createMaterial'), updateMaterial: rec('updateMaterial'), destroyMaterial: rec('destroyMaterial'), createMesh: rec('createMesh'),
-    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoColorWrite: rec('setMaterialNoColorWrite'), setMaterialNoGi: rec('setMaterialNoGi'), setMaterialShadowCullBack: rec('setMaterialShadowCullBack'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
+    createInstance: rec('createInstance'), updateInstance: rec('updateInstance'), removeInstance: rec('removeInstance'), setMaterialFlags: rec('setMaterialFlags'), setMaterialUnlitToneMapped: rec('setMaterialUnlitToneMapped'), setMaterialNoColorWrite: rec('setMaterialNoColorWrite'), setMaterialNoDepthTest: rec('setMaterialNoDepthTest'), setMaterialNoGi: rec('setMaterialNoGi'), setMaterialShadowCullBack: rec('setMaterialShadowCullBack'), setMaterialNoReceiveShadow: rec('setMaterialNoReceiveShadow') },
     { get: (t, k) => (k === 'then' ? undefined : t[k] ?? (() => 0)) });
   const wasm = { default: async () => {}, GaiaRender: { create: async () => gpu } };
   const prev = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
@@ -137,4 +137,21 @@ test('r11 colorWrite:false (depth-only occluder) → setMaterialNoColorWrite(id,
   const { calls: c2, backend: b2 } = await fakeWgpu(); const s2 = new THREE.Scene(); s2.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial()));
   createSceneAdapter(b2, { three: THREE }).sync(s2);
   assert.equal(c2.filter((c) => c[0] === 'setMaterialNoColorWrite').length, 0);
+});
+
+test('r11 depthTest:false (HUD/xray) → setMaterialNoDepthTest(id,true) AFTER setMaterialFlags; in change signature; default pushes nothing', async () => {
+  assert.equal(materialToParams(new THREE.MeshBasicMaterial({ depthTest: false })).params.depthTest, false);
+  assert.notEqual(materialSig(new THREE.MeshBasicMaterial({ depthTest: false })), materialSig(new THREE.MeshBasicMaterial()));
+  const { calls, backend } = await fakeWgpu();
+  const scene = new THREE.Scene(); const g = tri();
+  const hud = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ depthTest: false })); hud.frustumCulled = false;
+  const pbr = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ depthTest: false, depthWrite: false })); pbr.frustumCulled = false;
+  scene.add(hud, pbr);
+  createSceneAdapter(backend, { three: THREE }).sync(scene);
+  const no = calls.filter((c) => c[0] === 'setMaterialNoDepthTest');
+  assert.equal(new Set(no.map((c) => c[1])).size, 2, JSON.stringify(no));
+  for (const c of no) { assert.equal(c[2], true); const fi = calls.findIndex((x) => x[0] === 'setMaterialFlags' && x[1] === c[1]); assert.ok(fi >= 0 && fi < calls.indexOf(c), 'flags pushed before (flags reset it)'); }
+  const { calls: c2, backend: b2 } = await fakeWgpu(); const s2 = new THREE.Scene(); s2.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial()));
+  createSceneAdapter(b2, { three: THREE }).sync(s2);
+  assert.equal(c2.filter((c) => c[0] === 'setMaterialNoDepthTest').length, 0);
 });

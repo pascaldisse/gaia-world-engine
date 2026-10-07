@@ -57,6 +57,8 @@ storage: HashMap<String, u32>,
 /// r6-tsl: non-core vertex attributes, one vertex-buffer slot each (after the core Vertex slot, if any).
 extra: Vec<AttrSpec>,
 core_slot: Option<u32>,
+/// r10-shadow-3: group index of the core's sun-CSM receiver appended after the package groups (None = package never calls gaia_sun_shadow).
+shadow_group: Option<u32>,
 }
 /// One TSL vertex attribute that the core's interleaved Vertex does not carry.
 struct AttrSpec {
@@ -145,13 +147,14 @@ pub(crate) fn build(
 storage: HashMap<String, u32>,
 color_format: wgpu::TextureFormat,
     depth_format: wgpu::TextureFormat,
+receiver: &wgpu::BindGroupLayout,
 ) -> Result<ThreeMaterial, String> {
     let pkg: serde_json::Value = serde_json::from_str(pkg_json).map_err(|e| format!("three package JSON: {e}"))?;
     let s = |k: &str| pkg[k].as_str().ok_or_else(|| format!("three package: `{k}` missing"));
-    let (vs, fs) = (s("vertex")?, s("fragment")?);
+    let (vs, fs0) = (s("vertex")?, s("fragment")?);
     let mut slots = Vec::new();
     stage_globals(vs, wgpu::ShaderStages::VERTEX, &mut slots, "vertex")?;
-    stage_globals(fs, wgpu::ShaderStages::FRAGMENT, &mut slots, "fragment")?;
+    stage_globals(fs0, wgpu::ShaderStages::FRAGMENT, &mut slots, "fragment")?;
     // package uniforms by (group, binding, member) → semantic + initial value
     let mut pv: HashMap<(u32, u32, String), (Option<String>, Option<String>, Vec<f32>)> = HashMap::new();
     for g in pkg["bindGroups"].as_array().into_iter().flatten() {
@@ -181,6 +184,15 @@ color_format: wgpu::TextureFormat,
     }
     slots.sort_by_key(|s| (s.group, s.binding));
     let ngroups = slots.iter().map(|s| s.group + 1).max().unwrap_or(0);
+    // r10-shadow-3: the package (TSL light node w/ the engine's shadow hook) calls `gaia_sun_shadow(world, cam, n, nl) -> f32`; the CORE's own
+    // sun-CSM receiver (forward.wgsl: Shadow struct + bindings + shadow_cascade/sun_shadow, byte-identical source) is appended as group(ngroups).
+    let shadow_group = fs0.contains("gaia_sun_shadow(").then_some(ngroups);
+    let fs_owned;
+    let fs: &str = if let Some(g) = shadow_group {
+        fs_owned = format!("{fs0}\n{}", receiver_wgsl(g)?);
+        stage_globals(&fs_owned, wgpu::ShaderStages::FRAGMENT, &mut Vec::new(), "fragment+shadow receiver")?;
+        &fs_owned
+    } else { fs0 };
     let layouts: Vec<wgpu::BindGroupLayout> = (0..ngroups)
         .map(|g| {
             let entries: Vec<wgpu::BindGroupLayoutEntry> = slots
@@ -250,7 +262,8 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     let transparent = pkg["material"]["transparent"].as_bool().unwrap_or(false);
     let vm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three vertex"), source: wgpu::ShaderSource::Wgsl(vs.into()) });
     let fm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three fragment"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
-    let lrefs: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().map(Some).collect();
+    let mut lrefs: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().map(Some).collect();
+    if shadow_group.is_some() { lrefs.push(Some(receiver)); }
     let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("three layout"), bind_group_layouts: &lrefs, immediate_size: 0 });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("three material"),
@@ -288,7 +301,7 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
         multiview_mask: None,
         cache: None,
     });
-    Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot })
+    Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot, shadow_group })
 }
 
 /// three `NoColorSpace`/linear texture (e.g. DataTexture default) → Rgba8Unorm, sampled WITHOUT sRGB decode (three semantics).
@@ -458,7 +471,7 @@ Kind::Storage { .. } => storage[&mat.storage[&format!("{}.{}", s.group, s.bindin
     }
         /// Inside the forward pass: one draw per three instance (per-object uniforms). Returns (draws, skipped): an instance is SKIPPED
     /// (counted, surfaced by the host) when its material needs a vertex attribute the mesh/instance does not provide — never drawn with garbage.
-    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>) -> (u32, u32) {
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>, receiver: &wgpu::BindGroup) -> (u32, u32) {
         let (mut n, mut skipped) = (0, 0);
         for &(iid, mat_id, _) in instances {
             let Some(mat) = self.mats.get(&mat_id) else { continue };
@@ -479,6 +492,7 @@ let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
             for (i, bg) in g.groups.iter().enumerate() {
                 pass.set_bind_group(i as u32, bg, &[]);
             }
+            if let Some(sg) = mat.shadow_group { pass.set_bind_group(sg, receiver, &[]); }
             if let Some(cs) = mat.core_slot { pass.set_vertex_buffer(cs, gm.vertices.slice(..)); }
             for (slot, b) in &bound { pass.set_vertex_buffer(*slot, b.slice(..)); }
             pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -487,4 +501,14 @@ let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
         }
         (n, skipped)
     }
+}
+
+/// The core's sun-CSM receiver WGSL (forward.wgsl slice, single source of truth) re-grouped to `group`, + the one entry point three's light node calls.
+fn receiver_wgsl(group: u32) -> Result<String, String> {
+    const FWD: &str = include_str!("forward.wgsl");
+    let (a, b) = (FWD.find("// Sun cascaded shadow maps"), FWD.find("struct VsOut"));
+    let (Some(a), Some(b)) = (a, b) else { return Err("forward.wgsl: shadow receiver markers moved".into()) };
+    if b <= a { return Err("forward.wgsl: shadow receiver markers out of order".into()); }
+    let body = FWD[a..b].replace("@group(2)", &format!("@group({group})"));
+    Ok(format!("{body}\nfn gaia_sun_shadow_core(world: vec3<f32>, cam: vec3<f32>, n: vec3<f32>, nl: f32) -> f32 {{ return sun_shadow(world, cam, n, nl); }}\n"))
 }

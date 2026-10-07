@@ -1353,7 +1353,7 @@ impl RenderCore {
         package_json: &str,
         textures: HashMap<String, u32>,
     ) -> Result<(), String> {
-        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT)?;
+        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT, &self.shadow_receiver_layout)?;
         self.materials.remove(&id);
         self.three.remove(id);
         self.three.mats.insert(id, m);
@@ -2024,7 +2024,7 @@ impl RenderCore {
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
-                let (n, skipped) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs);
+                let (n, skipped) = self.three.draw(&mut pass, &three_list, &self.meshes, &inst_mesh, &self.inst_attrs, self.shadow.receiver_bind());
                 draws += n;
                 self.three_skipped = skipped;
             }

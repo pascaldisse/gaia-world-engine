@@ -12,3 +12,8 @@ Composite point = same as three chain: before AE mul / bloom highpass / tonemap 
 Deviation: fade weight computed in the AO pass at AO resolution (G channel, bilinear-filtered at resolve) vs three's full-res depth per pixel.
 Tests: tests/gtao.rs flat plane min ratio .956 (sRGB), inner corner .692 at crease, top/near 1.000.
 Commit: see git log.
+## S3 bridge (7aaebbaa)
+post-bridge: findNode BFS (arrays too: JoinNode.nodes) -> GTAONode params + node.rigComposite {intensity, fadeStart/End uniforms, debug} (set in lighting/post.js) -> backend.setGtao(g|null) -> wasm setGtao (render-wasm lib.rs, cargo check ok). ?wgpuGtao=0 kill switch (live: bridge.gtao).
+LOUD refusals (stats.unsupported + warn once): 'traa' (TRAANode in graph; no temporal AA / velocity in core), 'gtao:debug-mask', 'gtao:backend' (no setGtao).
+TRAA: inventory + refusal only. UNVERIFIED: live Metal/browser frame (compile-free lane); wasm build not run (cargo check only).
+Tests: bun test test/render-api-*.test.js test/gi-attach.test.js test/lighting-post.test.js = 122 pass (7 new in render-api-gtao.test.js, real buildChain graph); cargo test --release --offline -p gaia-render all green incl tests/gtao.rs.

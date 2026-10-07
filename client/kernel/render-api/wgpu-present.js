@@ -22,6 +22,8 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' } } });
   { const mt = Number(params.get('wgpuTslCacheMax')); if (Number.isFinite(mt) && mt > 0) structCache.maxTemplates = mt; } // r10-7 template retention bound
   if (params.get('wgpuTslKeyDump') === '1') structCache.keySamples = new Map();
+  if (params.get('wgpuTslWalkCheck') === '1') structCache.walkCheck = true;
+  if (params.get('wgpuTslKeyProf') === '1') structCache.keyProf = { prim: 0, kids: 0, props: 0, join: 0, nodes: 0, parts: 0, walks: 0 }; // r10-9 key-walk cost breakdown (opt-in)
   structCache.share = params.get('wgpuShare') !== '0'; // r10-4 A/B flag (also togglable live: __wgpu.tslCache.share)
   const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE, cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0' });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.

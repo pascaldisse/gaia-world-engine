@@ -198,7 +198,7 @@ function builtinSemantics(THREE) {
 // Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
 // cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null };
+export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0 };
 // r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
 export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
@@ -231,7 +231,49 @@ return skip;
 }
 const isSlot = (n) => n.isUniformNode || n.isTextureNode || n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode;
 // walk the builder's post-setup graph: ordered unique nodes + key. Roots = builder.nodes (visit order is deterministic for equal structure).
+// r10-9: FUSED walker -- one pass over each node's own props yields BOTH the primitive signature and the child list (was primSig loop + NodeUtils.getNodeChildren generator + spread per node: ~7M nodes / 25 s on Burnout).
+// Byte-identical to builderWalkRef (test-proven): same part order, same ids, same key.
+const fnHashes = new WeakMap();
+function fnHash(f) { let h = fnHashes.get(f); if (h === undefined) fnHashes.set(f, (h = strHash(Function.prototype.toString.call(f)))); return h; }
 function builderWalk(THREE, b, pre) {
+const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
+const parts = pre.slice(), nodes = [], ids = new Map(), Pf = structCache.keyProf, ObjProto = Object.prototype;
+const visit = (n) => {
+const seen = ids.get(n.uuid); if (seen !== undefined) { parts.push('#' + seen); return; }
+ids.set(n.uuid, nodes.length); nodes.push(n);
+const slot = isSlot(n);
+let s = `(${n.constructor?.name}:${n.type ?? ''}:${n.nodeType ?? ''}:${n.updateType ?? ''}${n.updateBeforeType ?? ''}${n.updateAfterType ?? ''}:`;
+if (n.isTextureNode) { const t = n.value; s += `T${t?.constructor?.name}:${t?.format}:${t?.type}:${t?.colorSpace}:${+!!t?.isDepthTexture}:${+!!t?.isArrayTexture}:${+!!t?.isCubeTexture}:${t?.image?.depth ?? ''}`; }
+else if (n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode) { const a = n.value; s += `B${a?.constructor?.name}:${a?.itemSize}:${a?.array?.constructor?.name}:${a?.count ?? ''}`; }
+const tp0 = Pf ? nowMs() : 0;
+const leaf = n.isUniformNode; let kp = null, kk = null, ki = null; // pending children (property, index, node) -- flat arrays, no per-child objects
+const names = Object.getOwnPropertyNames(n);
+for (let i = 0; i < names.length; i++) {
+const k = names[i]; if (k.charCodeAt(0) === 95) continue; // '_' private: neither signature nor child
+const v = n[k], t = typeof v;
+if (t === 'object') {
+if (v === null) { if (!SKIP_PROPS.has(k) && !(slot && k === 'value')) s += `${k}=null;`; if (!leaf) continue; }
+if (leaf || v === null) continue;
+if (Array.isArray(v)) { for (let j = 0; j < v.length; j++) { const c = v[j]; if (c && c.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(c); (ki ??= []).push(j); } } }
+else if (v.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(v); (ki ??= []).push(undefined); }
+else if (Object.getPrototypeOf(v) === ObjProto) { for (const sp in v) { if (sp.charCodeAt(0) === 95) continue; const c = v[sp]; if (c && c.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(c); (ki ??= []).push(sp); }; } }
+} else if (t === 'boolean' || t === 'string' || t === 'number') { if (!SKIP_PROPS.has(k) && !(slot && k === 'value')) s += `${k}=${v};`; }
+else if (t === 'function') { if (!slot && !SKIP_PROPS.has(k)) s += `${k}=${fnHash(v)};`; }
+}
+if (Pf) { Pf.prim += nowMs() - tp0; Pf.nodes++; }
+parts.push(s);
+if (!leaf) {
+if (kp) for (let i = 0; i < kp.length; i++) { parts.push(`.${kp[i]}${ki[i] ?? ''}`); visit(kk[i]); }
+const props = b.getNodeProperties(n); for (const k of Object.keys(props)) { const c = props[k]; if (c && c.isNode === true && c !== n) { parts.push(`~${k}`); visit(c); } }
+}
+parts.push(')');
+};
+for (const n of b.nodes) visit(n);
+const tj0 = Pf ? nowMs() : 0; const key = parts.join(''); if (Pf) { Pf.join += nowMs() - tj0; Pf.parts += parts.length; Pf.walks++; }
+return { key, nodes, parts };
+}
+// reference walker (r10-8, NodeUtils.getNodeChildren + primSig): kept ONLY so tests prove the fused builderWalk emits byte-identical keys/node order.
+export function builderWalkRef(THREE, b, pre) {
 const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
 const parts = pre.slice(), nodes = [], ids = new Map();
 const visit = (n) => {
@@ -250,7 +292,7 @@ const props = b.getNodeProperties(n); for (const k of Object.keys(props)) { cons
 parts.push(')');
 };
 for (const n of b.nodes) visit(n);
-return { key: parts.join(''), nodes, parts };
+const tj0 = structCache.keyProf ? nowMs() : 0; const key = parts.join(''); if (structCache.keyProf) { structCache.keyProf.join += nowMs() - tj0; structCache.keyProf.parts += parts.length; structCache.keyProf.walks++; } return { key, nodes, parts };
 }
 // builder subclass: build() = three r180 NodeBuilder.build with ONE addition -- after the setup stage, this._gate(builder) may throw to skip analyze+generate.
 // The builder (and every builder-side Map: nodeData/uniforms/bindings) is dropped by the caller; node objects only carry what a full setup would have left.
@@ -285,6 +327,7 @@ const gate = (b) => {
 if (!pre) return; const t1 = nowMs();
 try { w = builderWalk(THREE, b, pre); } catch (e) { w = { refuse: 'walk-error:' + (e?.message ?? e) }; }
 C.keyMs += nowMs() - t1;
+if (C.walkCheck && !w.refuse) { const t2 = nowMs(); const r = builderWalkRef(THREE, b, pre); C.refKeyMs += nowMs() - t2; C.walkChecked++; if (r.key !== w.key || r.nodes.length !== w.nodes.length || r.nodes.some((x, i) => x !== w.nodes[i])) { C.walkMismatch++; let d = 0; while (d < r.parts.length && r.parts[d] === w.parts[d]) d++; why('WALKMISMATCH', `${material.name || material.type} @${d}: ref ${r.parts[d]?.slice(0, 160)} <> fused ${w.parts[d]?.slice(0, 160)}`); } } // fused walker == reference walker (tests / ?wgpuTslWalkCheck=1)
 if (w.refuse) return;
 const tpl = C.map.get(w.key); if (!tpl || tpl.nodes.length !== w.nodes.length || tpl.noRebind) return;
 if (tpl.unproven?.size || tpl.unprovenBuf?.size) { decision = 'prove'; hit = tpl; return; }
@@ -384,7 +427,7 @@ if (sa !== sb) { let i = 0; while (sa[i] === sb[i]) i++; return `JSON differs @$
 for (const k of ['textureSources', 'bufferSources']) { const ka = Object.keys(a[k]), kb = Object.keys(b[k]); if (ka.join() !== kb.join()) return `${k} keys differ`; for (const x of ka) if (a[k][x] !== b[k][x]) return `${k}[${x}] object differs`; }
 if (a.live.keys.length !== b.live.keys.length || canon(a.live.keys) !== canon(b.live.keys)) return 'LAYOUT live keys differ';
 // values: after the first live.update the rebound package must carry the SAME effective uniform values as the full build of the same material (position-ordered; uuids differ per build)
-const eff = (p) => { const m = new Map(); for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) m.set(u.key, u.value); for (const c of p.live.update()) m.set(c.key, c.value); const o = []; for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) o.push(m.get(u.key)); return JSON.stringify(o); };
-const ea = eff(a), eb = eff(b); if (ea !== eb) { let i = 0; while (ea[i] === eb[i]) i++; return `VALUE differs after first update @${i}: rebound ${ea.slice(Math.max(0, i - 40), i + 40)} <> built ${eb.slice(Math.max(0, i - 40), i + 40)}`; }
+const eff = (p) => { const m = new Map(); for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) m.set(u.key, u.value); for (const c of p.live.update()) m.set(c.key, c.value); const o = []; for (const g of p.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) o.push(u.key == null ? undefined : m.get(u.key)); return o; }; // r10-9: host-semantic uniforms (key null: camera*/time) are supplied by the HOST backend per frame, never by the package -> their shipped value is build-time noise (the singleton's last-updated state), not compared; (was: m.set(null,..) collapsed them all into one phantom -> 1330 false VALUE mismatches)
+const ea = eff(a), eb = eff(b); const sj = (x) => JSON.stringify(x); if (sj(ea) !== sj(eb)) { let i = 0; while (i < ea.length && sj(ea[i]) === sj(eb[i])) i++; const ids = []; for (const g of b.bindGroups) for (const x of g.bindings) for (const u of x.uniforms ?? []) ids.push(`${x.name}.${u.name ?? u.key}(${u.source?.kind}${u.source?.name ? ':' + u.source.name : ''})`); return `VALUE differs after first update @uniform ${i} ${ids[i]}: rebound ${sj(ea[i])?.slice(0, 120)} <> built ${sj(eb[i])?.slice(0, 120)}`; }
 return null;
 }

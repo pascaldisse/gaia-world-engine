@@ -127,3 +127,28 @@ test('r10-8: verify compares WGSL + layout, uniform VALUES checked after first u
   for (let i = 0; i < 4; i++) exportNodeMaterial(mkFn(0x101010 * (i + 1), tex(i * 40), 1, 0.1 * (i + 1)), { THREE, cache: 'verify' });
   assert.equal(structCache.mismatch + structCache.layoutMismatch + structCache.valueMismatch, 0, structCache.log.join('|')); assert.equal(structCache.verified, 4, JSON.stringify({h: structCache.hits, m: structCache.misses, r: structCache.reasons, rf: structCache.rebindFail}) + structCache.log.join('|'));
 });
+
+// r10-9: anything that changes WGSL must change the key (merge guard for r10-shadow: receive flags / shadowNode per material). Same material, receive=true vs false => 2 keys, each = its own full build.
+test('r10-9: receiveShadow true vs false (shadow-casting light) -> 2 keys, WGSL equals a cache-off build', () => {
+  reset();
+  const scene = new THREE.Scene(); const L = new THREE.DirectionalLight(0xffffff, 1); L.castShadow = true; scene.add(L, L.target);
+  const mkS = (rcv) => { const m = new THREE.MeshStandardNodeMaterial(); m.colorNode = float(0.5).mul(vec3(1, 0.5, 0.25)); const o = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), m); o.receiveShadow = rcv; scene.add(o); return { m, o }; };
+  const run = (rcv, cache) => { const { m, o } = mkS(rcv); return exportNodeMaterial(m, { THREE, object: o, scene, cache }); };
+  run(true); run(true); run(false); run(false); // 2 builds each: singletons proven shared
+  const keys = structCache.map.size; const on = [run(true), run(false)], off = [run(true, 'off'), run(false, 'off')];
+  assert.equal(on[0].fragment, off[0].fragment, 'receive=true WGSL = full build'); assert.equal(on[1].fragment, off[1].fragment, 'receive=false WGSL = full build');
+  assert.equal(keys, 2, 'receive flag changes the post-setup graph -> two keys (' + keys + ')'); // (three's headless WGSL happens to be identical for both: shadows are not exported -- keys still split, never merge)
+  assert.equal(structCache.mismatch + structCache.rebindFail, 0, structCache.log.join('|'));
+  console.log('receive keys', keys, 'wgslDiffers', off[0].fragment !== off[1].fragment);
+});
+
+// r10-9: fused key walker == reference walker (same key string + node order) over varied graphs.
+test('r10-9: fused builderWalk emits byte-identical keys to the reference walker', () => {
+  reset(); structCache.walkCheck = true; structCache.walkChecked = 0; structCache.walkMismatch = 0;
+  try {
+    const scene = new THREE.Scene(); scene.add(new THREE.DirectionalLight(0xffffff, 1), new THREE.PointLight(0xffffff, 2));
+    for (let i = 0; i < 3; i++) { exportNodeMaterial(mk(0x111111 * (i + 1), tex(i), i), { THREE }); exportNodeMaterial(mkFn(0x222222, tex(i), i), { THREE, scene }); }
+    const st = new THREE.MeshStandardNodeMaterial(); st.map = tex(7); st.colorNode = vec3(0.2, 0.4, 0.6).mul(uniform(0.5)); exportNodeMaterial(st, { THREE, scene }); exportNodeMaterial(st, { THREE, scene });
+    assert.ok(structCache.walkChecked >= 8, 'walks checked ' + structCache.walkChecked); assert.equal(structCache.walkMismatch, 0, structCache.log.join('|'));
+  } finally { structCache.walkCheck = false; }
+});

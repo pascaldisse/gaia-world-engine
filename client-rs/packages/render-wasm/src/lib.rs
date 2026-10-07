@@ -144,6 +144,9 @@ impl GaiaRender {
         if let Some(v) = opt_f32(&options, "renderHeight") {
             opts.render_height = v as u32;
         }
+        if let Some(v) = Reflect::get(&options, &JsValue::from_str("pipeShare")).ok().and_then(|v| v.as_bool()) {
+            opts.pipe_share = v;
+        }
         if let Some(v) = opt_f32(&options, "exposure") {
             opts.exposure = v;
         }
@@ -743,7 +746,7 @@ o.into()
     pub fn set_render_height(&mut self, h: u32) {
         self.core.set_render_height(h);
     }
-    /// r11: [draws, pipeline changes, instanced draws, single-instance draws, instances (builtin path), shader-material draws] of the last main pass.
+    /// r11-pipe: [11] = distinct content keys among drawn three materials (== [7] when shared). r11: [draws, pipeline changes, instanced draws, single-instance draws, instances (builtin path), shader-material draws] of the last main pass.
     #[wasm_bindgen(js_name = passStats)]
     pub fn pass_stats(&self) -> Vec<u32> {
         self.core.last_pass_stats.to_vec()

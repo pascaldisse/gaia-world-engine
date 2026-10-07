@@ -59,6 +59,11 @@ extra: Vec<AttrSpec>,
 core_slot: Option<u32>,
 /// r10-shadow-3: group index of the core's sun-CSM receiver appended after the package groups (None = package never calls gaia_sun_shadow).
 shadow_group: Option<u32>,
+    /// r11-pipe: content key hash (WGSL + reflected layout + vertex layout + pipeline state); equal key = interchangeable pipeline.
+    key: u64,
+    
+    /// r11-pipe: keeps its id-order position (blended / non-default depth-colour state); everything else may be reordered by pipeline.
+    ordered: bool,
 }
 /// One TSL vertex attribute that the core's interleaved Vertex does not carry.
 struct AttrSpec {
@@ -78,6 +83,37 @@ struct InstanceGpu {
 pub(crate) struct ThreeMaterials {
     pub(crate) mats: HashMap<u32, ThreeMaterial>,
     inst: HashMap<u32, InstanceGpu>,
+    /// r11-pipe: content-keyed pipeline (+ bind group layouts) and shader-module caches; filled only when `cache.share`.
+    pub(crate) cache: PipeCache,
+}
+#[derive(Default)]
+pub(crate) struct PipeCache {
+    pub(crate) share: bool,
+    pipes: HashMap<String, (wgpu::RenderPipeline, Vec<wgpu::BindGroupLayout>)>,
+    modules: HashMap<String, wgpu::ShaderModule>,
+}
+impl PipeCache {
+    fn module(&mut self, device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
+        let mk = || device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(src.into()) });
+        if !self.share { return mk(); }
+        self.modules.entry(src.to_string()).or_insert_with(mk).clone()
+    }
+}
+impl ThreeMaterials {
+    pub(crate) fn new(share: bool) -> Self { Self { cache: PipeCache { share, ..Default::default() }, ..Default::default() } }
+    /// r11-pipe: within each maximal run of `!ordered` draws, stable-sort by (pipeline key, material). Ordered draws (blended / non-default depth-colour state) never move.
+    pub(crate) fn sort_by_pipeline(&self, list: &mut [(u32, u32, [f32; 16])]) {
+        if !self.cache.share { return; }
+        let free = |m: u32| self.mats.get(&m).is_some_and(|x| !x.ordered);
+        let mut i = 0;
+        while i < list.len() {
+            if !free(list[i].1) { i += 1; continue; }
+            let mut j = i;
+            while j < list.len() && free(list[j].1) { j += 1; }
+            list[i..j].sort_by_key(|x| (self.mats[&x.1].key, x.1));
+            i = j;
+        }
+    }
 }
 
 fn stage_globals(src: &str, stage: wgpu::ShaderStages, out: &mut Vec<Slot>, label: &str) -> Result<(), String> {
@@ -148,6 +184,7 @@ storage: HashMap<String, u32>,
 color_format: wgpu::TextureFormat,
     depth_format: wgpu::TextureFormat,
 receiver: &wgpu::BindGroupLayout,
+    cache: &mut PipeCache,
 ) -> Result<ThreeMaterial, String> {
     let pkg: serde_json::Value = serde_json::from_str(pkg_json).map_err(|e| format!("three package JSON: {e}"))?;
     let s = |k: &str| pkg[k].as_str().ok_or_else(|| format!("three package: `{k}` missing"));
@@ -266,8 +303,18 @@ Kind::Storage { read_only } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindi
 let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     let transparent = pkg["material"]["transparent"].as_bool().unwrap_or(false);
     let (write_mask, depth_write, depth_compare) = pipeline_depth_color_state(&pkg["material"]);
-    let vm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three vertex"), source: wgpu::ShaderSource::Wgsl(vs.into()) });
-    let fm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("three fragment"), source: wgpu::ShaderSource::Wgsl(fs.into()) });
+    // r11-pipe: content key = everything the pipeline is built from (per-material uniform VALUES / texture ids are NOT part of it).
+let slot_sig: Vec<String> = slots.iter().map(|s| format!("{}.{}.{}.{}", s.group, s.binding, s.vis.bits(), match &s.kind { Kind::Uniform { .. } => "u".to_string(), Kind::Texture { dim, sample } => format!("t{dim:?}{sample:?}"), Kind::Sampler => "s".to_string(), Kind::Storage { read_only } => format!("b{read_only}") })).collect();
+let key_str = format!("{vs}\u{1}{fs}\u{1}{}\u{1}{}\u{1}{slot_sig:?}{vbufs_opt:?}{side}{transparent}{}{depth_write}{depth_compare:?}{color_format:?}{depth_format:?}{shadow_group:?}", pkg["vertexEntry"].as_str().unwrap_or("main"), pkg["fragmentEntry"].as_str().unwrap_or("main"), write_mask.bits());
+let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); key_str.hash(&mut h); h.finish() };
+let ordered = transparent || !depth_write || write_mask != wgpu::ColorWrites::ALL || depth_compare != wgpu::CompareFunction::LessEqual;
+if cache.share {
+    if let Some((p, l)) = cache.pipes.get(&key_str) {
+        return Ok(ThreeMaterial { pipeline: p.clone(), layouts: l.clone(), slots, textures, storage, extra, core_slot, shadow_group, key, ordered });
+    }
+}
+let vm = cache.module(device, "three vertex", vs);
+let fm = cache.module(device, "three fragment", fs);
     let mut lrefs: Vec<Option<&wgpu::BindGroupLayout>> = layouts.iter().map(Some).collect();
     if shadow_group.is_some() { lrefs.push(Some(receiver)); }
     let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("three layout"), bind_group_layouts: &lrefs, immediate_size: 0 });
@@ -307,7 +354,8 @@ let side = pkg["material"]["side"].as_u64().unwrap_or(0);
         multiview_mask: None,
         cache: None,
     });
-    Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot, shadow_group })
+    if cache.share { cache.pipes.insert(key_str, (pipeline.clone(), layouts.clone())); }
+Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot, shadow_group, key, ordered })
 }
 
 /// three material state -> (colour write mask, depth write, depth compare). colorWrite:false => empty mask (depth-only pass); depthWrite:false => no depth write
@@ -488,10 +536,12 @@ Kind::Storage { .. } => storage[&mat.storage[&format!("{}.{}", s.group, s.bindin
     }
         /// Inside the forward pass: one draw per three instance (per-object uniforms). Returns (draws, skipped): an instance is SKIPPED
     /// (counted, surfaced by the host) when its material needs a vertex attribute the mesh/instance does not provide — never drawn with garbage.
-    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>, receiver: &wgpu::BindGroup) -> (u32, u32, u32, u32, [u32; 3]) {
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, instances: &[(u32, u32, [f32; 16])], meshes: &HashMap<u32, super::GpuMesh>, inst_mesh: &HashMap<u32, u32>, inst_attrs: &HashMap<u32, HashMap<String, (wgpu::Buffer, u32)>>, receiver: &wgpu::BindGroup) -> (u32, u32, u32, u32, [u32; 4]) {
         let (mut n, mut skipped) = (0, 0);
-        let mut last_pipe: *const wgpu::RenderPipeline = std::ptr::null();
-        let (mut changes, mut distinct) = (0u32, std::collections::HashSet::<*const wgpu::RenderPipeline>::new());
+        
+        let (mut changes, mut distinct) = (0u32, std::collections::HashSet::<u64>::new());
+let mut keys = std::collections::HashSet::<u64>::new();
+let mut last_pid = u64::MAX;
 let mut groups = std::collections::HashMap::<(u32, u32), u32>::new(); // r11-floor: (material, mesh) -> member draws; per-material uniform values are shared, only model-derived members differ
         for &(iid, mat_id, _) in instances {
             let Some(mat) = self.mats.get(&mat_id) else { continue };
@@ -508,9 +558,11 @@ let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
                 }
             }
             if missing { skipped += 1; continue; }
-            let pp: *const wgpu::RenderPipeline = &mat.pipeline;
-            if pp != last_pipe { changes += 1; last_pipe = pp; }
-            distinct.insert(pp);
+            // pipeline identity: shared => the content key, else one pipeline per material
+let pid = if self.cache.share { mat.key } else { mat_id as u64 };
+keys.insert(mat.key);
+if pid != last_pid { changes += 1; last_pid = pid; }
+distinct.insert(pid);
 *groups.entry((mat_id, *inst_mesh.get(&iid).unwrap_or(&0))).or_default() += 1;
             pass.set_pipeline(&mat.pipeline);
             for (i, bg) in g.groups.iter().enumerate() {
@@ -524,7 +576,7 @@ let Some(g) = self.inst.get(&iid) else { skipped += 1; continue };
             n += 1;
         }
         let multi: Vec<u32> = groups.values().copied().filter(|&c| c > 1).collect();
-(n, skipped, changes, distinct.len() as u32, [multi.len() as u32, multi.iter().sum(), groups.len() as u32])
+(n, skipped, changes, distinct.len() as u32, [multi.len() as u32, multi.iter().sum(), groups.len() as u32, keys.len() as u32])
     }
 }
 

@@ -127,7 +127,9 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   if (!wasm?.GaiaRender) throw new Error('createWgpuBackend requires { wasm } = the render_wasm.js module');
   if (!navigator.gpu) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)');
   await (wasmUrl ? wasm.default(wasmUrl) : wasm.default());
-  const gpu = await wasm.GaiaRender.create(canvas, { renderHeight, ...options });
+  // r11-pipe: ?wgpuPipeShare=0 turns off content-keyed three-material pipeline sharing + pipeline-sorted opaque draws (default on); options.pipeShare wins.
+  const pipeShare = options.pipeShare ?? !(typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuPipeShare') === '0');
+  const gpu = await wasm.GaiaRender.create(canvas, { renderHeight, ...options, pipeShare });
 
   let next = 1;
   const nodes = new Map();      // NodeId → { id, kind, parent, children:Set, local, world, visible, mesh, material, rid }

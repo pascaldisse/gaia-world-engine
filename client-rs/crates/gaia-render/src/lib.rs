@@ -55,6 +55,8 @@ pub struct RenderOptions {
     pub light_intensity_scale: f32,
     /// Material sampler anisotropy (1 = off, max 16).
     pub anisotropy: u16,
+    /// r11-pipe: share three-material pipelines + shader modules by content key and sort opaque shader-material draws by pipeline (default true; `?wgpuPipeShare=0` off).
+    pub pipe_share: bool,
     /// Camera fit when the glb has no camera: fraction of half-extent behind center,
     /// and fraction of half-height below center.
     pub fit_eye_back: f32,
@@ -87,6 +89,7 @@ impl Default for RenderOptions {
             hdr_scene: false,
             tone_mapping: 2,
             anisotropy: 8,
+            pipe_share: true,
             fit_eye_back: 0.6,
             fit_height_bias: 0.5,
             shadows: ShadowOptions::default(),
@@ -650,7 +653,7 @@ pub struct RenderCore {
     /// draw_indexed calls issued by the last `render` (one per mesh+material batch).
     pub last_draw_calls: u32,
     /// r11 GPU-floor stats of the last main pass: [draws, pipeline CHANGES, instanced draws (instance range > 1), single-instance draws, instances drawn by the builtin path, three-material (shader) draws, shader-material pipeline changes, distinct shader-material pipelines].
-    pub last_pass_stats: [u32; 11],
+    pub last_pass_stats: [u32; 12],
     frame: FrameUniform,
     targets: Option<Targets>,
     upscaler: Box<dyn Upscaler>,
@@ -707,6 +710,7 @@ impl RenderCore {
     pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, opts: RenderOptions) -> Self {
+        let pipe_share = opts.pipe_share;
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gaia-render frame"),
             entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT), gi::layout_entries()[0], gi::layout_entries()[1], gi::layout_entries()[2]],
@@ -869,11 +873,11 @@ impl RenderCore {
             batches: Vec::new(),
             instances_dirty: true,
             last_draw_calls: 0,
-            last_pass_stats: [0; 11],
+            last_pass_stats: [0; 12],
             frame,
             targets: None,
             timing,
-            three: Default::default(),
+            three: three_material::ThreeMaterials::new(pipe_share),
             three_time: 0.0,
             groups: HashMap::new(),
             active_groups: None,
@@ -1402,7 +1406,7 @@ impl RenderCore {
         package_json: &str,
         textures: HashMap<String, u32>,
     ) -> Result<(), String> {
-        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT, &self.shadow_receiver_layout)?;
+        let m = three_material::build(device, package_json, textures, HashMap::new(), self.scene_format, DEPTH_FORMAT, &self.shadow_receiver_layout, &mut self.three.cache)?;
         self.materials.remove(&id);
         self.three.remove(id);
         self.three.mats.insert(id, m);
@@ -2004,7 +2008,8 @@ impl RenderCore {
         } else {
             let mut v: Vec<_> = self.instances.iter().filter(|(k, i)| self.three.is_three(i.material) && self.instance_group_visible(**k)).map(|(k, i)| (*k, i.material, i.transform)).collect();
             v.sort_by_key(|x| x.0);
-            v
+self.three.sort_by_pipeline(&mut v);
+v
         };
         if !three_list.is_empty() {
             let far = self.camera.zfar.unwrap_or(f32::INFINITY);
@@ -2055,7 +2060,7 @@ impl RenderCore {
             pass.set_bind_group(0, &self.frame_bind, &[]);
             pass.set_bind_group(2, self.shadow.receiver_bind(), &[]);
             let mut draws = 0u32;
-            let mut stats = [0u32; 11];
+            let mut stats = [0u32; 12];
             let mut last_pipe: *const wgpu::RenderPipeline = &self.pipeline;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
@@ -2127,6 +2132,7 @@ impl RenderCore {
 stats[8] = tgroups[0];
 stats[9] = tgroups[1];
 stats[10] = tgroups[2];
+stats[11] = tgroups[3];
                 self.three_skipped = skipped;
             }
             stats[0] = draws;

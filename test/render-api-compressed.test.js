@@ -35,7 +35,7 @@ test('descriptor: DXT1-RGB CompressedTexture -> compressed descriptor with mip c
   const d = p.textures.map;
   assert.equal(d.compressed, true); assert.equal(d.format, 33776); assert.equal(d.width, 8); assert.equal(d.mipCount, 4); assert.equal(d.srgb, true); assert.equal(d.flipY, false);
   assert.equal(d.key, `${t.uuid}:${t.version}`);
-  assert.equal(d.data.length, 32 + 8 + 8 + 8); assert.equal(d.data[0], 1); assert.equal(d.data[32], 2); assert.equal(d.data[47], 4);
+  assert.equal(d.data.length, 32 + 8 + 8 + 8); assert.equal(d.data[0], 1); assert.equal(d.data[32], 2); assert.equal(d.data[55], 4);
   assert.equal(p.unsupported, undefined);
 });
 

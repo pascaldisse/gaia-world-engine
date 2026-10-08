@@ -99,11 +99,13 @@ function cullLights(THREE, node) {
 const proto = node && Object.getPrototypeOf(node), If = (THREE?.TSL ?? THREE)?.If;
 // patched on the PROTOTYPE: a material with its own light nodes (lightMap) gets a fresh LightsNode from renderer.lighting.createNode, bypassing any per-instance patch
 if (!proto || !If || proto.__lightCull || typeof proto.setupDirectLight !== 'function') return node;
-const orig = proto.setupDirectLight; proto.__lightCull = true;
+const orig = proto.setupDirectLight; proto.__lightCull = true; let seen = null;
 const lit = (c) => c.x.add(c.y).add(c.z).greaterThan(0);
 proto.setupDirectLight = function (builder, lightNode, data) {
 const l = lightNode?.light;
-if (!lightCull.on || !(l?.isPointLight || l?.isSpotLight) || !lightNode.colorNode?.x || !data?.lightColor?.x) return orig.call(this, builder, lightNode, data);
+// three caches flow-coded nodes (lightingModel.direct()'s accumulator inits `directDiffuse = 0`, normalView, positionViewDirection ...) and re-emits their code per If-block -> the FIRST direct() call must run in the OUTER scope (shared nodes live there; a later block re-zeroing the accumulator wiped earlier lights = measured bug in the WIP). Only subsequent lights are branched. Shadowed lights stay straight-line (shadow-map sampling needs uniform control flow).
+(seen ??= new WeakSet());
+if (!lightCull.on || !(l?.isPointLight || l?.isSpotLight) || l.castShadow || !lightNode.colorNode?.x || !data?.lightColor?.x || !seen.has(builder)) { seen.add(builder); return orig.call(this, builder, lightNode, data); }
 If(lit(lightNode.colorNode), () => { If(lit(data.lightColor), () => { orig.call(this, builder, lightNode, data); }); }); // outer = uniform test (attenuation maths emitted inside it), inner = out-of-range test
 };
 return node;

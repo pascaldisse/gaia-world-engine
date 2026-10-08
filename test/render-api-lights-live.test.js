@@ -77,3 +77,14 @@ test('adapter: light add/remove re-exports TSL materials once; intensity/visible
   sun.intensity = 0.1; sun.visible = false; ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'intensity/visible never re-export');
   sc.remove(sun); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'r16-perf: light removed -> NO re-export (grow-only set; detached light reads 0)'); sc.add(sun, sun.target); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'same light object re-added (pool reassign) -> NO re-export'); sc.add(new THREE.PointLight(0xffffff, 1, 5)); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 3, 'never-seen light -> re-exported once');
 });
+
+// r16-perf: per-fragment light cull (If around every light after the first) must keep ONE accumulator init (a re-zeroing branch wiped earlier lights) and branch every later point light.
+test('light cull: accumulators initialised once outside the branches; later point lights branched', () => {
+  const sc = new THREE.Scene(); for (let i = 0; i < 4; i++) { const p = new THREE.PointLight(0xffaa88, 5, 40); p.position.set(i, 2, 0); sc.add(p); }
+  const m = lightmapped(), o = new THREE.Mesh(geo(), m); sc.add(o); sc.updateMatrixWorld(true);
+  const cam = new THREE.PerspectiveCamera(); cam.updateMatrixWorld();
+  const f = exportNodeMaterial(m, { THREE, object: o, scene: sc, camera: cam }).fragment;
+  assert.equal((f.match(/\n\tdirectDiffuse = vec3<f32>\( 0\.0, 0\.0, 0\.0 \);/g) ?? []).length, 1, 'directDiffuse zeroed exactly once');
+  assert.equal((f.match(/\n\tdirectSpecular = vec3<f32>\( 0\.0, 0\.0, 0\.0 \);/g) ?? []).length, 1, 'directSpecular zeroed exactly once');
+  assert.equal((f.match(/\.x \+ render\.nodeUniform\d+\.y \) \+ render\.nodeUniform\d+\.z \) > 0\.0/g) ?? []).length, 3, '3 of 4 point lights uniform-gated (first runs in the outer scope)');
+});

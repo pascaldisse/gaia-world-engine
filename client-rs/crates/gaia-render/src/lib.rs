@@ -1962,6 +1962,9 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         self.instance_transforms = data.clone();
         // world-space AABBs for shadow caster culling (same order as `data`)
         let mut bounds: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
+        // sky domes / backdrops (world AABB diagonal > import_max_caster_diagonal) never cast: casters are double-sided, so an enclosing dome
+        // (Asylum: 5 prims 1.6-8.8 km, all castShadow=true via kernel/gltf.js) occludes the sun for EVERY receiver -> sun factor 0 everywhere. 0 = off.
+        let max_diag = self.opts.shadows.import_max_caster_diagonal;
         let casters: Vec<shadow::Caster> = all
             .iter()
             .filter(|inst| inst.cast_shadow && (!cull_shadows || !is_hidden(inst)))
@@ -1983,6 +1986,7 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
                 }
                 shadow::Caster { mesh: inst.mesh, material: inst.material, transform: inst.transform, is_static: inst.is_static, lo: wlo, hi: whi }
             })
+            .filter(|c| max_diag <= 0.0 || c.lo.distance(c.hi) <= max_diag)
             .collect();
         self.casters = casters;
         self.instance_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

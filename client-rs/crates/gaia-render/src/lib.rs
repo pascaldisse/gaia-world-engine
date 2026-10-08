@@ -2060,6 +2060,42 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         });
     }
 
+    /// Draw sorted builtin batches `(k, batch)`; `k >= opaque_count` = blended pass (variant / blend pipeline). Bind groups 0/2 + vertex slots 1/4 must already be set.
+    fn draw_builtin(&self, pass: &mut wgpu::RenderPass<'_>, list: &[(usize, usize)], opaque_count: usize, stats: &mut [u32; 12], draws: &mut u32, last_pipe: &mut *const wgpu::RenderPipeline) {
+        for &(k, b) in list.iter() {
+let (mesh, material, range) = &self.batches[b];
+                    let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
+                        continue; // dangling ids: counted by caller via instance_count vs drawn
+                    };
+                    let builtin = match self.material_flags.get(material) {
+                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
+                            let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
+                            let dw = f.depth_write.unwrap_or(kind.is_none());
+                            &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
+                        }
+                        _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
+                    };
+                    let pipe = mat.pipeline.as_ref().unwrap_or(builtin);
+                    if !std::ptr::eq(pipe, *last_pipe) {
+                        stats[1] += 1;
+                        *last_pipe = pipe;
+                    }
+                    if range.end - range.start > 1 {
+                        stats[2] += 1;
+                    } else {
+                        stats[3] += 1;
+                    }
+                    stats[4] += range.end - range.start;
+                    pass.set_pipeline(pipe);
+                    pass.set_bind_group(1, &mat.bind, &[]);
+                    pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(2, m.uv1.slice(..));
+                pass.set_vertex_buffer(3, self.mesh_colors.get(&mesh).unwrap_or(&self.white_colors).slice(..));
+                    pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..m.index_count, 0, range.clone());
+                    *draws += 1;
+        }
+    }
     fn encode_forward(
         &mut self,
         device: &wgpu::Device,
@@ -2167,6 +2203,8 @@ v
             let mut draws = 0u32;
             let mut stats = [0u32; 12];
             let mut last_pipe: *const wgpu::RenderPipeline = &self.pipeline;
+            let mut late: Vec<(usize, usize)> = Vec::new();
+            let mut late_opaque_count = 0usize;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
                 if let Some(ic) = &self.instance_colors {
@@ -2193,39 +2231,13 @@ v
                 let mut order: Vec<(usize, usize)> = order.into_iter().enumerate().map(|(k, b)| (k, b)).collect();
                 let ro = |b: usize| self.material_flags.get(&self.batches[b].1).map_or(0, |f| f.render_order);
                 order.sort_by_key(|&(_, b)| ro(b));
-                for &(k, b) in order.iter() {
-                    let (mesh, material, range) = &self.batches[b];
-                    let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
-                        continue; // dangling ids: counted by caller via instance_count vs drawn
-                    };
-                    let builtin = match self.material_flags.get(material) {
-                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
-                            let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
-                            let dw = f.depth_write.unwrap_or(kind.is_none());
-                            &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
-                        }
-                        _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
-                    };
-                    let pipe = mat.pipeline.as_ref().unwrap_or(builtin);
-                    if !std::ptr::eq(pipe, last_pipe) {
-                        stats[1] += 1;
-                        last_pipe = pipe;
-                    }
-                    if range.end - range.start > 1 {
-                        stats[2] += 1;
-                    } else {
-                        stats[3] += 1;
-                    }
-                    stats[4] += range.end - range.start;
-                    pass.set_pipeline(pipe);
-                    pass.set_bind_group(1, &mat.bind, &[]);
-                    pass.set_vertex_buffer(0, m.vertices.slice(..));
-                pass.set_vertex_buffer(2, m.uv1.slice(..));
-                pass.set_vertex_buffer(3, self.mesh_colors.get(&mesh).unwrap_or(&self.white_colors).slice(..));
-                    pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..m.index_count, 0, range.clone());
-                    draws += 1;
-                }
+                // r17-fx: three draws ALL opaque first, then ALL transparent. The builtin path used to draw its blended batches before the TSL (three_material) pass,
+                // whose opaque geometry (depth-writing, drawn later) then overwrote every additive/alpha builtin batch behind it (torch flames, DS: 653 of 878 draws are TSL).
+                // -> opaque builtin now, blended builtin AFTER the three pass (still ro-sorted, far->near).
+                let (early, late_v): (Vec<(usize, usize)>, Vec<(usize, usize)>) = order.into_iter().partition(|&(k, _)| k < opaque_count);
+                self.draw_builtin(&mut pass, &early, opaque_count, &mut stats, &mut draws, &mut last_pipe);
+                late = late_v;
+                late_opaque_count = opaque_count;
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
@@ -2239,6 +2251,18 @@ stats[9] = tgroups[1];
 stats[10] = tgroups[2];
 stats[11] = tgroups[3];
                 self.three_skipped = skipped;
+            }
+            if !late.is_empty() {
+                if let Some(ib) = &self.instance_buffer {
+                    // the three pass rebinds groups/slots: restore the builtin frame state
+                    pass.set_bind_group(0, &self.frame_bind, &[]);
+                    pass.set_bind_group(2, self.shadow.receiver_bind(), &[]);
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    if let Some(ic) = &self.instance_colors {
+                        pass.set_vertex_buffer(4, ic.slice(..));
+                    }
+                    self.draw_builtin(&mut pass, &late, late_opaque_count, &mut stats, &mut draws, &mut last_pipe);
+                }
             }
             stats[0] = draws;
             self.last_pass_stats = stats;

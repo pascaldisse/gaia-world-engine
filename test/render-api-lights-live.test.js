@@ -61,3 +61,18 @@ test('light set change: a package exported after add/remove carries the new ligh
   const pkg3 = exportNodeMaterial(m3, { THREE, object: o3, scene: R.sc, camera: new THREE.PerspectiveCamera() });
   assert.equal(pkg3.tpl.updateNodes.filter((n) => n.light).length, n0, 'removed light is gone from the next package');
 });
+
+// adapter level: the light SET is baked into the package at export -> adding/removing a light re-exports TSL materials (once); intensity/visibility never do.
+import { createSceneAdapter } from '../client/kernel/render-api/scene-adapter.js';
+import { createMockBackend } from '../client/kernel/render-api/mock-backend.js';
+test('adapter: light add/remove re-exports TSL materials once; intensity/visible changes do not', () => {
+  const sc = new THREE.Scene(); const m = lightmapped(); sc.add(new THREE.Mesh(geo(), m));
+  const be = createMockBackend(); const ad = createSceneAdapter(be, { three: THREE, exportNodeMaterial, tslOptions: { THREE, cache: 'off' } });
+  const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100); cam.position.set(0, 0, 5); cam.updateMatrixWorld();
+  const n = () => be.log.filter((c) => c[0] === 'createShaderMaterial').length;
+  ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 1, 'first export');
+  const sun = new THREE.DirectionalLight(0xffffff, 2); sc.add(sun, sun.target);
+  ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'light added -> re-exported exactly once');
+  sun.intensity = 0.1; sun.visible = false; ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'intensity/visible never re-export');
+  sc.remove(sun); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 3, 'light removed -> re-exported once');
+});

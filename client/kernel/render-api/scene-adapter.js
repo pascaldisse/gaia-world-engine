@@ -70,7 +70,7 @@ function instAttrRow(me, i) {
   return out;
 }
 const instAttrSig = (me) => { const pkg = me.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; let s = ''; if (pkg) for (const a of pkg.attributes) if (a.instanced) s += `${pkg.attributeSources?.[a.key]?.version ?? ''},`; return s; };
-let epoch = 0, cameraSig = '';
+let epoch = 0, cameraSig = ''; let lightSetSig = null, lightGen = 0, lightGenSfx = '';
 // r6: HemisphereLight/AmbientLight accumulate per frame into one irradiance pair (sum = three: every light node `+=` into context.irradiance); scene.background -> setBackground
 const amb = { sky: [0, 0, 0], ground: [0, 0, 0], n: 0, sig: null, bgSig: null };
 // every backend-visible change is attributed (stats.updatedBy[reason]) — names the per-frame dirty source on a live scene; idle frame = no increments
@@ -177,8 +177,10 @@ const srcM = m0?.__gwSrc ?? m0; // r10-shadow-5 latch (see below): flips BEFORE 
 if (!useRecvVariants && o?.receiveShadow && exportNodeMaterial && srcM?.isNodeMaterial && !recvAny.has(srcM)) { recvAny.add(srcM); if (e) e.epoch = -1; }
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
 // r10-shadow-5: a TSL package is per MATERIAL, three's receiveShadow per OBJECT. Package = receiver as soon as ANY user object receives (one-way latch, <=1 re-export per material) -- NOT the first user's flag (road: 13 receivers / 85 non-receivers, first exporter a non-receiver -> never received). Same 'mixed = receives' rule as the core's per-material flag (r8).
-const anyRecv = recvAny.has(srcM), sigSfx = anyRecv ? '|rcv' : '';
-const sig = materialSig(m, { exportNodeMaterial }) + sigSfx;          // cheap string, no params/texture work
+const anyRecv = recvAny.has(srcM);
+const sig0 = materialSig(m, { exportNodeMaterial });
+const sigSfx = (anyRecv ? '|rcv' : '') + (sig0.startsWith('wgsl:') ? lightGenSfx : ''); // r15b: a TSL package bakes the scene's light SET at export (LightsNode) -> light add/remove re-exports it (visibility/intensity ride the live uniforms)
+const sig = sig0 + sigSfx;          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); if (e.conv?.unsupported) for (const u of e.conv.unsupported) stats.unsupported.add(u); return e; } // idle frame: 0 texture work
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
 if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
@@ -528,6 +530,7 @@ matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? 
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
+{ let ls = ''; scene.traverse((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) ls += o.uuid + ','; }); if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();

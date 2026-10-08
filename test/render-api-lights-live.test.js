@@ -88,3 +88,13 @@ test('light cull: accumulators initialised once outside the branches; later poin
   assert.equal((f.match(/\n\tdirectSpecular = vec3<f32>\( 0\.0, 0\.0, 0\.0 \);/g) ?? []).length, 1, 'directSpecular zeroed exactly once');
   assert.equal((f.match(/\.x \+ render\.nodeUniform\d+\.y \) \+ render\.nodeUniform\d+\.z \) > 0\.0/g) ?? []).length, 3, '3 of 4 point lights uniform-gated (first runs in the outer scope)');
 });
+
+// r16-fcull: materialToParams' per-material package cache must rebuild when a never-seen light joins the scene (package bakes the light set); NOT RUN (lane rule: no tests)
+test('material-map cache: never-seen light -> new package', async () => {
+  const { materialToParams } = await import('../client/kernel/render-api/material-map.js');
+  const m = plain(), sc = new THREE.Scene(); sc.add(new THREE.PointLight(0xffaa88, 5, 40)); const o = new THREE.Mesh(geo(), m); sc.add(o); sc.updateMatrixWorld(true);
+  const cam = new THREE.PerspectiveCamera(); cam.updateMatrixWorld();
+  const opts = { three: THREE, exportNodeMaterial, tslOptions: { THREE, object: o, scene: sc, camera: cam } };
+  const a = materialToParams(m, opts).package; assert.equal(materialToParams(m, opts).package, a, 'same light set -> cached');
+  sc.add(new THREE.PointLight(0xff0000, 5, 40)); assert.notEqual(materialToParams(m, opts).package, a, 'new light -> rebuilt');
+});

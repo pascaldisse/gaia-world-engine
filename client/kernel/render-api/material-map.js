@@ -1,6 +1,7 @@
 // render-api/material-map.js — three Material → render-api material description. NO three import (duck-typed).
 import { arrayMirror } from './gpu-mirror.js';
 import { readCube } from './env-image.js';
+import { lightRegistry } from './light-registry.js';
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
@@ -153,9 +154,10 @@ const textures = {}, unsupported = [];
     if (!exportNodeMaterial) return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
     let c = nodeCache.get(m);
     const recv = !!tslOptions?.receiveShadow; // r10-shadow-5: the package depends on the receiver flag (hook) → part of the cache key
-if (!c || c.version !== m.version || c.recv !== recv) {
+const lg = tslOptions?.scene ? lightRegistry(tslOptions.scene).gen : 0; // r16-fcull: the package BAKES the scene's light set -> a never-seen light (grow-only registry gen) must rebuild it; adapter's sig-suffix re-export alone hit this cache and re-shipped the STALE package (new lights never entered the LightsNode)
+if (!c || c.version !== m.version || c.recv !== recv || c.lg !== lg) {
   // r6: an export failure is a LOUD per-material refusal (adapter counts + logs it, material drops to PBR) — never a thrown frame
-  try { c = { version: m.version, recv, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, recv, error: String(e?.message ?? e) }; }
+  try { c = { version: m.version, recv, lg, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, recv, lg, error: String(e?.message ?? e) }; }
   nodeCache.set(m, c);
 }
 if (c.error) return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };

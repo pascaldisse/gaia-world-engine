@@ -4,6 +4,7 @@
 //     attributes[{name,type,location}], varyings[{name,type}], vertexEntry:'main', fragmentEntry:'main' }
 // that a non-three backend feeds to create_shader_material (RENDER-API.md §6). No three import here: the caller
 // passes the (possibly engine-injected) THREE namespace (`three/webgpu`) → works for the ctx.three case too.
+import { observeLights } from './light-registry.js';
 const STAGES = { 1: 'vertex', 2: 'fragment', 4: 'compute' };
 const stageOf = (v) => STAGES[v] ?? ([v & 1 ? 'vertex' : null, v & 2 ? 'fragment' : null].filter(Boolean).join('|') || 'none');
 
@@ -27,8 +28,8 @@ if (gate) b._gate = gate;
 b.scene = sc; b.material = material; b.camera = cam; b.context.material = material;
 // (b) real lights: three's own LightsNode over the scene's Directional/Point lights (shadows not exported) → lit node materials shade.
 // Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
-const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
-b.lightsNode = lights.length ? sharedLightsNode(r, sc, lights, THREE) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
+const { live: lights, all: bakedLights } = observeLights(sc); // r16-perf: baked set = grow-only registry (light-registry.js), NOT the current scene lights -> torch-pool churn never changes the set
+b.lightsNode = bakedLights.length ? sharedLightsNode(r, sc, bakedLights, THREE) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
 // r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
 // The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
 // (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
@@ -132,7 +133,7 @@ if (!sh) { frame.update(); if (time != null) frame.time = time; frame.renderId++
 frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
 for (const f of pre) f();
 // r15b: three's renderer drops invisible lights (Lighting.getNode -> render list); the exported LightsNode holds ALL lights, so an invisible light (or one under an invisible ancestor) must read as intensity 0 while its light node updates, else it keeps shading.
-const hid = []; for (const l of lightObjs) { let v = true; for (let p = l; p; p = p.parent) if (p.visible === false) { v = false; break; } if (!v && l.intensity !== 0) hid.push([l, l.intensity]); }
+const hid = []; for (const l of lightObjs) { let v = true, top = l; for (let p = l; p; p = p.parent) { top = p; if (p.visible === false) { v = false; break; } } if (v && scene && top !== scene) v = false; /* r16-perf: detached from the frame's scene = not in three's render list either */ if (!v && l.intensity !== 0) hid.push([l, l.intensity]); }
 for (const [l] of hid) l.intensity = 0;
 try {
 if (sh) {

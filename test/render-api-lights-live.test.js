@@ -59,7 +59,8 @@ test('light set change: a package exported after add/remove carries the new ligh
   R.sc.remove(extra);
   const m3 = lightmapped(), o3 = new THREE.Mesh(geo(), m3); R.sc.add(o3);
   const pkg3 = exportNodeMaterial(m3, { THREE, object: o3, scene: R.sc, camera: new THREE.PerspectiveCamera() });
-  assert.equal(pkg3.tpl.updateNodes.filter((n) => n.light).length, n0, 'removed light is gone from the next package');
+  assert.equal(pkg3.tpl.updateNodes.filter((n) => n.light).length, n0 + 1, 'r16-perf: light set is GROW-ONLY (pool churn must not thrash re-exports): removed light stays baked, reads 0 via the detached check');
+  const live = pkg3.live.update({ object: o3, scene: R.sc, camera: new THREE.PerspectiveCamera(), time: 0 }); assert.ok(Array.isArray(live)); // detached light -> intensity 0 while its node updates
 });
 
 // adapter level: the light SET is baked into the package at export -> adding/removing a light re-exports TSL materials (once); intensity/visibility never do.
@@ -74,5 +75,5 @@ test('adapter: light add/remove re-exports TSL materials once; intensity/visible
   const sun = new THREE.DirectionalLight(0xffffff, 2); sc.add(sun, sun.target);
   ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'light added -> re-exported exactly once');
   sun.intensity = 0.1; sun.visible = false; ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'intensity/visible never re-export');
-  sc.remove(sun); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 3, 'light removed -> re-exported once');
+  sc.remove(sun); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'r16-perf: light removed -> NO re-export (grow-only set; detached light reads 0)'); sc.add(sun, sun.target); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 2, 'same light object re-added (pool reassign) -> NO re-export'); sc.add(new THREE.PointLight(0xffffff, 1, 5)); ad.sync(sc, cam); ad.sync(sc, cam); assert.equal(n(), 3, 'never-seen light -> re-exported once');
 });

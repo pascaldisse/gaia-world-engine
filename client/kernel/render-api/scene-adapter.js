@@ -9,6 +9,7 @@
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
 import { materialToParams, materialSig, customNodeMaterial } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
+import { observeLights } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
@@ -530,7 +531,7 @@ matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? 
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
-{ let ls = ''; scene.traverse((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) ls += o.uuid + ','; }); if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
+{ const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();

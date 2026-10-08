@@ -502,7 +502,7 @@ createNode(mat4, parent = 0) {
     createInstanced(mesh, material, mats, count, flags = {}) {
       const node = { id: next++, kind: 'instanced', parent: 0, children: new Set(), mesh, material, rid: 0, mats, count, world: Float32Array.from(flags.matrix ?? IDENTITY_MAT4),
         colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, ridMat: 0, ridMesh: 0 };
-      nodes.set(node.id, node); pushBlock(node); return node.id;
+      nodes.set(node.id, node); if (flags.renderOrder) setMatOrder(material, flags.renderOrder); /* r17-fx: InstancedMesh renderOrder -> core per-material order (was dropped: only createInstance forwarded it) */ pushBlock(node); return node.id;
     },
     updateInstances(id, mats, count, matrixWorld, colors = null, colorStride = 3) {
       const node = need(nodes, id, 'node');
@@ -518,6 +518,7 @@ createNode(mat4, parent = 0) {
         if (patch.castShadow !== undefined) node.shadowOnly = !!patch.shadowOnly;
         if (patch.static !== undefined) node.static = !!patch.static;
         if (patch.mat4) node.world = Float32Array.from(patch.mat4);
+        if (patch.renderOrder !== undefined) setMatOrder(node.material, patch.renderOrder || 0);
         pushBlock(node, true); return;
       }
       if (patch.mat4) node.local = Float64Array.from(asMat(patch.mat4));

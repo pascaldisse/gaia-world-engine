@@ -103,7 +103,7 @@ const node = r.lighting.createNode(lights); lightsCache.set(sc, { sig, node, r }
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
 function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null, pre = [] }) {
-const own = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); own.renderer = r; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
+const own = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); own.renderer = r; const lightObjs = [...new Set(updateNodes.filter((n) => n.light?.isLight).map((n) => n.light))]; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
 const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial.has(key) ? initial.get(key) : toPlain(get())])); // initial = the package's own shipped values (rebound builder-singleton uniforms carry a stale value until the first update) // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
@@ -116,6 +116,10 @@ const frame = sh ? sh.frame : own;
 if (!sh) { frame.update(); if (time != null) frame.time = time; frame.renderId++; }
 frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
 for (const f of pre) f();
+// r15b: three's renderer drops invisible lights (Lighting.getNode -> render list); the exported LightsNode holds ALL lights, so an invisible light (or one under an invisible ancestor) must read as intensity 0 while its light node updates, else it keeps shading.
+const hid = []; for (const l of lightObjs) { let v = true; for (let p = l; p; p = p.parent) if (p.visible === false) { v = false; break; } if (!v && l.intensity !== 0) hid.push([l, l.intensity]); }
+for (const [l] of hid) l.intensity = 0;
+try {
 if (sh) {
 const done = sh.done, T = sh.T;
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
@@ -124,6 +128,7 @@ for (const n of updateNodes) { if (done.has(n)) { structCache.updSkipped++; cont
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
 for (const n of updateNodes) frame.updateNode(n);
 }
+} finally { for (const [l, i] of hid) l.intensity = i; }
 const changed = [];
 for (const { key, get } of liveUniforms) {
 const raw = get();

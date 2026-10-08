@@ -28,7 +28,7 @@ b.scene = sc; b.material = material; b.camera = cam; b.context.material = materi
 // (b) real lights: three's own LightsNode over the scene's Directional/Point lights (shadows not exported) → lit node materials shade.
 // Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
 const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
-b.lightsNode = lights.length ? sharedLightsNode(r, sc, lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
+b.lightsNode = lights.length ? sharedLightsNode(r, sc, lights, THREE) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
 // r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
 // The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
 // (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
@@ -92,13 +92,28 @@ if (s.token !== token) { s.token = token; s.frame.update(); s.frame.renderId++; 
 if (time != null) s.frame.time = time;
 return s;
 }
+// r16-perf: three's LightsNode emits every light's BRDF straight-line (no branch) -> DS's 25-PointLight torch pool costs 25x per fragment although ~all have intensity 0 / are out of range. Wrap each Point/Spot light's direct() in a TSL If (uniform colour > 0, then attenuated colour > 0): identical result (a zero lightColor adds nothing), dead lights cost one uniform compare. ?wgpuLightCull=0 / lightCull.on=false = A/B off.
+export const lightCull = { on: !(typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuLightCull') === '0') };
+function cullLights(THREE, node) {
+const proto = node && Object.getPrototypeOf(node), If = (THREE?.TSL ?? THREE)?.If;
+// patched on the PROTOTYPE: a material with its own light nodes (lightMap) gets a fresh LightsNode from renderer.lighting.createNode, bypassing any per-instance patch
+if (!proto || !If || proto.__lightCull || typeof proto.setupDirectLight !== 'function') return node;
+const orig = proto.setupDirectLight; proto.__lightCull = true;
+const lit = (c) => c.x.add(c.y).add(c.z).greaterThan(0);
+proto.setupDirectLight = function (builder, lightNode, data) {
+const l = lightNode?.light;
+if (!lightCull.on || !(l?.isPointLight || l?.isSpotLight) || !lightNode.colorNode?.x || !data?.lightColor?.x) return orig.call(this, builder, lightNode, data);
+If(lit(lightNode.colorNode), () => { If(lit(data.lightColor), () => { orig.call(this, builder, lightNode, data); }); }); // outer = uniform test (attenuation maths emitted inside it), inner = out-of-range test
+};
+return node;
+}
 const lightsCache = new WeakMap(); // scene -> { sig, node }
-function sharedLightsNode(r, sc, lights) {
-if (!structCache.share) return r.lighting.createNode(lights);
+function sharedLightsNode(r, sc, lights, THREE = null) {
+if (!structCache.share) return cullLights(THREE, r.lighting.createNode(lights));
 const sig = lights.map((l) => l.uuid).join(',');
 const c = lightsCache.get(sc);
 if (c && c.sig === sig && c.r === r) { structCache.lightsReused++; return c.node; }
-const node = r.lighting.createNode(lights); lightsCache.set(sc, { sig, node, r }); structCache.lightsBuilt++; return node;
+const node = cullLights(THREE, r.lighting.createNode(lights)); lightsCache.set(sc, { sig, node, r }); structCache.lightsBuilt++; return node;
 }
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.

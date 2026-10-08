@@ -18,7 +18,17 @@ ao: vec4<f32>,     // x GTAO composite on (0/1), y intensity
 // lighting/post.js: aoTerm = mix(1, mix(1, rawAo, intensity), weight); colour * aoTerm happens BEFORE auto-exposure / bloom / tone map
 fn ao_term(uv: vec2<f32>) -> f32 {
 if (pu.ao.x < 0.5) { return 1.0; }
-let a = textureSampleLevel(t6, samp, uv, 0.0).rg;
+// GTAO's 5x5 magic-square noise tile (gtao.wgsl) repeats every 5 AO texels = 5/resolutionScale screen px -> fixed-period fine vertical/horizontal stripes
+// on dark AO-heavy walls (measured 7.2/14.4 px period in the 22-pascal shot = 5 texels x 2 (half-res) x 1.44 (dpr)). three's GTAO relies on a denoise pass; a
+// 5x5 box over AO texels averages exactly one noise period -> stripes cancel. Taps sit on texel offsets (bilinear-smooth), not edge aware: AO is soft anyway.
+let ad = vec2<f32>(textureDimensions(t6));
+var acc = vec2<f32>(0.0);
+for (var j = -2; j <= 2; j = j + 1) {
+    for (var i = -2; i <= 2; i = i + 1) {
+        acc = acc + textureSampleLevel(t6, samp, uv + vec2<f32>(f32(i), f32(j)) / ad, 0.0).rg;
+    }
+}
+let a = acc / 25.0;
 return mix(1.0, mix(1.0, a.r, pu.ao.y), a.g);
 }
 struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };

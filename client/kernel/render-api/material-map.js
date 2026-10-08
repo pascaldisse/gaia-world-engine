@@ -42,7 +42,29 @@ function readPixels(im, w, h) {
   if (out) { textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
   return out;
 }
+// r13-bc: three CompressedTexture (DDS/KTX2 loaders: image {width,height}, mipmaps[{data,width,height}], format = GL internal format) -> compressed descriptor
+// {compressed,format,width,height,mipCount,flipY,srgb,key,data(getter: mip chain concatenated)}. The GPU core decides native BC upload vs CPU decode (gaia-render create_texture_compressed).
+// Anything we cannot hand over (unknown format / no mips / mip data not bytes / mips not a halving chain) = { compressed, refused } -> materialToParams records it in unsupported (never silent).
+export const COMPRESSED_GL = { 33776: 'BC1-rgb', 33777: 'BC1-rgba', 33778: 'BC2', 33779: 'BC3', 36283: 'BC4', 36285: 'BC5', 36492: 'BC7' }; // GL internal formats the core uploads (mirrors gaia-render bc::from_gl)
+function compressedData(t) {
+  const im = t.image, mm = t.mipmaps;
+  const w = im?.width ?? mm?.[0]?.width, h = im?.height ?? mm?.[0]?.height;
+  if (!COMPRESSED_GL[t.format]) return { compressed: true, refused: `compressed format ${t.format} (only ${Object.values(COMPRESSED_GL).join('/')} are uploaded; ASTC/ETC2/PVRTC/BC6H/signed-RGTC refused)` };
+  if (!Array.isArray(mm) || !mm.length) return { compressed: true, refused: 'CompressedTexture without mipmaps[]' };
+  if (!(w > 0 && h > 0)) return { compressed: true, refused: 'CompressedTexture without image size' };
+  const levels = [];
+  for (let l = 0; l < mm.length; l++) {
+    const m = mm[l], d = m?.data;
+    if (!d || !ArrayBuffer.isView(d)) return { compressed: true, refused: `mip ${l} data is not a byte view (${d?.constructor?.name})` };
+    if (m.width !== Math.max(1, w >> l) || m.height !== Math.max(1, h >> l)) return { compressed: true, refused: `mip ${l} size ${m.width}x${m.height} is not ${Math.max(1, w >> l)}x${Math.max(1, h >> l)}` };
+    levels.push(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+  }
+  let bytes; // lazy: concatenated only on a backend cache MISS
+  return { compressed: true, format: t.format, width: w, height: h, mipCount: levels.length, flipY: !!t.flipY, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`,
+    get data() { if (!bytes) { const n = levels.reduce((a, b) => a + b.length, 0); bytes = new Uint8Array(n); let o = 0; for (const l of levels) { bytes.set(l, o); o += l.length; } } return bytes; } };
+}
 function textureData(t) {
+  if (t?.isCompressedTexture) { const c = texCache.get(t); if (c && c.version === t.version && c.mm === t.mipmaps) return c.desc; const desc = compressedData(t); texCache.set(t, { version: t.version, image: t.image, mm: t.mipmaps, desc }); return desc; }
   const im = t?.image;
   if (!im) return null;
   const c = texCache.get(t);
@@ -117,12 +139,18 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
   const params = pbrParams(m);
   // r6: legacy GLSL ShaderMaterial/RawShaderMaterial (bp-sky dome) — WebGPURenderer rejects it ('Material "ShaderMaterial" is not compatible'), so three draws NOTHING; match it (never a default-PBR sphere) + say so loudly. GLSL->WGSL translation REFUSED (see docs §10).
   if (m.isShaderMaterial || m.isRawShaderMaterial) return { kind: 'pbr', params: { ...params, visible: false }, textures: null, sig: materialSig(m), degraded: 'ShaderMaterial-GLSL-unsupported:not-drawn(three-parity)' };
-  const textures = {};
-  for (const slot of TEX_SLOTS) { const t = m[slot]; if (!t) continue; const d = textureData(t); if (d) textures[slot] = d; }
+const textures = {}, unsupported = [];
+  for (const slot of TEX_SLOTS) {
+    const t = m[slot]; if (!t) continue;
+    const d = textureData(t);
+    if (d?.refused) unsupported.push(`texture:${slot}:${d.refused}`); // r13-bc: a refused texture is dropped from the material but RECORDED (stats.unsupported), never silent
+    else if (d) textures[slot] = d;
+    else if (t.image) unsupported.push(`texture:${slot}:image not CPU-readable (${t.image.constructor?.name ?? typeof t.image})`);
+  }
   const hasTex = Object.keys(textures).length > 0;
   const sig = materialSig(m, { exportNodeMaterial });
   if (m.isNodeMaterial && customNode(m)) {
-    if (!exportNodeMaterial) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
+    if (!exportNodeMaterial) return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
     let c = nodeCache.get(m);
     const recv = !!tslOptions?.receiveShadow; // r10-shadow-5: the package depends on the receiver flag (hook) → part of the cache key
 if (!c || c.version !== m.version || c.recv !== recv) {
@@ -130,10 +158,10 @@ if (!c || c.version !== m.version || c.recv !== recv) {
   try { c = { version: m.version, recv, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, recv, error: String(e?.message ?? e) }; }
   nodeCache.set(m, c);
 }
-if (c.error) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
-return { kind: 'wgsl', package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
+if (c.error) return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
+return { kind: 'wgsl', unsupported: unsupported.length ? unsupported : undefined, package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
   }
-  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined }; // emissiveMap: === map -> emissive x base texel (r7), distinct -> own slot (r6 maps)
+  return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined }; // emissiveMap: === map -> emissive x base texel (r7), distinct -> own slot (r6 maps)
 }
 // a *NodeMaterial with no custom *Node slot set renders exactly like its non-node twin → plain PBR is faithful
 function hasNodes(m) {

@@ -139,7 +139,8 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   const skinnedMeshes = new Set(); // wasm mesh ids that are skinned (always dynamic casters)
 const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owned by that material
   const texByKey = new Map();    // texture descriptor key (uuid:version, material-map) → { id, refs } — one GPU texture shared by every material using it
-  const texStats = { uploads: 0, hits: 0 };
+const texStats = { uploads: 0, hits: 0 };
+const refusedTex = new Set(); // r13-bc: texture uploads the core refused (drained into the adapter's stats.unsupported via backend.drainUnsupported)
   // textures[slot] = {width,height,data,key?}. With a `key` the GPU texture is shared + refcounted and `data` (lazy getter in material-map) is only
   // read on a MISS → an idle frame / a second material on the same image does 0 pixel reads and 0 uploads.
   function acquireTexture(t) {
@@ -155,6 +156,16 @@ c.version = t.version; texStats.layerUploads = (texStats.layerUploads ?? 0) + di
 }
 return { id: c.id, key: t.key };
 }
+}
+if (t.compressed) { // r13-bc: block-compressed 2D texture (mip chain concatenated). Core = native BC when the device has it, else CPU decode (counted in gpu.compressedStats()). Failure = id 0 (white) + RECORDED in unsupported, never a thrown frame.
+  let id = 0;
+  try {
+    if (!gpu.createTextureCompressed) throw new Error('wasm pkg predates createTextureCompressed');
+    id = gpu.createTextureCompressed(t.format, t.width, t.height, t.mipCount, t.data, t.srgb !== false, !!t.flipY);
+    texStats.uploads++; texStats.compressed = (texStats.compressed ?? 0) + 1;
+  } catch (e) { refusedTex.add(`texture:compressed ${t.format} ${t.width}x${t.height}: ${String(e?.message ?? e).slice(0, 120)}`); return { id: 0, key: null }; }
+  if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version, fresh: null });
+  return { id, key: t.key ?? null };
 }
 const data = t.data;
 if (!data || !(t.cube ? t.size > 0 : (t.width > 0 && t.height > 0))) throw new Error('createMaterial: texture map needs { width, height, data }');
@@ -185,7 +196,7 @@ return h;
 function releaseStorage(h) { if (--h.refs <= 0) { gpu.destroyStorageBuffer(h.id); storByAttr.delete(h.attr); } }
 function releaseTexture(h) {
 if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
-else gpu.destroyTexture(h.id);
+else if (h.id) gpu.destroyTexture(h.id); // id 0 = refused compressed upload (nothing to free)
 }
 // side: three Side (FrontSide=cull back -> 1, BackSide -> 2, DoubleSide -> 0 in the core encoding). Render FLAGS (blend/unlit/depthWrite/renderOrder/shadow) = r8/r9 setMatFlags below.
 // r7: emissiveMap === map (same key) -> emissive x base texel (4th emissive float = flag), emissive slot NOT bound (would multiply twice); distinct emissiveMap -> bound in its own slot (r6 maps).
@@ -384,7 +395,8 @@ threeSkipped() { return gpu.threeSkipped(); },
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
-    textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size } }; },
+textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size }, compressedCore: gpu.compressedStats ? Array.from(gpu.compressedStats()) : null /* [gpu_native, cpu_no_bc_feature, cpu_bc1rgb_punchthrough, cpu_unaligned_or_unflippable, cpu_single_mip, refused] */ }; },
+    drainUnsupported() { const r = [...refusedTex]; refusedTex.clear(); return r; }, // r13-bc: texture refusals since the last drain -> scene-adapter stats.unsupported
     // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the
     // package's non-enumerable textureSources (uuid → three Texture); a texture binding without readable pixels = loud Error.
     createShaderMaterial(pkg) {

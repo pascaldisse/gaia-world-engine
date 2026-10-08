@@ -179,7 +179,7 @@ if (e && e.epoch === epoch) return e;                       // once per material
 // r10-shadow-5: a TSL package is per MATERIAL, three's receiveShadow per OBJECT. Package = receiver as soon as ANY user object receives (one-way latch, <=1 re-export per material) -- NOT the first user's flag (road: 13 receivers / 85 non-receivers, first exporter a non-receiver -> never received). Same 'mixed = receives' rule as the core's per-material flag (r8).
 const anyRecv = recvAny.has(srcM), sigSfx = anyRecv ? '|rcv' : '';
 const sig = materialSig(m, { exportNodeMaterial }) + sigSfx;          // cheap string, no params/texture work
-if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
+if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); if (e.conv?.unsupported) for (const u of e.conv.unsupported) stats.unsupported.add(u); return e; } // idle frame: 0 texture work
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
 if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
 sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
@@ -189,6 +189,7 @@ sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, 
  if (conv.package) { const k = conv.package.vertex.length + ':' + conv.package.fragment.length + ':' + hashStr(conv.package.vertex + conv.package.fragment); const r = x.keys.get(k) ?? { n: 0, ms: 0, name: m.name || m.type }; r.n++; r.ms += dt; x.keys.set(k, r); }
  if (x.log.length < 40) x.log.push({ why, ms: +dt.toFixed(1), name: m.name || m.type, ver: m.version }); }
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
+if (conv.unsupported) for (const u of conv.unsupported) stats.unsupported.add(u); // r13-bc: refused/unreadable textures (material-map), recorded not silent
 if (!e) {
 const id = createMat(conv, m);
 e = { id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.degraded, first: o ? { name: o.name, recv: !!o.receiveShadow } : null };
@@ -204,6 +205,7 @@ backend.destroyMaterial(old);
 e.sig = conv.sig + sigSfx; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
 }
 if (conv.degraded) stats.degraded.add(conv.degraded);
+if (backend.drainUnsupported) for (const u of backend.drainUnsupported()) stats.unsupported.add(u); // r13-bc: backend-side texture upload refusals
 return e;
 }
 function createMat(conv, m) {

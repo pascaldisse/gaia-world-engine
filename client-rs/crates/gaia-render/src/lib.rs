@@ -2,6 +2,7 @@
 //! Device/Queue + an output view; this crate renders a glTF scene at an internal
 //! resolution (`render_height`) and scales to the output through an `Upscaler`.
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
+pub mod bc;
 pub mod groups;
 pub mod scene;
 pub mod shadow;
@@ -689,6 +690,8 @@ pub struct RenderCore {
     /// array textures (D2Array views) by id; ids here are NOT in `textures`.
     array_textures: HashMap<u32, ArrayTex>,
     cube_textures: HashMap<u32, CubeTex>,
+    /// r13-bc: compressed-texture upload counters [gpu_native, cpu_decoded_no_feature, cpu_decoded_punchthrough, cpu_decoded_unaligned_or_flip, cpu_decoded_single_mip, refused].
+    pub bc_stats: [u32; 6],
     white_cube: wgpu::TextureView,
     /// r6-tsl-2: host buffers behind TSL storage bindings (shared across materials).
     storage_buffers: HashMap<u32, three_material::StorageBuf>,
@@ -723,7 +726,7 @@ pub struct RenderCore {
 
 impl RenderCore {
     /// Features to request on the device for GPU timings (intersect with adapter).
-    pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
+    pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::TEXTURE_COMPRESSION_BC);
 
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, opts: RenderOptions) -> Self {
         let pipe_share = opts.pipe_share;
@@ -853,6 +856,7 @@ impl RenderCore {
             mipgen_linear,
             array_textures: HashMap::new(),
             cube_textures: HashMap::new(),
+            bc_stats: [0; 6],
             white_cube,
             storage_buffers: HashMap::new(),
             white_array,
@@ -1170,6 +1174,50 @@ impl RenderCore {
     pub fn create_texture_linear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
         if rgba.len() != (width * height * 4) as usize { return Err(format!("texture {id}: {} bytes != {width}x{height}x4", rgba.len())); }
         self.textures.insert(id, upload_rgba8_fmt(device, queue, Some(&self.mipgen_linear), width, height, rgba, false));
+        self.rebind_users_of(device, id);
+        Ok(())
+    }
+    /// r13-bc: block-compressed 2D texture (three CompressedTexture). `gl_format` = GL internal format (33776 DXT1 RGB, 33777 DXT1 RGBA, 33778 DXT3, 33779 DXT5, 36283 RGTC1, 36285 RGTC2, 36492 BPTC);
+    /// `data` = the `mip_count` mips concatenated (mip l = max(1,w>>l) x max(1,h>>l), 4x4 blocks, `bc::mip_bytes` each). `flip_y` = data is GL-order (row 0 = v 0 = bottom, three flipY=false) -> stored top-first like every other core texture.
+    /// Device has TEXTURE_COMPRESSION_BC and the data allows -> native BC upload (mips as given). Otherwise CPU decode to RGBA8 (counted in `bc_stats`, never silent). Single-mip CPU path gets a GPU mip chain.
+    pub fn create_texture_compressed(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, gl_format: u32, width: u32, height: u32, mip_count: u32, data: &[u8], srgb: bool, flip_y: bool) -> Result<(), String> {
+        let (f, rgb_only) = bc::from_gl(gl_format).ok_or_else(|| { self.bc_stats[5] += 1; format!("compressed format {gl_format} not supported (BC1/2/3 = 33776..33779, RGTC1/2 = 36283/36285, BPTC 36492)") })?;
+        let max_levels = 32 - width.max(height).max(1).leading_zeros();
+        if width == 0 || height == 0 || mip_count == 0 || mip_count > max_levels { self.bc_stats[5] += 1; return Err(format!("compressed texture {id}: bad size/mips {width}x{height} x{mip_count}")); }
+        let sizes: Vec<(u32, u32, usize)> = (0..mip_count).map(|l| { let (w, h) = ((width >> l).max(1), (height >> l).max(1)); (w, h, bc::mip_bytes(f, w, h)) }).collect();
+        if sizes.iter().map(|s| s.2).sum::<usize>() != data.len() { self.bc_stats[5] += 1; return Err(format!("compressed texture {id}: {} bytes != mip chain {}", data.len(), sizes.iter().map(|s| s.2).sum::<usize>())); }
+        let has_bc = device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let aligned = width % 4 == 0 && height % 4 == 0;
+        let flip_ok = !flip_y || (bc::flippable(f) && sizes.iter().all(|s| bc::flip_exact(s.1)));
+        let punch = rgb_only && f == bc::Bc::Bc1 && bc::bc1_has_punchthrough(&data[..sizes[0].2]);
+        let gpu = has_bc && aligned && flip_ok && !punch;
+        if gpu {
+            let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("bc texture"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 }, mip_level_count: mip_count, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: bc::wgpu_format(f, srgb), usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+            let mut o = 0usize;
+            for (l, &(w, h, n)) in sizes.iter().enumerate() {
+                let owned; let raw = &data[o..o + n]; o += n;
+                let bytes = if flip_y { owned = bc::flip_mip(f, w, h, raw); &owned[..] } else { raw };
+                let (bw, bh) = bc::blocks(w, h);
+                queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: l as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, bytes,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bw * bc::block_bytes(f) as u32), rows_per_image: Some(bh) }, wgpu::Extent3d { width: bw * 4, height: bh * 4, depth_or_array_layers: 1 });
+            }
+            self.textures.insert(id, texture.create_view(&Default::default()));
+            self.bc_stats[0] += 1;
+        } else {
+            // CPU decode (mips as given; exact flip on pixels). Reason counters: [1] no BC feature, [2] BC1-RGB punch-through (GPU alpha would differ from GL/three), [3] unaligned / unflippable.
+            let mut mips = Vec::new(); let mut o = 0usize;
+            for &(w, h, n) in &sizes { match bc::decode_rgba8(f, rgb_only, w, h, &data[o..o + n], flip_y) { Ok(px) => mips.push((w, h, px)), Err(e) => { self.bc_stats[5] += 1; return Err(format!("compressed texture {id}: {e}")); } } o += n; }
+            self.bc_stats[if !has_bc { 1 } else if punch { 2 } else { 3 }] += 1;
+            if mip_count == 1 { self.bc_stats[4] += 1; }
+            let view = if mip_count == 1 { upload_rgba8_fmt(device, queue, Some(if srgb { &self.mipgen } else { &self.mipgen_linear }), width, height, &mips[0].2, srgb) } else {
+                let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("bc decoded"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 }, mip_level_count: mip_count, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm }, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+                for (l, (w, h, px)) in mips.iter().enumerate() {
+                    queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: l as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, px, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(*h) }, wgpu::Extent3d { width: *w, height: *h, depth_or_array_layers: 1 });
+                }
+                texture.create_view(&Default::default())
+            };
+            self.textures.insert(id, view);
+        }
         self.rebind_users_of(device, id);
         Ok(())
     }

@@ -260,6 +260,16 @@ let core = RenderCore::new(&device, &queue, opts);
             .map_err(err)?;
         Ok(id)
     }
+    /// r13-bc: block-compressed 2D texture. `mips` = concatenated mip chain (see gaia-render create_texture_compressed); flip_y = data is GL-order (three flipY=false).
+    #[wasm_bindgen(js_name = createTextureCompressed)]
+    pub fn create_texture_compressed(&mut self, gl_format: u32, width: u32, height: u32, mip_count: u32, data: &[u8], srgb: bool, flip_y: bool) -> Result<u32, JsError> {
+        let id = self.id("texture");
+        self.core.create_texture_compressed(&self.device, &self.queue, id, gl_format, width, height, mip_count, data, srgb, flip_y).map_err(err)?;
+        Ok(id)
+    }
+    /// r13-bc: [gpu_native, cpu_no_bc_feature, cpu_bc1rgb_punchthrough, cpu_unaligned_or_unflippable, cpu_single_mip(+gpu mipgen), refused]
+    #[wasm_bindgen(js_name = compressedStats)]
+    pub fn compressed_stats(&self) -> Vec<u32> { self.core.bc_stats.to_vec() }
     /// r4 (lampas/r4-uniforms): RGBA8 sampled without sRGB decode (three colorSpace != srgb).
     #[wasm_bindgen(js_name = createTextureLinear)]
     pub fn create_texture_linear(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<u32, JsError> {

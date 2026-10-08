@@ -330,9 +330,9 @@ function applyShadowFlags(node) {
 
   function pushLights() {
     const pts = [...lights.values()].filter((l) => l.kind === 'point');
-    const packed = new Float32Array(pts.length * 8);
+    const packed = new Float32Array(pts.length * 9);
     pts.forEach((l, i) => {
-      packed.set([...l.position, l.distance > 0 ? l.distance : 1e4, ...l.color, l.intensity], i * 8);
+      packed.set([...l.position, l.distance > 0 ? l.distance : 1e4, ...l.color, l.intensity, l.decay ?? 2], i * 9);
     });
     gpu.setPointLights(packed);
     const sun = lights.get(sunId);

@@ -16,7 +16,7 @@ IDs: wasm mints mesh/texture/material/instance ids (u32 > 0); JS mints NodeId/Li
 2. `Upscaler`/`set_upscaler` not exposed to JS (no WebGPU FSR-style plug yet; BilinearBlit default).
 3. glTF `SceneData::from_slice` is NOT used by render-wasm (would drag image/png/jpeg decoders in; JS decodes textures with createImageBitmap instead). Test loader = tools/render-wasm/glb-loader.js.
 4. Material params the interface carries but the core ignores: opacity (BLEND drawn opaque), doubleSide/flatShading/fog, normal/roughness/metalness/emissive/ao maps, `preset` (degrades to pbr), shadows (castShadow/receiveShadow accepted, no-op). Textures always upload as Rgba8UnormSrgb (`srgb:false` ignored).
-5. `set_point_lights` ignores `decay` (core model fixed) — adapter passes distance as range.
+5. `set_point_lights` packs 9 f32/light incl. `decay` (r17-tone; three getDistanceAttenuation).
 6. External WGSL (`createShaderMaterial`) exported but NOT exercised in-browser yet.
 7. Interface setCamera(view, proj) → adapter decomposes proj (depth convention option 'gl' default / 'zo'); aspect comes from the canvas, so proj aspect is ignored. Only perspective.
 

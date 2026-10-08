@@ -1888,16 +1888,16 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         self.opts.clear_color = rgba;
     }
 
-    /// Packed 8 floats/light: x y z range r g b intensity. Extra lights beyond
+    /// Packed 9 floats/light: x y z range r g b intensity decay (three PointLight.decay; glTF KHR_lights_punctual = 2). Extra lights beyond
     /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn.
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {
         let s = self.opts.light_intensity_scale;
-        let n = (packed.len() / 8).min(MAX_POINT_LIGHTS);
+        let n = (packed.len() / 9).min(MAX_POINT_LIGHTS);
         for i in 0..n {
-            let l = &packed[i * 8..i * 8 + 8];
+            let l = &packed[i * 9..i * 9 + 9];
             self.frame.points[i] = GpuPointLight {
                 position_range: [l[0], l[1], l[2], l[3]],
-                color: [l[4] * l[7] * s, l[5] * l[7] * s, l[6] * l[7] * s, 1.0],
+                color: [l[4] * l[7] * s, l[5] * l[7] * s, l[6] * l[7] * s, l[8]],
             };
         }
         self.frame.counts[0] = n as u32;
@@ -2579,7 +2579,7 @@ pub fn load_scene_into(
         .flat_map(|p| {
             [
                 p.position.x, p.position.y, p.position.z, p.range, p.color.x, p.color.y,
-                p.color.z, p.intensity,
+                p.color.z, p.intensity, 2.0,
             ]
         })
         .collect();

@@ -346,14 +346,17 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     for (var i = 0u; i < min(frame.counts.x, MAX_POINT_LIGHTS); i = i + 1u) {
         let pl = frame.points[i];
         let d = pl.position_range.xyz - in.world;
-        let dist2 = max(dot(d, d), 1e-4);
-        var atten = 1.0 / dist2;
-        let range = pl.position_range.w;
-        if (range > 0.0) {
-            let r = sqrt(dist2) / range;
-            atten = atten * clamp(1.0 - r * r * r * r, 0.0, 1.0);
-        }
-        color = color + brdf(n, v, d * inverseSqrt(dist2), base.rgb, metallic, rough) * pl.color.rgb * atten;
+        let dist2 = max(dot(d, d), 1e-8);
+let dist = sqrt(dist2);
+// three getDistanceAttenuation (r180 lights_pars): 1 / max(pow(d, decay), 0.01), x pow2(saturate(1 - pow4(d / cutoff))) when distance > 0. decay = pl.color.w (r17-tone: was fixed 1/d^2 + un-squared window)
+var atten = 1.0 / max(pow(dist, pl.color.w), 0.01);
+let range = pl.position_range.w;
+if (range > 0.0) {
+let r = dist / range;
+let w = clamp(1.0 - r * r * r * r, 0.0, 1.0);
+atten = atten * w * w;
+}
+color = color + brdf(n, v, d / dist, base.rgb, metallic, rough) * pl.color.rgb * atten;
     }
     // hemisphere ambient: lerp(ground, sky, 0.5 n.y + 0.5) x albedo (flat when sky == ground)
     let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));

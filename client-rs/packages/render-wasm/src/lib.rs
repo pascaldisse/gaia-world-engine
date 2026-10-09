@@ -312,10 +312,10 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_mesh_colors(&mut self, id: u32, rgba: &[f32]) -> Result<(), JsError> {
         self.core.set_mesh_colors(&self.device, id, rgba).map_err(err)
     }
-        /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
+        /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive, 4 multiply, 5 premultiplied. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
     #[wasm_bindgen(js_name = setMaterialFlags)]
     pub fn set_material_flags(&mut self, id: u32, blend: u32, unlit: bool, depth_write: i32, render_order: i32, cast_shadow: i32) {
-        let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), _ => None };
+        let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), 4 => Some(BlendKind::Multiply), 5 => Some(BlendKind::Premultiplied), _ => None };
         self.core.set_material_blend(id, blend != 0);
         self.core.set_material_flags(&self.device, id, MaterialFlags { blend: b, unlit, depth_write: (depth_write >= 0).then_some(depth_write != 0), render_order, cast_shadow: (cast_shadow >= 0).then_some(cast_shadow != 0), ..Default::default() });
     }
@@ -559,6 +559,11 @@ let core = RenderCore::new(&device, &queue, opts);
         let w = mat16(world)?;
         self.core.update_instance_block(id, mats, colors, color_stride as usize, count as usize, w);
         Ok(())
+    }
+    /// r19-pcol: per-instance uv window, 4 floats/instance (offsetU, offsetV, scaleU, scaleV); empty = identity. Flipbook / atlas.
+    #[wasm_bindgen(js_name = setInstanceBlockUvs)]
+    pub fn set_instance_block_uvs(&mut self, id: u32, uvs: &[f32]) {
+        self.core.set_instance_block_uvs(id, uvs);
     }
     #[wasm_bindgen(js_name = setInstanceBlockFlags)]
     pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {

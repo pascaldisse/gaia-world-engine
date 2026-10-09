@@ -429,6 +429,8 @@ fn parse_flags(extras: &gltf::json::Extras) -> crate::MaterialFlags {
     f.blend = match g.get("blend").and_then(|b| b.as_str()) {
         Some("additive") => Some(crate::BlendKind::Additive),
         Some("subtractive") => Some(crate::BlendKind::Subtractive),
+        Some("multiply") => Some(crate::BlendKind::Multiply),
+        Some("premultiplied") => Some(crate::BlendKind::Premultiplied),
         Some("alpha") => Some(crate::BlendKind::Alpha),
         _ => None,
     };

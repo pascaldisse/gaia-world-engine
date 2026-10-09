@@ -227,7 +227,7 @@ return vec4<f32>(result, coverage);
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>,
            @location(3) m0: vec4<f32>, @location(4) m1: vec4<f32>, @location(5) m2: vec4<f32>, @location(6) m3: vec4<f32>,
-           @location(7) uv1: vec2<f32>, @location(8) color: vec4<f32>, @location(9) icolor: vec4<f32>) -> VsOut {
+           @location(7) uv1: vec2<f32>, @location(8) color: vec4<f32>, @location(9) icolor: vec4<f32>, @location(10) iuv: vec4<f32>) -> VsOut {
     // per-instance model matrix (instance-step vertex buffer: no storage buffers needed)
     let model = mat4x4<f32>(m0, m1, m2, m3);
     let world = model * vec4<f32>(pos, 1.0);
@@ -236,7 +236,7 @@ fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locatio
     o.world = world.xyz;
     // uniform-scale assumption: normal via model 3x3 (non-uniform scale = NOTES open item)
     o.normal = (model * vec4<f32>(normal, 0.0)).xyz;
-    o.uv = uv;
+    o.uv = uv * iuv.zw + iuv.xy; // r19-pcol: per-instance uv window (default 0,0,1,1); uv1 (lightmap / array layer) untouched
     o.uv1 = uv1;
     o.color = color * icolor;
     return o;

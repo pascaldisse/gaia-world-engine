@@ -230,8 +230,10 @@ let shadowMask = null;
 const isShadowOnly = (o) => !!o.castShadow && !!frameCamera?.layers && !!o.layers && !o.layers.test(frameCamera.layers) && (shadowMask === null || (o.layers.mask & shadowMask) !== 0);
 // r10-shadow-11 DEBUG bisect (?wgpuDbgNoAlphaCast=1): objects whose material has alphaTest>0 do NOT cast -> isolates 'alpha-tested lattice casts as solid' (core casts package materials opaque)
 const dbgCast = (o) => !!o.castShadow && !dbgNoCast && !(dbgNoAlphaCast && (Array.isArray(o.material) ? o.material : [o.material]).some((m) => m?.alphaTest > 0));
-const nodeFlags = (o, vis) => ({ castShadow: dbgCast(o), receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null) });
-const flagBits = (o, vis) => (dbgCast(o) ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0); // + renderOrder compared separately (no string alloc)
+// r18-perf: static shadow-cache hints (three semantics): userData.static boolean = explicit; matrixAutoUpdate===false = hint (starts static, a move demotes it). Everything else = backend auto (static only once settled).
+const staticFlags = (o) => (typeof o.userData?.static === 'boolean' ? { static: o.userData.static } : o.matrixAutoUpdate === false ? { staticHint: true } : null);
+const nodeFlags = (o, vis) => ({ castShadow: dbgCast(o), receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null), ...staticFlags(o) });
+const flagBits = (o, vis) => (dbgCast(o) ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0) | (typeof o.userData?.static === 'boolean' ? (o.userData.static ? 16 : 32) : 0); // + renderOrder compared separately (no string alloc)
 
 function buildParts(o, rec, vis) {
 // returns false when nothing renderable

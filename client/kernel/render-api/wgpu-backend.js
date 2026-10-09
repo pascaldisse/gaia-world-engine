@@ -221,7 +221,8 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
   const flagStats = { noColorWrite: 0, noDepthTest: 0 }; // r11: counts of per-material colorWrite:false / depthTest:false pushes to the core (live-proof counters, generic)
   const matFlags = new Map(); // MaterialId → { blend, unlit, dw, toneMapped, ro, pushed }
   function flagsFromParams(params = {}) {
-    const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
+    const BL = { additive: 2, subtractive: 3, multiply: 4, premultiplied: 5 }; // r19-pcol: core setMaterialFlags blend codes (1 alpha, 2 add, 3 sub, 4 mul, 5 premult)
+    const blend = BL[params.blending] ?? ((params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0);
     // r9: three r180 renders `shadowSide ?? side` into the shadow map -> a FrontSide material casts only from its front faces (core caster pass culls back faces); Double/Back keep the double-sided caster
     return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, nocw: params.colorWrite === false, nodt: params.depthTest === false, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi, nofog: params.fog === false };
   }
@@ -329,12 +330,16 @@ function pushBlock(node, flagsDirty = false, moved = false) {
   if (node.rid && (node.ridMat !== node.material || node.ridMesh !== node.mesh)) { gpu.removeInstanceBlock(node.rid); node.rid = 0; }
   if (!node.rid) {
     node.rid = gpu.createInstanceBlock(node.mesh, node.material, node.mats, colors, stride, node.count, node.world);
-    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true; initAuto(node);
+    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true; initAuto(node); if (node.uvs) { node.uvsPushed = false; pushUvs(node); }
 } else { if (moved && markMoved(node)) flagsDirty = true; gpu.updateInstanceBlock(node.rid, node.mats, colors, stride, node.count, node.world); }
   if (flagsDirty) {
     gpu.setInstanceBlockFlags(node.rid, node.castShadow !== false, staticNow(node));
     if (gpu.setInstanceBlockShadowOnly) gpu.setInstanceBlockShadowOnly(node.rid, !!node.shadowOnly);
   }
+}
+function pushUvs(node) { // r19-pcol: uv windows live in the core block; (re)sent after block (re)creation and whenever setInstanceUvs ran (the adapter calls it only on a version change)
+  if (!gpu.setInstanceBlockUvs) return;
+  if (node.uvs || node.uvsPushed) { gpu.setInstanceBlockUvs(node.rid, node.uvs ?? new Float32Array(0)); node.uvsPushed = !!node.uvs; }
 }
 function applyShadowFlags(node) {
   if (node.castShadow !== undefined) gpu.setInstanceCastShadow(node.rid, node.castShadow);
@@ -365,7 +370,7 @@ function applyShadowFlags(node) {
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'instance-opacity', 'instance-uv', 'points', 'blend-multiply', 'blend-premultiplied', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     flagStats,
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
@@ -525,6 +530,11 @@ createNode(mat4, parent = 0) {
       const node = { id: next++, kind: 'instanced', parent: 0, children: new Set(), mesh, material, rid: 0, mats, count, world: Float32Array.from(flags.matrix ?? IDENTITY_MAT4),
         colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, staticHint: !!flags.staticHint, ridMat: 0, ridMesh: 0 };
       nodes.set(node.id, node); if (flags.renderOrder) setMatOrder(material, flags.renderOrder); /* r17-fx: InstancedMesh renderOrder -> core per-material order (was dropped: only createInstance forwarded it) */ pushBlock(node); return node.id;
+    },
+    // r19-pcol: per-instance uv window for an instanced block: Float32Array count*4 (offsetU, offsetV, scaleU, scaleV) or null (= identity). Pushed to the core only when it changed (identity buffer / same array+length = no call).
+    setInstanceUvs(id, uvs) {
+      const node = need(nodes, id, 'node'); if (node.kind !== 'instanced') throw new Error('setInstanceUvs: not an instanced node');
+      node.uvs = uvs || null; node.uvsPushed = false; if (node.rid) pushUvs(node);
     },
     updateInstances(id, mats, count, matrixWorld, colors = null, colorStride = 3) {
       const node = need(nodes, id, 'node');

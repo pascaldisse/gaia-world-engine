@@ -319,11 +319,21 @@ function applyShadowFlags(node) {
 
   function pushLights() {
     const pts = [...lights.values()].filter((l) => l.kind === 'point');
+    if (gpu.setPointLightsDecay) { // lane dynlight: per-light falloff = three getDistanceAttenuation(decay) or, with light.rampBegin, the DS1 ramp (core encodes ramp as falloff = -1 - begin/range)
+      const packed9 = new Float32Array(pts.length * 9);
+      pts.forEach((l, i) => {
+        const range = l.distance > 0 ? l.distance : 1e4;
+        const falloff = l.rampBegin != null && l.distance > 0 ? -1 - Math.min(Math.max(l.rampBegin / l.distance, 0), 0.9999) : (l.decay ?? 2);
+        packed9.set([...l.position, range, ...l.color, l.intensity, falloff], i * 9);
+      });
+      gpu.setPointLightsDecay(packed9);
+    } else {
     const packed = new Float32Array(pts.length * 8);
     pts.forEach((l, i) => {
       packed.set([...l.position, l.distance > 0 ? l.distance : 1e4, ...l.color, l.intensity], i * 8);
     });
     gpu.setPointLights(packed);
+    }
     const sun = lights.get(sunId);
     if (sun) gpu.setSun(Float32Array.from(sun.direction.map((v) => -v)), Float32Array.from(sun.color), sun.intensity);
     lightsDirty = false;
@@ -560,6 +570,8 @@ createNode(mat4, parent = 0) {
       if (patch.color) patch = { ...patch, color: colorOf(patch.color) };
       Object.assign(l, patch); lightsDirty = true;
     },
+    // lane dynlight: directional lights beyond the primary sun (unshadowed, <= 4). packed 7 f32/light: dir xyz (direction the light travels), rgb, intensity.
+    setExtraDirs: gpu.setExtraDirs ? (packed) => { gpu.setExtraDirs(packed instanceof Float32Array ? packed : Float32Array.from(packed)); } : undefined, // undefined on a wasm older than lampas/dynlight -> adapter keeps the one-sun behaviour
     removeLight(id) { need(lights, id, 'light'); lights.delete(id); if (id === sunId) sunId = 0; lightsDirty = true; },
 
     // r6: hemisphere + ambient light = irradiance E in three units (colour x intensity, linear; AmbientLight folded in by the adapter).

@@ -279,9 +279,34 @@ for (const [g, e] of geos) { for (const [k, p] of e.parts) if (p.users.size === 
 for (const [m, e] of mats) if (e.users.size === 0) { backend.destroyMaterial(e.id); mats.delete(m); }
 }
 
+// lane dynlight: directional lights -> core. primary = the shadow caster (else the strongest) -> setSun; the rest (<= MAX) -> setExtraDirs (unshadowed). Before this the core kept ONE sun and every
+// further DirectionalLight silently overwrote it (DS1 characters = 3 directional + hemisphere: 2 of 3 lost). sunRec = { id, sig }.
+let seen_dirs = [], sunRec = null, xdirSig = '';
+const updShadowMask = (o) => { const sl = o.shadow?.shadowNode?.lights; if (sl?.length && o.castShadow) { let m = 0; const cm0 = frameCamera?.layers?.mask ?? 1; for (const l of sl) { const cm = l.shadow?.camera?.layers?.mask ?? 1; m |= cm === 1 ? cm0 : cm; } shadowMask = m; } else shadowMask = null; }
+const MAX_EXTRA_DIRS = 4;
+function dirInfo(x) {
+const o = x.o, d = [o.position.x - (o.target?.position.x ?? 0), o.position.y - (o.target?.position.y ?? 0), o.position.z - (o.target?.position.z ?? 0)];
+const len = Math.hypot(...d) || 1; return { ...x, dir: d.map((v) => v / len), power: x.vis ? (o.intensity ?? 0) * Math.max(...x.c) : 0 };
+}
+function syncDirs() {
+const L = seen_dirs.map(dirInfo); seen_dirs = [];
+let pi = L.findIndex((x) => x.vis && x.o.castShadow && x.power > 0); if (pi < 0) { let best = -1; L.forEach((x, i) => { if (x.vis && x.power > best) { best = x.power; pi = i; } }); }
+const prim = pi >= 0 ? L[pi] : null;
+if (prim) {
+const o = prim.o;
+const sun = { direction: prim.dir, color: prim.c, intensity: prim.vis ? o.intensity : 0, castShadow: !!o.castShadow }, sig = `${prim.dir}|${prim.c}|${o.intensity}|${o.castShadow}`;
+if (!sunRec) { sunRec = { id: backend.setSun(sun), sig }; stats.created++; } else if (sunRec.sig !== sig) { backend.removeLight(sunRec.id); sunRec.id = backend.setSun(sun); sunRec.sig = sig; upd('sun'); }
+} else if (sunRec) { backend.removeLight(sunRec.id); sunRec = null; stats.removed++; shadowMask = null; }
+const xs = L.filter((x, i) => i !== pi && x.power > 0).sort((a, b) => b.power - a.power).slice(0, MAX_EXTRA_DIRS);
+if (L.filter((x, i) => i !== pi && x.power > 0).length > MAX_EXTRA_DIRS) stats.degraded.add(`DirectionalLight>${MAX_EXTRA_DIRS + 1}:extras-dropped`);
+const packed = new Float32Array(xs.length * 7); xs.forEach((x, i) => packed.set([-x.dir[0], -x.dir[1], -x.dir[2], ...x.c, x.o.intensity], i * 7)); // dir the light TRAVELS (core), adapter dir = toward the light
+const sig = Array.from(packed).join(',');
+if (sig !== xdirSig) { backend.setExtraDirs(packed); xdirSig = sig; upd('extraDirs'); }
+}
 function syncLight(o, vis) {
 let r = lights.get(o);
 const c = o.color ? [o.color.r, o.color.g, o.color.b] : [1, 1, 1];
+if (o.isDirectionalLight && backend.setExtraDirs) { updShadowMask(o); seen_dirs.push({ o, c, vis }); return; } // lane dynlight: the core has ONE shadowed sun + <=4 unshadowed extra directionals -> resolved after the walk (syncDirs)
 if (o.isDirectionalLight) {
 { const sl = o.shadow?.shadowNode?.lights; if (sl?.length && o.castShadow) { let m = 0; const cm0 = frameCamera?.layers?.mask ?? 1; for (const l of sl) { const cm = l.shadow?.camera?.layers?.mask ?? 1; m |= cm === 1 ? cm0 : cm; } shadowMask = m; } else shadowMask = null; }
 const d = [o.position.x - (o.target?.position.x ?? 0), o.position.y - (o.target?.position.y ?? 0), o.position.z - (o.target?.position.z ?? 0)];
@@ -295,6 +320,7 @@ return;
 if (o.isPointLight) {
 const e = o.matrixWorld.elements, pos = [e[12], e[13], e[14]];
 const p = { position: pos, color: c, intensity: vis ? o.intensity : 0, distance: o.distance ?? 0, decay: o.decay ?? 2 };
+if (o.userData?.pointRampBegin != null) p.rampBegin = o.userData.pointRampBegin; // lane dynlight: DS1 point ramp sat((R-d)/(R-begin)) (docs/DS-LIGHTING-SHADERS.md s5), R = distance; three has no such term -> only backends that implement it (wgpu core) honour it
 const sig = JSON.stringify(p);
 if (!r) { lights.set(o, { id: backend.addPointLight(p), kind: 'point', sig }); stats.created++; }
 else if (r.sig !== sig) { backend.updatePointLight(r.id, p); r.sig = sig; upd('pointLight'); }
@@ -531,7 +557,9 @@ if (updateMatrices) scene.updateMatrixWorld(true);
 const t1 = now();
 const seen = new Set();
 amb.sky.fill(0); amb.ground.fill(0); amb.n = 0;
+seen_dirs = [];
 visit(scene, true, seen);
+if (backend.setExtraDirs) syncDirs();
 syncEnvironment(scene);
 const t2 = now();
 for (const [o, rec] of recs) if (!seen.has(o)) { destroyParts(rec); recs.delete(o); }

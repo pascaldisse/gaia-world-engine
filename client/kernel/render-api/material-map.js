@@ -108,7 +108,7 @@ export function cubeTextureData(t) {
 }
 export { textureData };
 export function pbrParams(m) {
-const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
+const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial || m.isSpriteMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
 const p = {
 color: rgb(m.color), opacity: m.opacity ?? 1, transparent: !!m.transparent, doubleSide: m.side === 2, backSide: m.side === 1,
 flatShading: !!m.flatShading, fog: m.fog !== false, wireframe: !!m.wireframe, depthWrite: m.depthWrite !== false, depthTest: m.depthTest !== false, colorWrite: m.colorWrite !== false,
@@ -122,6 +122,7 @@ if (kind === 'physical') for (const k of ['clearcoat', 'clearcoatRoughness', 'tr
 if (m.userData?.preset) p.preset = m.userData.preset;
 // r9: three's GI attach (kernel/gi/gi-attach.js isGIEligibleMaterial) only wires probe GI into Standard/Physical/Lambert *NodeMaterial*; a plain MeshStandardMaterial (GLTFLoader figure, skinned or not) is lit by the hemisphere light only → tell the core not to sample the probes for it.
 if (!(m.isMeshStandardNodeMaterial || m.isMeshPhysicalNodeMaterial || m.isMeshLambertNodeMaterial)) p.noGi = true;
+if (m.isSpriteMaterial) p.doubleSide = true; // r18: THREE.Sprite billboard quad is drawn from either side (camera-facing; never culled)
 if (m.blending === 2) p.blending = 'additive';
 return p;
 }
@@ -131,7 +132,7 @@ const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = 
 export function materialSig(m, { exportNodeMaterial = null } = {}) {
   if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;
   const c = m.color, e = m.emissive;
-  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${m.toneMapped}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${+(m.colorWrite !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
+  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${m.toneMapped}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${+(m.colorWrite !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}|f${+(m.fog !== false)}${SLOT_SIG(m)}`; // r18: fog flag is a core material flag -> part of the sig
 }
 const customCache = new WeakMap(); // NodeMaterial → { version, v }
 export function customNodeMaterial(m) { return customNode(m); }

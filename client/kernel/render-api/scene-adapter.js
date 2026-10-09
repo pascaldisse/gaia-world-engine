@@ -376,6 +376,46 @@ function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNod
 // ---- BatchedMesh: one native instance block per geometryIndex (shared material); per-geometry vertex/index slice uploaded ONCE (geometryInfo is append-only),
 // matrices/colors/visibility re-packed only when matricesTexture/colorsTexture version, visibility bits or the instance table changed.
 const batchRecs = new Map();
+// ---- r18: THREE.Sprite (Object3D, NOT isMesh; used by hit bursts / glow cards). Translated to ONE shared unit quad instance whose matrix is the camera-facing billboard (three sprite shader: scale from matrixWorld, material.rotation, center, sizeAttenuation=false => scale *= view depth under perspective) ----
+const spriteRecs = new Map();
+let spriteMesh = 0;
+const SPRITE_M = new Float64Array(16);
+function spriteQuad() { return spriteMesh ||= backend.createMesh({ positions: Float32Array.of(-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0), normals: Float32Array.of(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1), uvs: Float32Array.of(0, 0, 1, 0, 1, 1, 0, 1), indices: Uint32Array.of(0, 1, 2, 0, 2, 3) }); }
+function spriteMatrix(o, out) {
+ const cam = frameCamera?.matrixWorld?.elements; if (!cam) return false;
+ const e = o.matrixWorld.elements, m = o.material;
+ let sx = Math.hypot(e[0], e[1], e[2]), sy = Math.hypot(e[4], e[5], e[6]);
+ const px = e[12], py = e[13], pz = e[14];
+ const rl = Math.hypot(cam[0], cam[1], cam[2]) || 1, ul = Math.hypot(cam[4], cam[5], cam[6]) || 1, bl = Math.hypot(cam[8], cam[9], cam[10]) || 1;
+ const R = [cam[0] / rl, cam[1] / rl, cam[2] / rl], U = [cam[4] / ul, cam[5] / ul, cam[6] / ul], B = [cam[8] / bl, cam[9] / bl, cam[10] / bl];
+ const persp = frameCamera.isPerspectiveCamera ?? (frameCamera.projectionMatrix?.elements[11] === -1);
+ if (m?.sizeAttenuation === false && persp) { const depth = (px - cam[12]) * -B[0] + (py - cam[13]) * -B[1] + (pz - cam[14]) * -B[2]; sx *= depth; sy *= depth; } // three: scale *= -mvPosition.z
+ const rot = m?.rotation ?? 0, c = Math.cos(rot), s = Math.sin(rot);
+ const c0 = [sx * (c * R[0] + s * U[0]), sx * (c * R[1] + s * U[1]), sx * (c * R[2] + s * U[2])];
+ const c1 = [sy * (-s * R[0] + c * U[0]), sy * (-s * R[1] + c * U[1]), sy * (-s * R[2] + c * U[2])];
+ const cx = (o.center?.x ?? 0.5) - 0.5, cy = (o.center?.y ?? 0.5) - 0.5; // quad spans [-.5,.5]; three offsets by (center - .5)
+ out.set([c0[0], c0[1], c0[2], 0, c1[0], c1[1], c1[2], 0, B[0], B[1], B[2], 0, px - cx * c0[0] - cy * c1[0], py - cx * c0[1] - cy * c1[1], pz - cx * c0[2] - cy * c1[2], 1]);
+ return true;
+}
+function syncSprite(o, vis) {
+ if (!o.material) return;
+ let rec = spriteRecs.get(o);
+ const me = ensureMaterial(o.material, o);
+ if (!spriteMatrix(o, SPRITE_M)) return;
+ const mat = Array.from(SPRITE_M), ro = o.renderOrder ?? 0, v = vis && o.material.visible !== false;
+ if (!rec) {
+  rec = { mat: o.material, matId: me.id, vis: v, ro, m: SPRITE_M.slice(), node: backend.createInstance(spriteQuad(), me.id, mat, { castShadow: false, receiveShadow: false, visible: v, renderOrder: ro, static: false }) };
+  me.users.add(rec); spriteRecs.set(o, rec); stats.created++; stats.sprites = (stats.sprites ?? 0) + 1; return;
+ }
+ if (rec.mat !== o.material) { mats.get(rec.mat)?.users.delete(rec); rec.mat = o.material; me.users.add(rec); }
+ const u = {};
+ if (me.id !== rec.matId) { u.material = me.id; rec.matId = me.id; }
+ if (!eqArr(rec.m, SPRITE_M)) { u.mat4 = mat; rec.m.set(SPRITE_M); }
+ if (v !== rec.vis) { u.visible = v; rec.vis = v; }
+ if (ro !== rec.ro) { u.renderOrder = ro; rec.ro = ro; }
+ for (const _ in u) { backend.updateNode(rec.node, u); upd('sprite'); break; }
+}
+function destroySprite(rec) { backend.removeNode(rec.node); mats.get(rec.mat)?.users.delete(rec); stats.removed++; }
 const _bm = typeof Float32Array !== 'undefined' ? new Float32Array(16) : null;
 function batchGeometry(o, gi) {
   const g = o.geometry, gInfo = o._geometryInfo[gi], pos = g.attributes.position, nrm = g.attributes.normal, uv = g.attributes.uv;
@@ -426,6 +466,7 @@ const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frame
 if (!vis && treeVis && (o.isMesh || o.isLight)) stats.layerCulled = (stats.layerCulled ?? 0) + 1;
 if (vis && treeVis && o.isMesh && isShadowOnly(o)) { stats.shadowOnly = (stats.shadowOnly ?? 0) + 1; if (o.isInstancedMesh) stats.shadowOnlyInst = (stats.shadowOnlyInst ?? 0) + (o.count ?? 0); } // r10 census
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
+else if (o.isSprite) { seen.add(o); syncSprite(o, vis); }
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
 else {
@@ -535,7 +576,7 @@ const t0 = now();
 skinMs = 0; skinCalls = 0;
 { const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
-if (updateMatrices) scene.updateMatrixWorld(true);
+if (updateMatrices) { scene.updateMatrixWorld(true); camera?.updateMatrixWorld?.(); /* r18: sprites billboard against THIS frame's camera */ }
 const t1 = now();
 const seen = new Set();
 amb.sky.fill(0); amb.ground.fill(0); amb.n = 0;
@@ -545,6 +586,7 @@ const t2 = now();
 for (const [o, rec] of recs) if (!seen.has(o)) { destroyParts(rec); recs.delete(o); }
 for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }
 for (const [o, r] of batchRecs) if (!seen.has(o)) { destroyBatched(r); batchRecs.delete(o); }
+for (const [o, r] of spriteRecs) if (!seen.has(o)) { destroySprite(r); spriteRecs.delete(o); }
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
 const t3 = now();
@@ -559,6 +601,6 @@ const t4 = now();
 // last-frame phase breakdown (ms): matrixWorld (three's own updateMatrixWorld, 0 when updateMatrices=false) · visit (per-object diff + backend calls) · sweep (removed objects + gc) · camera/live uniforms
 stats.phase = { matrixWorld: t1 - t0, visit: t2 - t1, sweep: t3 - t2, camera: t4 - t3, total: t4 - t0, backendSkinUpload: skinMs, skinUploads: skinCalls };
 },
-dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of batchRecs) destroyBatched(r); batchRecs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
+dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of batchRecs) destroyBatched(r); batchRecs.clear(); for (const [, r] of spriteRecs) destroySprite(r); spriteRecs.clear(); if (spriteMesh) { backend.destroyMesh(spriteMesh); spriteMesh = 0; } for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
 };
 }

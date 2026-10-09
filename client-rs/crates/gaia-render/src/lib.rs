@@ -1593,9 +1593,12 @@ impl RenderCore {
     /// redrawn every frame). Moving a static instance invalidates the static cache.
     pub fn set_instance_static(&mut self, id: u32, is_static: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            let changed = inst.is_static != is_static;
             inst.is_static = is_static;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed {
+                self.static_gen += 1; // r18-perf: no-op re-assertion must not invalidate the static cache
+            }
         }
     }
 
@@ -1603,17 +1606,23 @@ impl RenderCore {
     /// false: they would otherwise shadow the whole scene and blow up the cascade depth range.
     pub fn set_instance_shadow_only(&mut self, id: u32, only: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            let changed = inst.shadow_only != only;
             inst.shadow_only = only;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed && inst.is_static {
+                self.static_gen += 1; // r18-perf
+            }
         }
     }
 
     pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            let changed = inst.cast_shadow != cast;
             inst.cast_shadow = cast;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed && inst.is_static {
+                self.static_gen += 1; // r18-perf
+            }
         }
     }
 
@@ -1633,6 +1642,9 @@ impl RenderCore {
 
     pub fn update_instance(&mut self, id: u32, transform: [f32; 16]) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            if inst.transform == transform {
+                return; // r18-perf: unchanged matrix = no dirty, no static-cache invalidation
+            }
             inst.transform = transform;
             self.instances_dirty = true;
             if inst.is_static {
@@ -1737,18 +1749,25 @@ impl RenderCore {
     }
     pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
         if let Some(b) = self.blocks.get_mut(&id) {
+            // r18-perf: the static shadow layer only holds static casters -> a flag change on a block that was and stays dynamic cannot change it (was: unconditional bump = cache invalidated every frame)
+            let touches_static = (b.is_static || is_static) && (b.is_static != is_static || b.cast_shadow != cast_shadow);
             b.cast_shadow = cast_shadow;
             b.is_static = is_static;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if touches_static {
+                self.static_gen += 1;
+            }
         }
     }
     /// Block counterpart of `set_instance_shadow_only`: members are never drawn in the main passes, still cast.
     pub fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) {
         if let Some(b) = self.blocks.get_mut(&id) {
+            let changed = b.shadow_only != only;
             b.shadow_only = only;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed && b.is_static {
+                self.static_gen += 1; // r18-perf: only a STATIC block's flag change alters the cached static layer
+            }
         }
     }
     pub fn remove_instance_block(&mut self, id: u32) {

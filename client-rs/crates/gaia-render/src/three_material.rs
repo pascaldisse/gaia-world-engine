@@ -302,10 +302,12 @@ Kind::Storage { read_only } => wgpu::BindingType::Buffer { ty: wgpu::BufferBindi
         }
 let side = pkg["material"]["side"].as_u64().unwrap_or(0);
     let transparent = pkg["material"]["transparent"].as_bool().unwrap_or(false);
+    // three AdditiveBlending (=2) on a transparent TSL material: src.rgb * src.a + dst (alpha channel untouched); any other value keeps ALPHA_BLENDING. Part of the pipeline key.
+    let additive = transparent && pkg["material"]["blending"].as_u64() == Some(2);
     let (write_mask, depth_write, depth_compare) = pipeline_depth_color_state(&pkg["material"]);
     // r11-pipe: content key = everything the pipeline is built from (per-material uniform VALUES / texture ids are NOT part of it).
 let slot_sig: Vec<String> = slots.iter().map(|s| format!("{}.{}.{}.{}", s.group, s.binding, s.vis.bits(), match &s.kind { Kind::Uniform { .. } => "u".to_string(), Kind::Texture { dim, sample } => format!("t{dim:?}{sample:?}"), Kind::Sampler => "s".to_string(), Kind::Storage { read_only } => format!("b{read_only}") })).collect();
-let key_str = format!("{vs}\u{1}{fs}\u{1}{}\u{1}{}\u{1}{slot_sig:?}{vbufs_opt:?}{side}{transparent}{}{depth_write}{depth_compare:?}{color_format:?}{depth_format:?}{shadow_group:?}", pkg["vertexEntry"].as_str().unwrap_or("main"), pkg["fragmentEntry"].as_str().unwrap_or("main"), write_mask.bits());
+let key_str = format!("{vs}\u{1}{fs}\u{1}{}\u{1}{}\u{1}{slot_sig:?}{vbufs_opt:?}{side}{transparent}{additive}{}{depth_write}{depth_compare:?}{color_format:?}{depth_format:?}{shadow_group:?}", pkg["vertexEntry"].as_str().unwrap_or("main"), pkg["fragmentEntry"].as_str().unwrap_or("main"), write_mask.bits());
 let key = { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); key_str.hash(&mut h); h.finish() };
 let ordered = transparent || !depth_write || write_mask != wgpu::ColorWrites::ALL || depth_compare != wgpu::CompareFunction::LessEqual;
 if cache.share {
@@ -333,7 +335,7 @@ let fm = cache.module(device, "three fragment", fs);
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
-                blend: transparent.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: transparent.then_some(if additive { three_additive_blend() } else { wgpu::BlendState::ALPHA_BLENDING }),
                 write_mask,
             })],
         }),
@@ -358,6 +360,11 @@ let fm = cache.module(device, "three fragment", fs);
 Ok(ThreeMaterial { pipeline, layouts, slots, textures, storage, extra, core_slot, shadow_group, key, ordered })
 }
 
+/// three AdditiveBlending (blendFunc SRC_ALPHA, ONE; alpha ONE, ONE).
+fn three_additive_blend() -> wgpu::BlendState {
+    let add = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+    wgpu::BlendState { color: add, alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add } }
+}
 /// three material state -> (colour write mask, depth write, depth compare). colorWrite:false => empty mask (depth-only pass); depthWrite:false => no depth write
 /// (blended materials never write depth, as before); depthTest:false => compare Always. Missing keys = three defaults.
 pub(crate) fn pipeline_depth_color_state(material: &serde_json::Value) -> (wgpu::ColorWrites, bool, wgpu::CompareFunction) {

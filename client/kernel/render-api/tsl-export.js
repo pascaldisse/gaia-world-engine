@@ -68,7 +68,7 @@ bindGroups: groups,
 attributes: b.getAttributesArray().map((a, i) => attributeInfo(a, i)),
 varyings: (b.varyings ?? []).map((v) => ({ name: v.name, type: v.type })),
 vertexEntry: 'main', fragmentEntry: 'main',
-material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite, depthTest: material.depthTest, colorWrite: material.colorWrite },
+material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite, depthTest: material.depthTest, colorWrite: material.colorWrite, blending: material.blending },
 };
 // live three Texture per textureUuid, NON-enumerable → JSON stays as-is; backends read pixels from it (wgpu-backend createShaderMaterial).
 const textureSources = {};
@@ -410,7 +410,7 @@ return o;
 }) }));
 const attributeSources = {}, attrKey = new Map(); for (const [k, n0] of t.attrNode) { const n1 = map.get(n0.uuid) ?? n0; attrKey.set(k, `node:${n1.uuid}`); attributeSources[`node:${n1.uuid}`] = n1.attribute; }
 const pkg = { vertex: T.vertex, fragment: T.fragment, bindGroups: groups, attributes: T.attributes.map((a) => (attrKey.has(a.key) ? { ...a, key: attrKey.get(a.key) } : a)), varyings: T.varyings, vertexEntry: 'main', fragmentEntry: 'main',
-material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite, depthTest: material.depthTest, colorWrite: material.colorWrite } };
+material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite, depthTest: material.depthTest, colorWrite: material.colorWrite, blending: material.blending } };
 Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
 Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: false });
 Object.defineProperty(pkg, 'attributeSources', { value: attributeSources, enumerable: false });

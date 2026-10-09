@@ -2,6 +2,7 @@
 //! Device/Queue + an output view; this crate renders a glTF scene at an internal
 //! resolution (`render_height`) and scales to the output through an `Upscaler`.
 //! Same code path for aarch64-apple-darwin (Metal) and wasm32 (WebGPU).
+pub mod bc;
 pub mod groups;
 pub mod scene;
 pub mod shadow;
@@ -25,8 +26,6 @@ use wgpu::util::DeviceExt;
 pub const MAX_POINT_LIGHTS: usize = 64;
 /// lane dynlight: directional lights besides the primary sun (DS1 characters = 3 directional + hemisphere, docs/DS-LIGHTING-SHADERS.md s1); no shadows.
 pub const MAX_EXTRA_DIRS: usize = 4;
-/// point-light falloff when the caller gives none (8-float packing): the previous fixed model = inverse-square (three decay 2).
-pub const POINT_DEFAULT_DECAY: f32 = 2.0;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Internal color target: sRGB-encoded LDR after tonemap (filterable everywhere).
 pub const INTERNAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -413,6 +412,10 @@ pub enum BlendKind {
     Additive,
     /// dst - src*a
     Subtractive,
+    /// three MultiplyBlending: dst * src.rgb (decals, tint cards; alpha does NOT fade it, same as three)
+    Multiply,
+    /// src.rgb + dst*(1-a): colour already premultiplied by alpha (three CustomBlending One/OneMinusSrcAlpha)
+    Premultiplied,
 }
 
 /// Per-material render flags (data from `material.extras.gaia`; no game names in the engine).
@@ -428,6 +431,10 @@ pub struct MaterialFlags {
     pub no_receive_shadow: bool,
     /// true = probe GI is NOT sampled for this material (hemisphere ambient only). three attaches GI only to Standard/Physical/Lambert *NodeMaterial* (gi-attach.js isGIEligibleMaterial); plain MeshStandardMaterial (GLTFLoader figures) never gets it.
     pub no_gi: bool,
+    /// true = three `material.fog === false`: scene fog is NOT applied to this material (lit and unlit paths). Default false = fogged.
+    pub no_fog: bool,
+    /// true = the extra directional lights (`set_extra_dirs`; DS1 character LightBank dirs) light this material. Default false = world geometry, extra dirs do NOT apply. Per MATERIAL (flags.w bit 8).
+    pub chr_light: bool,
     /// true = the shadow CASTER pass culls back faces (three: a FrontSide material renders `side = shadowSide ?? side` = FrontSide into the shadow map, so a single-sided surface whose front faces AWAY from the sun casts nothing). Default false = double-sided caster (old behaviour). Per MATERIAL.
     pub shadow_cull_back: bool,
     /// None = default (opaque writes, blended does not).
@@ -640,6 +647,8 @@ struct InstanceBlock {
     transforms: Vec<[f32; 16]>,
     /// empty = all white; else one rgba per transform
     colors: Vec<[f32; 4]>,
+    /// r19-pcol: empty = identity; else one (offsetU, offsetV, scaleU, scaleV) per transform: uv' = uv*scale + offset (flipbook / atlas cell)
+    uvs: Vec<[f32; 4]>,
     is_static: bool,
     cast_shadow: bool,
     shadow_only: bool,
@@ -671,6 +680,8 @@ pub struct RenderCore {
     blocks: HashMap<u32, InstanceBlock>,
     /// per-instance rgba (vertex slot 4, @location(9)), same order as `instance_buffer`; white for plain instances.
     instance_colors: Option<wgpu::Buffer>,
+    /// per-instance uv window (vertex slot 5, @location(10)), same order; (0,0,1,1) for plain instances.
+    instance_uvs: Option<wgpu::Buffer>,
     /// Rebuilt when instances change: sorted (mesh, material) batches.
     instance_buffer: Option<wgpu::Buffer>,
     /// CPU copy of the sorted instance transforms (transparent sort).
@@ -704,6 +715,8 @@ pub struct RenderCore {
     /// array textures (D2Array views) by id; ids here are NOT in `textures`.
     array_textures: HashMap<u32, ArrayTex>,
     cube_textures: HashMap<u32, CubeTex>,
+    /// r13-bc: compressed-texture upload counters [gpu_native, cpu_decoded_no_feature, reserved(0), cpu_decoded_unaligned_or_flip, cpu_decoded_single_mip, refused].
+    pub bc_stats: [u32; 6],
     white_cube: wgpu::TextureView,
     /// r6-tsl-2: host buffers behind TSL storage bindings (shared across materials).
     storage_buffers: HashMap<u32, three_material::StorageBuf>,
@@ -738,7 +751,7 @@ pub struct RenderCore {
 
 impl RenderCore {
     /// Features to request on the device for GPU timings (intersect with adapter).
-    pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
+    pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::TEXTURE_COMPRESSION_BC);
 
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, opts: RenderOptions) -> Self {
         let pipe_share = opts.pipe_share;
@@ -868,6 +881,7 @@ impl RenderCore {
             mipgen_linear,
             array_textures: HashMap::new(),
             cube_textures: HashMap::new(),
+            bc_stats: [0; 6],
             white_cube,
             storage_buffers: HashMap::new(),
             white_array,
@@ -906,6 +920,7 @@ impl RenderCore {
             instances: HashMap::new(),
             blocks: HashMap::new(),
             instance_colors: None,
+            instance_uvs: None,
             instance_buffer: None,
             batches: Vec::new(),
             instances_dirty: true,
@@ -1152,6 +1167,31 @@ impl RenderCore {
         }
     }
 
+    /// three `material.fog = false`: skip scene fog for this material. Call AFTER `set_material_flags` (which resets it).
+    pub fn set_material_no_fog(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.no_fog == on {
+            return;
+        }
+        f.no_fog = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+    /// lampas L-wgpu-tex: this material is lit by the extra directional lights (character material). Call AFTER `set_material_flags` (which resets it).
+    pub fn set_material_chr_light(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.chr_light == on {
+            return;
+        }
+        f.chr_light = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+
     pub fn material_flags(&self, id: u32) -> MaterialFlags {
         self.material_flags.get(&id).copied().unwrap_or_default()
     }
@@ -1185,6 +1225,49 @@ impl RenderCore {
     pub fn create_texture_linear(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
         if rgba.len() != (width * height * 4) as usize { return Err(format!("texture {id}: {} bytes != {width}x{height}x4", rgba.len())); }
         self.textures.insert(id, upload_rgba8_fmt(device, queue, Some(&self.mipgen_linear), width, height, rgba, false));
+        self.rebind_users_of(device, id);
+        Ok(())
+    }
+    /// r13-bc: block-compressed 2D texture (three CompressedTexture). `gl_format` = GL internal format (33776 DXT1 RGB, 33777 DXT1 RGBA, 33778 DXT3, 33779 DXT5, 36283 RGTC1, 36285 RGTC2, 36492 BPTC);
+    /// `data` = the `mip_count` mips concatenated (mip l = max(1,w>>l) x max(1,h>>l), 4x4 blocks, `bc::mip_bytes` each). `flip_y` = data is GL-order (row 0 = v 0 = bottom, three flipY=false) -> stored top-first like every other core texture.
+    /// Device has TEXTURE_COMPRESSION_BC and the data allows -> native BC upload (mips as given). Otherwise CPU decode to RGBA8 (counted in `bc_stats`, never silent). Single-mip CPU path gets a GPU mip chain.
+    pub fn create_texture_compressed(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, gl_format: u32, width: u32, height: u32, mip_count: u32, data: &[u8], srgb: bool, flip_y: bool) -> Result<(), String> {
+        let f = bc::from_gl(gl_format).ok_or_else(|| { self.bc_stats[5] += 1; format!("compressed format {gl_format} not supported (BC1/2/3 = 33776..33779, RGTC1/2 = 36283/36285, BPTC 36492)") })?;
+        let max_levels = 32 - width.max(height).max(1).leading_zeros();
+        if width == 0 || height == 0 || mip_count == 0 || mip_count > max_levels { self.bc_stats[5] += 1; return Err(format!("compressed texture {id}: bad size/mips {width}x{height} x{mip_count}")); }
+        let sizes: Vec<(u32, u32, usize)> = (0..mip_count).map(|l| { let (w, h) = ((width >> l).max(1), (height >> l).max(1)); (w, h, bc::mip_bytes(f, w, h)) }).collect();
+        if sizes.iter().map(|s| s.2).sum::<usize>() != data.len() { self.bc_stats[5] += 1; return Err(format!("compressed texture {id}: {} bytes != mip chain {}", data.len(), sizes.iter().map(|s| s.2).sum::<usize>())); }
+        let has_bc = device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let aligned = width % 4 == 0 && height % 4 == 0;
+        let flip_ok = !flip_y || (bc::flippable(f) && sizes.iter().all(|s| bc::flip_exact(s.1)));
+        let gpu = has_bc && aligned && flip_ok;
+        if gpu {
+            let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("bc texture"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 }, mip_level_count: mip_count, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: bc::wgpu_format(f, srgb), usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+            let mut o = 0usize;
+            for (l, &(w, h, n)) in sizes.iter().enumerate() {
+                let owned; let raw = &data[o..o + n]; o += n;
+                let bytes = if flip_y { owned = bc::flip_mip(f, w, h, raw); &owned[..] } else { raw };
+                let (bw, bh) = bc::blocks(w, h);
+                queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: l as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, bytes,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bw * bc::block_bytes(f) as u32), rows_per_image: Some(bh) }, wgpu::Extent3d { width: bw * 4, height: bh * 4, depth_or_array_layers: 1 });
+            }
+            self.textures.insert(id, texture.create_view(&Default::default()));
+            self.bc_stats[0] += 1;
+        } else {
+            // CPU decode (mips as given; exact flip on pixels). Reason counters: [1] no BC feature, [3] unaligned / unflippable ([2] reserved: was BC1-RGB punch-through, removed r14 — WebGPU/three sample alpha 0 there natively).
+            let mut mips = Vec::new(); let mut o = 0usize;
+            for &(w, h, n) in &sizes { match bc::decode_rgba8(f, w, h, &data[o..o + n], flip_y) { Ok(px) => mips.push((w, h, px)), Err(e) => { self.bc_stats[5] += 1; return Err(format!("compressed texture {id}: {e}")); } } o += n; }
+            self.bc_stats[if !has_bc { 1 } else { 3 }] += 1;
+            if mip_count == 1 { self.bc_stats[4] += 1; }
+            let view = if mip_count == 1 { upload_rgba8_fmt(device, queue, Some(if srgb { &self.mipgen } else { &self.mipgen_linear }), width, height, &mips[0].2, srgb) } else {
+                let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("bc decoded"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 }, mip_level_count: mip_count, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm }, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+                for (l, (w, h, px)) in mips.iter().enumerate() {
+                    queue.write_texture(wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: l as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, px, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(*h) }, wgpu::Extent3d { width: *w, height: *h, depth_or_array_layers: 1 });
+                }
+                texture.create_view(&Default::default())
+            };
+            self.textures.insert(id, view);
+        }
         self.rebind_users_of(device, id);
         Ok(())
     }
@@ -1288,7 +1371,7 @@ impl RenderCore {
                 has_tex,
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
-            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, self.material_flags.get(&id).map_or(0.0, |f| (f.no_receive_shadow as u32 | (f.no_gi as u32) << 1) as f32)],
+            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, self.material_flags.get(&id).map_or(0.0, |f| (f.no_receive_shadow as u32 | (f.no_gi as u32) << 1 | (f.no_fog as u32) << 2 | (f.chr_light as u32) << 3) as f32)],
             maps0: [arr.is_some() as u32 as f32, if mm.normal_scale == 0.0 { 1.0 } else { mm.normal_scale }, tv(mm.normal).is_some() as u32 as f32, tv(mm.roughness).is_some() as u32 as f32],
             maps1: [tv(mm.metalness).is_some() as u32 as f32, tv(mm.emissive).is_some() as u32 as f32, tv(mm.ao).is_some() as u32 as f32, mm.side as f32],
         };
@@ -1561,9 +1644,12 @@ impl RenderCore {
     /// redrawn every frame). Moving a static instance invalidates the static cache.
     pub fn set_instance_static(&mut self, id: u32, is_static: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            let changed = inst.is_static != is_static;
             inst.is_static = is_static;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed {
+                self.static_gen += 1; // r18-perf: no-op re-assertion must not invalidate the static cache
+            }
         }
     }
 
@@ -1571,17 +1657,23 @@ impl RenderCore {
     /// false: they would otherwise shadow the whole scene and blow up the cascade depth range.
     pub fn set_instance_shadow_only(&mut self, id: u32, only: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            let changed = inst.shadow_only != only;
             inst.shadow_only = only;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed && inst.is_static {
+                self.static_gen += 1; // r18-perf
+            }
         }
     }
 
     pub fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            let changed = inst.cast_shadow != cast;
             inst.cast_shadow = cast;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed && inst.is_static {
+                self.static_gen += 1; // r18-perf
+            }
         }
     }
 
@@ -1601,6 +1693,9 @@ impl RenderCore {
 
     pub fn update_instance(&mut self, id: u32, transform: [f32; 16]) {
         if let Some(inst) = self.instances.get_mut(&id) {
+            if inst.transform == transform {
+                return; // r18-perf: unchanged matrix = no dirty, no static-cache invalidation
+            }
             inst.transform = transform;
             self.instances_dirty = true;
             if inst.is_static {
@@ -1689,7 +1784,7 @@ impl RenderCore {
         }
     }
     pub fn create_instance_block(&mut self, id: u32, mesh: u32, material: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
-        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), is_static: false, cast_shadow: true, shadow_only: false };
+        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), uvs: Vec::new(), is_static: false, cast_shadow: true, shadow_only: false };
         Self::fill_block(&mut b, mats, colors, color_stride, count, &world);
         self.blocks.insert(id, b);
         self.instances_dirty = true;
@@ -1703,20 +1798,38 @@ impl RenderCore {
             }
         }
     }
+    /// r19-pcol: per-instance uv window (4 floats/instance: offsetU, offsetV, scaleU, scaleV; empty slice = identity). Does not touch transforms/colours.
+    pub fn set_instance_block_uvs(&mut self, id: u32, uvs: &[f32]) {
+        if let Some(b) = self.blocks.get_mut(&id) {
+            b.uvs.clear();
+            b.uvs.extend(uvs.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]));
+            self.instances_dirty = true;
+            if b.is_static {
+                self.static_gen += 1;
+            }
+        }
+    }
     pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
         if let Some(b) = self.blocks.get_mut(&id) {
+            // r18-perf: the static shadow layer only holds static casters -> a flag change on a block that was and stays dynamic cannot change it (was: unconditional bump = cache invalidated every frame)
+            let touches_static = (b.is_static || is_static) && (b.is_static != is_static || b.cast_shadow != cast_shadow);
             b.cast_shadow = cast_shadow;
             b.is_static = is_static;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if touches_static {
+                self.static_gen += 1;
+            }
         }
     }
     /// Block counterpart of `set_instance_shadow_only`: members are never drawn in the main passes, still cast.
     pub fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) {
         if let Some(b) = self.blocks.get_mut(&id) {
+            let changed = b.shadow_only != only;
             b.shadow_only = only;
             self.instances_dirty = true;
-            self.static_gen += 1;
+            if changed && b.is_static {
+                self.static_gen += 1; // r18-perf: only a STATIC block's flag change alters the cached static layer
+            }
         }
     }
     pub fn remove_instance_block(&mut self, id: u32) {
@@ -1839,6 +1952,10 @@ pub fn gtao_dims(&self) -> Option<(u32, u32)> { self.post.as_ref()?.gtao_dims() 
 pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         match self.post.as_mut() { Some(p) => { p.bloom = b; Ok(()) } None => Err("set_bloom: core built without hdr_scene".into()) }
     }
+    /// r18-tone: display-referred 4x4 colour matrix (column-major) applied after exposure/tone map; None = off. Err without `hdr_scene`.
+    pub fn set_color_grade(&mut self, m: Option<[[f32; 4]; 4]>) -> Result<(), String> {
+        match self.post.as_mut() { Some(p) => { p.color_grade = m; Ok(()) } None => Err("set_color_grade: core built without hdr_scene".into()) }
+    }
     /// r10 eye adaptation: `on` runs the GPU luminance meter (8x8 log2 grid); `mul` = host-adapted linear multiplier on the HDR scene before bloom/tone map. Err without `hdr_scene`.
     pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), String> {
         match self.post.as_mut() { Some(p) => { p.meter_on = on; p.ae_mul = if mul.is_finite() && mul > 0.0 { mul } else { 1.0 }; Ok(()) } None => Err("set_auto_exposure: core built without hdr_scene".into()) }
@@ -1856,28 +1973,17 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         self.opts.clear_color = rgba;
     }
 
-    /// Packed 8 floats/light: x y z range r g b intensity [+ optional 9th = decay when the stride is 9]. Extra lights beyond
-    /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn. Use `set_point_lights_decay` for the per-light falloff.
+    /// Packed 9 floats/light: x y z range r g b intensity decay (three PointLight.decay; glTF KHR_lights_punctual = 2). Extra lights beyond
+    /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn. falloff >= 0 = three getDistanceAttenuation decay; falloff < 0 = DS1 point ramp
+    /// sat((range-d)/(range-begin)), begin/range = -falloff-1 (docs/DS-LIGHTING-SHADERS.md s5); shader reads it from color.w.
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {
-        self.set_point_lights_stride(packed, 8)
-    }
-
-    /// lane dynlight: packed 9 floats/light = the 8 above + falloff. falloff >= 0 = three `getDistanceAttenuation(d, range, decay)` (decay 0 = flat, the window
-    /// (1-(d/range)^4)^2 only; 2 = inverse-square, the old fixed model). falloff < 0 = DS1 point ramp sat((range-d)/(range-begin)) with begin/range = -falloff-1
-    /// (docs/DS-LIGHTING-SHADERS.md s5). The shader reads it from `color.w`.
-    pub fn set_point_lights_decay(&mut self, packed: &[f32]) -> usize {
-        self.set_point_lights_stride(packed, 9)
-    }
-
-    fn set_point_lights_stride(&mut self, packed: &[f32], stride: usize) -> usize {
         let s = self.opts.light_intensity_scale;
-        let n = (packed.len() / stride).min(MAX_POINT_LIGHTS);
+        let n = (packed.len() / 9).min(MAX_POINT_LIGHTS);
         for i in 0..n {
-            let l = &packed[i * stride..(i + 1) * stride];
-            let falloff = if stride >= 9 { l[8] } else { POINT_DEFAULT_DECAY };
+            let l = &packed[i * 9..i * 9 + 9];
             self.frame.points[i] = GpuPointLight {
                 position_range: [l[0], l[1], l[2], l[3]],
-                color: [l[4] * l[7] * s, l[5] * l[7] * s, l[6] * l[7] * s, falloff],
+                color: [l[4] * l[7] * s, l[5] * l[7] * s, l[6] * l[7] * s, l[8]],
             };
         }
         self.frame.counts[0] = n as u32;
@@ -1914,14 +2020,14 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
     }
 
     fn rebuild_instances(&mut self, device: &wgpu::Device) {
-        struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], is_static: bool, cast_shadow: bool, shadow_only: bool }
+        struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], uv: [f32; 4], is_static: bool, cast_shadow: bool, shadow_only: bool }
         let mut all: Vec<Ent> = Vec::with_capacity(self.instances.len());
         for (id, i) in self.instances.iter() {
-            all.push(Ent { id: Some(*id), mesh: i.mesh, material: i.material, transform: i.transform, color: [1.0; 4], is_static: i.is_static, cast_shadow: i.cast_shadow, shadow_only: i.shadow_only });
+            all.push(Ent { id: Some(*id), mesh: i.mesh, material: i.material, transform: i.transform, color: [1.0; 4], uv: [0.0, 0.0, 1.0, 1.0], is_static: i.is_static, cast_shadow: i.cast_shadow, shadow_only: i.shadow_only });
         }
         for b in self.blocks.values() {
             for (k, t) in b.transforms.iter().enumerate() {
-                all.push(Ent { id: None, mesh: b.mesh, material: b.material, transform: *t, color: b.colors.get(k).copied().unwrap_or([1.0; 4]), is_static: b.is_static, cast_shadow: b.cast_shadow, shadow_only: b.shadow_only });
+                all.push(Ent { id: None, mesh: b.mesh, material: b.material, transform: *t, color: b.colors.get(k).copied().unwrap_or([1.0; 4]), uv: b.uvs.get(k).copied().unwrap_or([0.0, 0.0, 1.0, 1.0]), is_static: b.is_static, cast_shadow: b.cast_shadow, shadow_only: b.shadow_only });
             }
         }
         all.sort_by_key(|i| (i.mesh, i.material));
@@ -1938,10 +2044,12 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         let list: Vec<&Ent> = all.iter().filter(|e| !is_hidden(e) && !e.shadow_only).collect();
         let mut data: Vec<[f32; 16]> = Vec::with_capacity(list.len());
         let mut cols: Vec<[f32; 4]> = Vec::with_capacity(list.len());
+        let mut uvw: Vec<[f32; 4]> = Vec::with_capacity(list.len());
         self.batches.clear();
         for (n, inst) in list.iter().enumerate() {
             data.push(inst.transform);
             cols.push(inst.color);
+            uvw.push(inst.uv);
             let n = n as u32;
             match self.batches.last_mut() {
                 Some((m, mat, r)) if *m == inst.mesh && *mat == inst.material => r.end = n + 1,
@@ -1953,9 +2061,17 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
             contents: nonempty(bytemuck::cast_slice(&cols)),
             usage: wgpu::BufferUsages::VERTEX,
         }));
+        self.instance_uvs = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("instance uv windows"),
+            contents: nonempty(bytemuck::cast_slice(&uvw)),
+            usage: wgpu::BufferUsages::VERTEX,
+        }));
         self.instance_transforms = data.clone();
         // world-space AABBs for shadow caster culling (same order as `data`)
         let mut bounds: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
+        // sky domes / backdrops (world AABB diagonal > import_max_caster_diagonal) never cast: casters are double-sided, so an enclosing dome
+        // (Asylum: 5 prims 1.6-8.8 km, all castShadow=true via kernel/gltf.js) occludes the sun for EVERY receiver -> sun factor 0 everywhere. 0 = off.
+        let max_diag = self.opts.shadows.import_max_caster_diagonal;
         let casters: Vec<shadow::Caster> = all
             .iter()
             .filter(|inst| inst.cast_shadow && (!cull_shadows || !is_hidden(inst)))
@@ -1977,6 +2093,7 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
                 }
                 shadow::Caster { mesh: inst.mesh, material: inst.material, transform: inst.transform, is_static: inst.is_static, lo: wlo, hi: whi }
             })
+            .filter(|c| max_diag <= 0.0 || c.lo.distance(c.hi) <= max_diag)
             .collect();
         self.casters = casters;
         self.instance_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -2050,6 +2167,42 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         });
     }
 
+    /// Draw sorted builtin batches `(k, batch)`; `k >= opaque_count` = blended pass (variant / blend pipeline). Bind groups 0/2 + vertex slots 1/4 must already be set.
+    fn draw_builtin(&self, pass: &mut wgpu::RenderPass<'_>, list: &[(usize, usize)], opaque_count: usize, stats: &mut [u32; 12], draws: &mut u32, last_pipe: &mut *const wgpu::RenderPipeline) {
+        for &(k, b) in list.iter() {
+let (mesh, material, range) = &self.batches[b];
+                    let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
+                        continue; // dangling ids: counted by caller via instance_count vs drawn
+                    };
+                    let builtin = match self.material_flags.get(material) {
+                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
+                            let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
+                            let dw = f.depth_write.unwrap_or(kind.is_none());
+                            &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
+                        }
+                        _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
+                    };
+                    let pipe = mat.pipeline.as_ref().unwrap_or(builtin);
+                    if !std::ptr::eq(pipe, *last_pipe) {
+                        stats[1] += 1;
+                        *last_pipe = pipe;
+                    }
+                    if range.end - range.start > 1 {
+                        stats[2] += 1;
+                    } else {
+                        stats[3] += 1;
+                    }
+                    stats[4] += range.end - range.start;
+                    pass.set_pipeline(pipe);
+                    pass.set_bind_group(1, &mat.bind, &[]);
+                    pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_vertex_buffer(2, m.uv1.slice(..));
+                pass.set_vertex_buffer(3, self.mesh_colors.get(&mesh).unwrap_or(&self.white_colors).slice(..));
+                    pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..m.index_count, 0, range.clone());
+                    *draws += 1;
+        }
+    }
     fn encode_forward(
         &mut self,
         device: &wgpu::Device,
@@ -2157,10 +2310,15 @@ v
             let mut draws = 0u32;
             let mut stats = [0u32; 12];
             let mut last_pipe: *const wgpu::RenderPipeline = &self.pipeline;
+            let mut late: Vec<(usize, usize)> = Vec::new();
+            let mut late_opaque_count = 0usize;
             if let Some(ib) = &self.instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
                 if let Some(ic) = &self.instance_colors {
                     pass.set_vertex_buffer(4, ic.slice(..));
+                }
+                if let Some(iu) = &self.instance_uvs {
+                    pass.set_vertex_buffer(5, iu.slice(..));
                 }
                 // opaque + MASK (alpha test in shader) first; BLEND batches after, far→near.
                 let eye3 = eye;
@@ -2183,39 +2341,13 @@ v
                 let mut order: Vec<(usize, usize)> = order.into_iter().enumerate().map(|(k, b)| (k, b)).collect();
                 let ro = |b: usize| self.material_flags.get(&self.batches[b].1).map_or(0, |f| f.render_order);
                 order.sort_by_key(|&(_, b)| ro(b));
-                for &(k, b) in order.iter() {
-                    let (mesh, material, range) = &self.batches[b];
-                    let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
-                        continue; // dangling ids: counted by caller via instance_count vs drawn
-                    };
-                    let builtin = match self.material_flags.get(material) {
-                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
-                            let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
-                            let dw = f.depth_write.unwrap_or(kind.is_none());
-                            &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
-                        }
-                        _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
-                    };
-                    let pipe = mat.pipeline.as_ref().unwrap_or(builtin);
-                    if !std::ptr::eq(pipe, last_pipe) {
-                        stats[1] += 1;
-                        last_pipe = pipe;
-                    }
-                    if range.end - range.start > 1 {
-                        stats[2] += 1;
-                    } else {
-                        stats[3] += 1;
-                    }
-                    stats[4] += range.end - range.start;
-                    pass.set_pipeline(pipe);
-                    pass.set_bind_group(1, &mat.bind, &[]);
-                    pass.set_vertex_buffer(0, m.vertices.slice(..));
-                pass.set_vertex_buffer(2, m.uv1.slice(..));
-                pass.set_vertex_buffer(3, self.mesh_colors.get(&mesh).unwrap_or(&self.white_colors).slice(..));
-                    pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..m.index_count, 0, range.clone());
-                    draws += 1;
-                }
+                // r17-fx: three draws ALL opaque first, then ALL transparent. The builtin path used to draw its blended batches before the TSL (three_material) pass,
+                // whose opaque geometry (depth-writing, drawn later) then overwrote every additive/alpha builtin batch behind it (torch flames, DS: 653 of 878 draws are TSL).
+                // -> opaque builtin now, blended builtin AFTER the three pass (still ro-sorted, far->near).
+                let (early, late_v): (Vec<(usize, usize)>, Vec<(usize, usize)>) = order.into_iter().partition(|&(k, _)| k < opaque_count);
+                self.draw_builtin(&mut pass, &early, opaque_count, &mut stats, &mut draws, &mut last_pipe);
+                late = late_v;
+                late_opaque_count = opaque_count;
             }
             if !three_list.is_empty() {
                 let inst_mesh: HashMap<u32, u32> = three_list.iter().filter_map(|(k, _, _)| self.instances.get(k).map(|i| (*k, i.mesh))).collect();
@@ -2229,6 +2361,21 @@ stats[9] = tgroups[1];
 stats[10] = tgroups[2];
 stats[11] = tgroups[3];
                 self.three_skipped = skipped;
+            }
+            if !late.is_empty() {
+                if let Some(ib) = &self.instance_buffer {
+                    // the three pass rebinds groups/slots: restore the builtin frame state
+                    pass.set_bind_group(0, &self.frame_bind, &[]);
+                    pass.set_bind_group(2, self.shadow.receiver_bind(), &[]);
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    if let Some(ic) = &self.instance_colors {
+                        pass.set_vertex_buffer(4, ic.slice(..));
+                    }
+                    if let Some(iu) = &self.instance_uvs {
+                        pass.set_vertex_buffer(5, iu.slice(..));
+                    }
+                    self.draw_builtin(&mut pass, &late, late_opaque_count, &mut stats, &mut draws, &mut last_pipe);
+                }
             }
             stats[0] = draws;
             self.last_pass_stats = stats;
@@ -2569,7 +2716,7 @@ pub fn load_scene_into(
         .flat_map(|p| {
             [
                 p.position.x, p.position.y, p.position.z, p.range, p.color.x, p.color.y,
-                p.color.z, p.intensity,
+                p.color.z, p.intensity, 2.0,
             ]
         })
         .collect();
@@ -2684,6 +2831,12 @@ fn forward_pipeline_variant(
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &wgpu::vertex_attr_array![9 => Float32x4],
                     }),
+                    // slot 5 = per-instance uv window (offsetU, offsetV, scaleU, scaleV), @location(10); external WGSL may ignore it.
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 16,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![10 => Float32x4],
+                    }),
                 ],
                 compilation_options: Default::default(),
             },
@@ -2697,6 +2850,14 @@ fn forward_pipeline_variant(
                     BlendKind::Additive => wgpu::BlendState {
                         color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
                         alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                    },
+                    BlendKind::Multiply => wgpu::BlendState {
+                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::Src, operation: wgpu::BlendOperation::Add },
+                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::SrcAlpha, operation: wgpu::BlendOperation::Add },
+                    },
+                    BlendKind::Premultiplied => wgpu::BlendState {
+                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
                     },
                     BlendKind::Subtractive => wgpu::BlendState {
                         color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::ReverseSubtract },

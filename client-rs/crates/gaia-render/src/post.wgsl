@@ -5,6 +5,9 @@ struct PostU {
     bloom: vec4<f32>,  // x radius, y threshold, z smoothWidth, w unused
     blur: vec4<f32>,   // xy = direction * invSize (target texel), z kernelRadius, w unused (blur passes only)
 ao: vec4<f32>,     // x GTAO composite on (0/1), y intensity
+// r18-tone: DS1 Fil_HDR_ColAdj shape (docs/DS-LIGHTING-SHADERS.md s8: 4x4 colour matrix on (rgb,1), LDR, after exposure/tone map, no gamma): x = on (0/1)
+grade_on: vec4<f32>,
+grade: mat4x4<f32>,   // column-major, applied to vec4(display-referred rgb, 1)
 };
 @group(0) @binding(0) var<uniform> pu: PostU;
 @group(0) @binding(1) var t0: texture_2d<f32>;
@@ -18,7 +21,17 @@ ao: vec4<f32>,     // x GTAO composite on (0/1), y intensity
 // lighting/post.js: aoTerm = mix(1, mix(1, rawAo, intensity), weight); colour * aoTerm happens BEFORE auto-exposure / bloom / tone map
 fn ao_term(uv: vec2<f32>) -> f32 {
 if (pu.ao.x < 0.5) { return 1.0; }
-let a = textureSampleLevel(t6, samp, uv, 0.0).rg;
+// GTAO's 5x5 magic-square noise tile (gtao.wgsl) repeats every 5 AO texels = 5/resolutionScale screen px -> fixed-period fine vertical/horizontal stripes
+// on dark AO-heavy walls (measured 7.2/14.4 px period in the 22-pascal shot = 5 texels x 2 (half-res) x 1.44 (dpr)). three's GTAO relies on a denoise pass; a
+// 5x5 box over AO texels averages exactly one noise period -> stripes cancel. Taps sit on texel offsets (bilinear-smooth), not edge aware: AO is soft anyway.
+let ad = vec2<f32>(textureDimensions(t6));
+var acc = vec2<f32>(0.0);
+for (var j = -2; j <= 2; j = j + 1) {
+    for (var i = -2; i <= 2; i = i + 1) {
+        acc = acc + textureSampleLevel(t6, samp, uv + vec2<f32>(f32(i), f32(j)) / ad, 0.0).rg;
+    }
+}
+let a = acc / 25.0;
 return mix(1.0, mix(1.0, a.r, pu.ao.y), a.g);
 }
 struct VO { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
@@ -114,6 +127,8 @@ fn tm_neutral(c: vec3<f32>, e: f32) -> vec3<f32> {
     let g = 1.0 - 1.0 / (desat * (peak - new_peak) + 1.0);
     return mix(x, vec3<f32>(new_peak), g);
 }
+fn lin_to_srgb(x: f32) -> f32 { let v = max(x, 0.0); return select(1.055 * pow(v, 1.0 / 2.4) - 0.055, v * 12.92, v <= 0.0031308); }
+fn srgb_to_lin(x: f32) -> f32 { return select(pow((x + 0.055) / 1.055, 2.4), x / 12.92, x <= 0.04045); }
 fn tone_map(c: vec3<f32>, mode: u32, e: f32) -> vec3<f32> {
     switch (mode) {
         case 1u: { return tm_linear(c, e); }
@@ -139,7 +154,14 @@ fn fs_resolve(in: VO) -> @location(0) vec4<f32> {
         sum = sum + lerp_bloom(0.2, r) * textureSampleLevel(t5, samp, in.uv, 0.0).rgb;
         c = c + sum * pu.tone.w;
     }
-    return vec4<f32>(tone_map(c, u32(pu.tone.y + 0.5), pu.tone.x), 1.0);
+    var o = tone_map(c, u32(pu.tone.y + 0.5), pu.tone.x);
+    if (pu.grade_on.x > 0.5) {
+        // the colour matrix is DISPLAY-referred (DS1 arithmetic has no gamma, docs s7): decode the sRGB the hardware will re-encode, grade, encode back
+        let d = clamp(vec3<f32>(lin_to_srgb(o.r), lin_to_srgb(o.g), lin_to_srgb(o.b)), vec3<f32>(0.0), vec3<f32>(1.0));
+        let g = clamp((pu.grade * vec4<f32>(d, 1.0)).rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+        o = vec3<f32>(srgb_to_lin(g.r), srgb_to_lin(g.g), srgb_to_lin(g.b));
+    }
+    return vec4<f32>(o, 1.0);
 }
 
 // r10 eye adaptation meter: 8x8 cells, 8x8 taps each, mean log2(luma) of the RAW HDR scene (pre ae multiplier, like three autoexposure.js stage 0)

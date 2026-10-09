@@ -4,6 +4,7 @@
 //     attributes[{name,type,location}], varyings[{name,type}], vertexEntry:'main', fragmentEntry:'main' }
 // that a non-three backend feeds to create_shader_material (RENDER-API.md §6). No three import here: the caller
 // passes the (possibly engine-injected) THREE namespace (`three/webgpu`) → works for the ctx.three case too.
+import { observeLights } from './light-registry.js';
 const STAGES = { 1: 'vertex', 2: 'fragment', 4: 'compute' };
 const stageOf = (v) => STAGES[v] ?? ([v & 1 ? 'vertex' : null, v & 2 ? 'fragment' : null].filter(Boolean).join('|') || 'none');
 
@@ -27,8 +28,8 @@ if (gate) b._gate = gate;
 b.scene = sc; b.material = material; b.camera = cam; b.context.material = material;
 // (b) real lights: three's own LightsNode over the scene's Directional/Point lights (shadows not exported) → lit node materials shade.
 // Light uniform VALUES come from three's light nodes per frame (live.update) — same objects the adapter maps to setSun/addPointLight.
-const lights = []; sc.traverse?.((o) => { if (o.isLight && (o.isDirectionalLight || o.isPointLight || o.isAmbientLight || o.isHemisphereLight)) lights.push(o); });
-b.lightsNode = lights.length ? sharedLightsNode(r, sc, lights) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
+const { live: lights, all: bakedLights } = observeLights(sc); // r16-perf: baked set = grow-only registry (light-registry.js), NOT the current scene lights -> torch-pool churn never changes the set
+b.lightsNode = bakedLights.length ? sharedLightsNode(r, sc, bakedLights, THREE) : null; b.environmentNode = null; b.fogNode = null; b.clippingContext = null;
 // r10-shadow-3: the sun's shadow = the CORE's cascaded shadow map (three's own light math × a shadow factor from three's light.shadow.shadowNode hook).
 // The hook node calls `gaia_sun_shadow(...)`; the wgpu core appends its own forward.wgsl CSM receiver to such packages (three_material.rs). three's ShadowNode
 // (own depth texture/matrices) is NOT exported — the core owns the cascades. Receivers only (object.receiveShadow, three semantics).
@@ -92,18 +93,35 @@ if (s.token !== token) { s.token = token; s.frame.update(); s.frame.renderId++; 
 if (time != null) s.frame.time = time;
 return s;
 }
+// r16-perf: three's LightsNode emits every light's BRDF straight-line (no branch) -> DS's 25-PointLight torch pool costs 25x per fragment although ~all have intensity 0 / are out of range. Wrap each Point/Spot light's direct() in a TSL If (uniform colour > 0, then attenuated colour > 0): identical result (a zero lightColor adds nothing), dead lights cost one uniform compare. ?wgpuLightCull=0 / lightCull.on=false = A/B off.
+export const lightCull = { on: !(typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuLightCull') === '0') };
+function cullLights(THREE, node) {
+const proto = node && Object.getPrototypeOf(node), If = (THREE?.TSL ?? THREE)?.If;
+// patched on the PROTOTYPE: a material with its own light nodes (lightMap) gets a fresh LightsNode from renderer.lighting.createNode, bypassing any per-instance patch
+if (!proto || !If || proto.__lightCull || typeof proto.setupDirectLight !== 'function') return node;
+const orig = proto.setupDirectLight; proto.__lightCull = true; let seen = null;
+const lit = (c) => c.x.add(c.y).add(c.z).greaterThan(0);
+proto.setupDirectLight = function (builder, lightNode, data) {
+const l = lightNode?.light;
+// three caches flow-coded nodes (lightingModel.direct()'s accumulator inits `directDiffuse = 0`, normalView, positionViewDirection ...) and re-emits their code per If-block -> the FIRST direct() call must run in the OUTER scope (shared nodes live there; a later block re-zeroing the accumulator wiped earlier lights = measured bug in the WIP). Only subsequent lights are branched. Shadowed lights stay straight-line (shadow-map sampling needs uniform control flow).
+(seen ??= new WeakSet());
+if (!lightCull.on || !(l?.isPointLight || l?.isSpotLight) || l.castShadow || !lightNode.colorNode?.x || !data?.lightColor?.x || !seen.has(builder)) { seen.add(builder); return orig.call(this, builder, lightNode, data); }
+If(lit(lightNode.colorNode), () => { If(lit(data.lightColor), () => { orig.call(this, builder, lightNode, data); }); }); // outer = uniform test (attenuation maths emitted inside it), inner = out-of-range test
+};
+return node;
+}
 const lightsCache = new WeakMap(); // scene -> { sig, node }
-function sharedLightsNode(r, sc, lights) {
-if (!structCache.share) return r.lighting.createNode(lights);
+function sharedLightsNode(r, sc, lights, THREE = null) {
+if (!structCache.share) return cullLights(THREE, r.lighting.createNode(lights));
 const sig = lights.map((l) => l.uuid).join(',');
 const c = lightsCache.get(sc);
 if (c && c.sig === sig && c.r === r) { structCache.lightsReused++; return c.node; }
-const node = r.lighting.createNode(lights); lightsCache.set(sc, { sig, node, r }); structCache.lightsBuilt++; return node;
+const node = cullLights(THREE, r.lighting.createNode(lights)); lightsCache.set(sc, { sig, node, r }); structCache.lightsBuilt++; return node;
 }
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
 function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null, pre = [] }) {
-const own = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); own.renderer = r; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
+const own = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); own.renderer = r; const lightObjs = [...new Set(updateNodes.filter((n) => n.light?.isLight).map((n) => n.light))]; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
 const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial.has(key) ? initial.get(key) : toPlain(get())])); // initial = the package's own shipped values (rebound builder-singleton uniforms carry a stale value until the first update) // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
@@ -116,6 +134,10 @@ const frame = sh ? sh.frame : own;
 if (!sh) { frame.update(); if (time != null) frame.time = time; frame.renderId++; }
 frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
 for (const f of pre) f();
+// r15b: three's renderer drops invisible lights (Lighting.getNode -> render list); the exported LightsNode holds ALL lights, so an invisible light (or one under an invisible ancestor) must read as intensity 0 while its light node updates, else it keeps shading.
+const hid = []; for (const l of lightObjs) { let v = true, top = l; for (let p = l; p; p = p.parent) { top = p; if (p.visible === false) { v = false; break; } } if (v && scene && top !== scene) v = false; /* r16-perf: detached from the frame's scene = not in three's render list either */ if (!v && l.intensity !== 0) hid.push([l, l.intensity]); }
+for (const [l] of hid) l.intensity = 0;
+try {
 if (sh) {
 const done = sh.done, T = sh.T;
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
@@ -124,6 +146,7 @@ for (const n of updateNodes) { if (done.has(n)) { structCache.updSkipped++; cont
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
 for (const n of updateNodes) frame.updateNode(n);
 }
+} finally { for (const [l, i] of hid) l.intensity = i; }
 const changed = [];
 for (const { key, get } of liveUniforms) {
 const raw = get();

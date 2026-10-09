@@ -29,7 +29,7 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
-    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic), w bitfield: 1 = sun shadow NOT sampled (three receiveShadow:false), 2 = probe GI NOT sampled (non-node material: hemi only)
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic), w bitfield: 4 = scene fog NOT applied (three material.fog=false), 1 = sun shadow NOT sampled (three receiveShadow:false), 2 = probe GI NOT sampled (non-node material: hemi only), 4 = scene fog NOT applied, 8 = extra directional lights (xdirs) apply (character material)
     maps0: vec4<f32>,        // x has array base, y normal scale, z has normal map, w has roughness map
     maps1: vec4<f32>,        // x has metalness map, y has emissive map, z has AO map, w side (0 double, 1 front only, 2 back only)
 };
@@ -232,7 +232,7 @@ return vec4<f32>(result, coverage);
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>,
            @location(3) m0: vec4<f32>, @location(4) m1: vec4<f32>, @location(5) m2: vec4<f32>, @location(6) m3: vec4<f32>,
-           @location(7) uv1: vec2<f32>, @location(8) color: vec4<f32>, @location(9) icolor: vec4<f32>) -> VsOut {
+           @location(7) uv1: vec2<f32>, @location(8) color: vec4<f32>, @location(9) icolor: vec4<f32>, @location(10) iuv: vec4<f32>) -> VsOut {
     // per-instance model matrix (instance-step vertex buffer: no storage buffers needed)
     let model = mat4x4<f32>(m0, m1, m2, m3);
     let world = model * vec4<f32>(pos, 1.0);
@@ -241,7 +241,7 @@ fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @locatio
     o.world = world.xyz;
     // uniform-scale assumption: normal via model 3x3 (non-uniform scale = NOTES open item)
     o.normal = (model * vec4<f32>(normal, 0.0)).xyz;
-    o.uv = uv;
+    o.uv = uv * iuv.zw + iuv.xy; // r19-pcol: per-instance uv window (default 0,0,1,1); uv1 (lightmap / array layer) untouched
     o.uv1 = uv1;
     o.color = color * icolor;
     return o;
@@ -320,7 +320,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     if (material.flags.x > 0.5) {
-        let cu = apply_fog(base.rgb, in.world);
+        let cu = select(apply_fog(base.rgb, in.world), base.rgb, (u32(material.flags.w + 0.5) & 4u) != 0u); // r18: bit 4 = material.fog=false
         if (material.flags.z > 0.5) { // unlit but tone-mapped (three MeshBasicMaterial toneMapped:true): exposure + Reinhard, no lighting
             if (frame.post.x > 0.5) { return vec4<f32>(cu, base.a); }
         let eu = cu * frame.ambient.w;
@@ -369,7 +369,8 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
         }
         color = color + brdf(n, v, d / dist, base.rgb, metallic, rough) * pl.color.rgb * atten;
     }
-    for (var i = 0u; i < min(frame.xdir_count.x, MAX_EXTRA_DIRS); i = i + 1u) { // lane dynlight: extra directional lights (DS1 character LightBank dirs 1,2), unshadowed
+    // extra directionals light ONLY materials flagged chr_light (flags.w bit 8): DS1 chr LightBank is character-only
+    for (var i = 0u; i < select(0u, min(frame.xdir_count.x, MAX_EXTRA_DIRS), (u32(material.flags.w + 0.5) & 8u) != 0u); i = i + 1u) { // lane dynlight: extra directional lights (DS1 character LightBank dirs 1,2), unshadowed
         let xl = frame.xdirs[i];
         color = color + brdf(n, v, -xl.dir.xyz, base.rgb, metallic, rough) * xl.color.rgb;
     }
@@ -390,7 +391,7 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
     color = color + irr * base.rgb * (1.0 - metallic) * ao + em;
     // IBL diffuse (scene.environment): SH9 irradiance x albedo x (1 - metallic). Specular IBL not implemented.
     if (frame.env.x > 0.5) { color = color + sh_irradiance(n) * frame.env.y * base.rgb * (1.0 - metallic) * ao; }
-    color = apply_fog(color, in.world);
+    color = select(apply_fog(color, in.world), color, (u32(material.flags.w + 0.5) & 4u) != 0u); // r18: bit 4 = material.fog=false
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     if (frame.post.x > 0.5) { return vec4<f32>(color, base.a); }
     let e = color * frame.ambient.w;

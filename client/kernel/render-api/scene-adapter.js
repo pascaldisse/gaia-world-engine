@@ -9,11 +9,12 @@
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
 import { materialToParams, materialSig, customNodeMaterial } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
+import { observeLights } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720 } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -70,7 +71,7 @@ function instAttrRow(me, i) {
   return out;
 }
 const instAttrSig = (me) => { const pkg = me.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; let s = ''; if (pkg) for (const a of pkg.attributes) if (a.instanced) s += `${pkg.attributeSources?.[a.key]?.version ?? ''},`; return s; };
-let epoch = 0, cameraSig = '';
+let epoch = 0, cameraSig = ''; let lightSetSig = null, lightGen = 0, lightGenSfx = '';
 // r6: HemisphereLight/AmbientLight accumulate per frame into one irradiance pair (sum = three: every light node `+=` into context.irradiance); scene.background -> setBackground
 const amb = { sky: [0, 0, 0], ground: [0, 0, 0], n: 0, sig: null, bgSig: null };
 // every backend-visible change is attributed (stats.updatedBy[reason]) — names the per-frame dirty source on a live scene; idle frame = no increments
@@ -164,8 +165,12 @@ const hashStr = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) 
 // r10-shadow-4: three semantics are per OBJECT (object.receiveShadow) but a TSL package is per MATERIAL → a custom-TSL material used by receivers gets its own export (variant key = Object.create(material), reads through live); non-receivers keep the base entry.
 const recvVariants = new WeakMap();
 const recvAny = new WeakSet();
+// lampas L-wgpu-tex: object.userData.dsChrLight (character mesh) -> a per-material VARIANT whose userData reads through live + dsChrLight:true (core flag is per MATERIAL; DS1 chr LightBank = character-only extra directional lights).
+const chrVariants = new WeakMap();
+function chrKey(src) { let v = chrVariants.get(src); if (!v) { v = Object.create(src); Object.defineProperty(v, '__gwSrc', { value: src }); v.userData = Object.create(src.userData ?? {}); v.userData.dsChrLight = true; chrVariants.set(src, v); } return v; }
 function matKey(m0, o) {
-const src = m0?.__gwSrc ?? m0;
+let src = m0?.__gwSrc ?? m0;
+if (o?.userData?.dsChrLight && src && !src.userData?.dsChrLight && !(src.isNodeMaterial && customNodeMaterial(src))) return chrKey(src);
 if (!useRecvVariants || !o || !o.receiveShadow || !exportNodeMaterial || !src?.isNodeMaterial || !customNodeMaterial(src)) return src;
 let v = recvVariants.get(src); if (!v) { v = Object.create(src); Object.defineProperty(v, '__gwSrc', { value: src }); recvVariants.set(src, v); }
 return v;
@@ -177,9 +182,11 @@ const srcM = m0?.__gwSrc ?? m0; // r10-shadow-5 latch (see below): flips BEFORE 
 if (!useRecvVariants && o?.receiveShadow && exportNodeMaterial && srcM?.isNodeMaterial && !recvAny.has(srcM)) { recvAny.add(srcM); if (e) e.epoch = -1; }
 if (e && e.epoch === epoch) return e;                       // once per material per frame (was: once per MESH per frame)
 // r10-shadow-5: a TSL package is per MATERIAL, three's receiveShadow per OBJECT. Package = receiver as soon as ANY user object receives (one-way latch, <=1 re-export per material) -- NOT the first user's flag (road: 13 receivers / 85 non-receivers, first exporter a non-receiver -> never received). Same 'mixed = receives' rule as the core's per-material flag (r8).
-const anyRecv = recvAny.has(srcM), sigSfx = anyRecv ? '|rcv' : '';
-const sig = materialSig(m, { exportNodeMaterial }) + sigSfx;          // cheap string, no params/texture work
-if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); return e; } // idle frame: 0 texture work
+const anyRecv = recvAny.has(srcM);
+const sig0 = materialSig(m, { exportNodeMaterial });
+const sigSfx = (anyRecv ? '|rcv' : '') + (sig0.startsWith('wgsl:') ? lightGenSfx : ''); // r15b: a TSL package bakes the scene's light SET at export (LightsNode) -> light add/remove re-exports it (visibility/intensity ride the live uniforms)
+const sig = sig0 + sigSfx;          // cheap string, no params/texture work
+if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); if (e.conv?.unsupported) for (const u of e.conv.unsupported) stats.unsupported.add(u); return e; } // idle frame: 0 texture work
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
 if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
 sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
@@ -189,6 +196,7 @@ sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, 
  if (conv.package) { const k = conv.package.vertex.length + ':' + conv.package.fragment.length + ':' + hashStr(conv.package.vertex + conv.package.fragment); const r = x.keys.get(k) ?? { n: 0, ms: 0, name: m.name || m.type }; r.n++; r.ms += dt; x.keys.set(k, r); }
  if (x.log.length < 40) x.log.push({ why, ms: +dt.toFixed(1), name: m.name || m.type, ver: m.version }); }
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
+if (conv.unsupported) for (const u of conv.unsupported) stats.unsupported.add(u); // r13-bc: refused/unreadable textures (material-map), recorded not silent
 if (!e) {
 const id = createMat(conv, m);
 e = { id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.degraded, first: o ? { name: o.name, recv: !!o.receiveShadow } : null };
@@ -204,6 +212,7 @@ backend.destroyMaterial(old);
 e.sig = conv.sig + sigSfx; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
 }
 if (conv.degraded) stats.degraded.add(conv.degraded);
+if (backend.drainUnsupported) for (const u of backend.drainUnsupported()) stats.unsupported.add(u); // r13-bc: backend-side texture upload refusals
 return e;
 }
 function createMat(conv, m) {
@@ -225,8 +234,10 @@ let shadowMask = null;
 const isShadowOnly = (o) => !!o.castShadow && !!frameCamera?.layers && !!o.layers && !o.layers.test(frameCamera.layers) && (shadowMask === null || (o.layers.mask & shadowMask) !== 0);
 // r10-shadow-11 DEBUG bisect (?wgpuDbgNoAlphaCast=1): objects whose material has alphaTest>0 do NOT cast -> isolates 'alpha-tested lattice casts as solid' (core casts package materials opaque)
 const dbgCast = (o) => !!o.castShadow && !dbgNoCast && !(dbgNoAlphaCast && (Array.isArray(o.material) ? o.material : [o.material]).some((m) => m?.alphaTest > 0));
-const nodeFlags = (o, vis) => ({ castShadow: dbgCast(o), receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null) });
-const flagBits = (o, vis) => (dbgCast(o) ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0); // + renderOrder compared separately (no string alloc)
+// r18-perf: static shadow-cache hints (three semantics): userData.static boolean = explicit; matrixAutoUpdate===false = hint (starts static, a move demotes it). Everything else = backend auto (static only once settled).
+const staticFlags = (o) => (typeof o.userData?.static === 'boolean' ? { static: o.userData.static } : o.matrixAutoUpdate === false ? { staticHint: true } : null);
+const nodeFlags = (o, vis) => ({ castShadow: dbgCast(o), receiveShadow: !!o.receiveShadow, visible: vis, renderOrder: o.renderOrder ?? 0, ...(isShadowOnly(o) ? { shadowOnly: true } : null), ...staticFlags(o) });
+const flagBits = (o, vis) => (dbgCast(o) ? 1 : 0) | (o.receiveShadow ? 2 : 0) | (vis ? 4 : 0) | (isShadowOnly(o) ? 8 : 0) | (typeof o.userData?.static === 'boolean' ? (o.userData.static ? 16 : 32) : 0); // + renderOrder compared separately (no string alloc)
 
 function buildParts(o, rec, vis) {
 // returns false when nothing renderable
@@ -250,7 +261,7 @@ const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: mk, flags
 if (o.isInstancedMesh) {
 // native instance blocks carry matrix + colour only; a TSL material reading per-INSTANCE custom attributes takes the expanded path (rows per instance)
 const hasInstAttrs = (me) => { const pkg = me?.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; return !!pkg?.attributes?.some((a) => a.instanced); };
-if (nativeInst() && !hasInstAttrs(me)) { part.node = backend.createInstanced(gp.id, me.id, instanceMats(o), o.count, { ...flags, matrix: Array.from(o.matrixWorld.elements), ...instColors(o) }); part.instV = o.instanceMatrix.version; part.instC = o.instanceColor?.version ?? -1; part.instCount = o.count; }
+if (nativeInst() && !hasInstAttrs(me)) { part.pk = {}; const pkx = packInst(o, part.pk, isPremult(m)); part.node = backend.createInstanced(gp.id, me.id, instanceMats(o), o.count, { ...flags, matrix: Array.from(o.matrixWorld.elements), ...(pkx.colors ? { colors: pkx.colors, colorStride: 4 } : {}) }); if (pkx.uvs) { if (backend.setInstanceUvs) { backend.setInstanceUvs(part.node, pkx.uvs); part.hasUv = true; } else stats.unsupported.add('instanceUv:no-backend-setInstanceUvs'); } part.instV = o.instanceMatrix.version; part.instC = instVers(o); part.instCount = o.count; }
 else { stats.degraded.add(nativeInst() ? 'instanced-custom-attrs:expanded-per-instance' : 'createInstanced-missing:expanded-per-instance'); part.expanded = []; for (let i = 0; i < o.count; i++) part.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...flags, instAttrs: instAttrRow(me, i) })); part.instV = o.instanceMatrix.version; part.instCount = o.count; part.instSig = instAttrSig(me); }
 } else part.node = backend.createInstance(gp.id, me.id, Array.from(o.matrixWorld.elements), flags);
 rec.parts.push(part); stats.created++;
@@ -258,8 +269,43 @@ rec.parts.push(part); stats.created++;
 return rec.parts.length > 0;
 }
 const instanceMats = (o) => o.instanceMatrix.array.subarray(0, o.count * 16);
-// instanceColor (rgb, itemSize 3) rides the same native block; absent = white
-const instColors = (o) => (o.instanceColor ? { colors: o.instanceColor.array.subarray(0, o.count * o.instanceColor.itemSize), colorStride: o.instanceColor.itemSize } : {});
+// ---- r19-pcol per-instance render attributes of an InstancedMesh (all ride the ONE native block; conventions, generic, no game names):
+//   instanceColor (setColorAt)           rgb itemSize 3 = colour multiply; itemSize 4 = rgba (alpha = per-instance opacity)
+//   geometry attribute 'instanceOpacity' itemSize 1 InstancedBufferAttribute = per-instance opacity, MULTIPLIED with instanceColor.a
+//   geometry attribute 'instanceUv'      itemSize 4 InstancedBufferAttribute = (offsetU, offsetV, scaleU, scaleV): uv' = uv*scale + offset (flipbook / atlas cell)
+// colour+opacity pack into ONE rgba Float32Array (core slot @location(9), multiplies base colour rgb+alpha); uv is passed as-is (core slot @location(10)).
+// Material premultiplied blending (Custom One/OneMinusSrcAlpha): rgb is pre-scaled by the pack alpha so opacity fades the whole premultiplied sample.
+// Partial updates: each attribute's own version + updateRanges (r180 addUpdateRange) -> only the touched instances are re-packed (ranges consumed + cleared here); no ranges = full re-pack.
+const INST_OPACITY = 'instanceOpacity', INST_UV = 'instanceUv';
+const isPremult = (m) => m?.blending === 5 && m.blendSrc === 201 && m.blendDst === 205;
+const instVers = (o) => { const a = o.geometry?.attributes; return `${o.instanceColor?.version ?? -1}:${a?.[INST_OPACITY]?.version ?? -1}:${a?.[INST_UV]?.version ?? -1}:${o.count}`; };
+function instRanges(at, n, out) { // at.updateRanges (element units) -> instance index ranges merged into out ([s,e) pairs); false = unknown/full
+  const rs = at.updateRanges; if (!rs?.length) return false;
+  for (const r of rs) out.push(Math.max(0, Math.floor(r.start / at.itemSize)), Math.min(n, Math.ceil((r.start + r.count) / at.itemSize)));
+  return true;
+}
+function packInst(o, st, premult) {
+  const n = o.count, ic = o.instanceColor, op = o.geometry?.attributes?.[INST_OPACITY], uv = o.geometry?.attributes?.[INST_UV];
+  let colors = null, uvs = null;
+  if (ic || op) {
+    const need = !st.col || st.col.length !== n * 4 || st.premult !== premult || st.hasIc !== !!ic || st.hasOp !== !!op;
+    const ranges = []; let full = need;
+    if (!full && ic && ic.version !== st.vIc) full = !instRanges(ic, n, ranges);
+    if (!full && op && op.version !== st.vOp) full = !instRanges(op, n, ranges);
+    if (full) { st.col = new Float32Array(n * 4); ranges.length = 0; ranges.push(0, n); }
+    const col = st.col, ia = ic?.array, is = ic?.itemSize ?? 0, oa = op?.array, os = op?.itemSize ?? 1;
+    for (let r = 0; r < ranges.length; r += 2) for (let i = ranges[r]; i < ranges[r + 1]; i++) {
+      let a = (is >= 4 ? ia[i * is + 3] : 1) * (oa ? oa[i * os] : 1);
+      const k = premult ? a : 1, j = i * 4;
+      col[j] = (ia ? ia[i * is] : 1) * k; col[j + 1] = (ia ? ia[i * is + 1] : 1) * k; col[j + 2] = (ia ? ia[i * is + 2] : 1) * k; col[j + 3] = a;
+    }
+    ic?.clearUpdateRanges?.(); op?.clearUpdateRanges?.();
+    st.premult = premult; st.hasIc = !!ic; st.hasOp = !!op; st.vIc = ic?.version; st.vOp = op?.version; colors = col;
+  }
+  if (uv && uv.itemSize === 4 && uv.array instanceof Float32Array) { uvs = uv.array.subarray(0, n * 4); uv.clearUpdateRanges?.(); }
+  return { colors, colorStride: 4, uvs };
+}
+const instColors = (o, st, premult) => { const p = packInst(o, st, premult); return p.colors ? { colors: p.colors, colorStride: 4 } : {}; };
 function instanceWorld(o, i) { // instanceMatrix[i] * matrixWorld (column-major 4x4)
 const a = o.matrixWorld.elements, b = o.instanceMatrix.array, off = i * 16, out = new Array(16);
 for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[off + c * 4 + k]; out[c * 4 + r] = s; }
@@ -395,6 +441,98 @@ function destroySkinned(r) { mats.get(r.mat)?.users.delete(r); backend.removeNod
 // ---- BatchedMesh: one native instance block per geometryIndex (shared material); per-geometry vertex/index slice uploaded ONCE (geometryInfo is append-only),
 // matrices/colors/visibility re-packed only when matricesTexture/colorsTexture version, visibility bits or the instance table changed.
 const batchRecs = new Map();
+// ---- r18: THREE.Sprite (Object3D, NOT isMesh; used by hit bursts / glow cards). Translated to ONE shared unit quad instance whose matrix is the camera-facing billboard (three sprite shader: scale from matrixWorld, material.rotation, center, sizeAttenuation=false => scale *= view depth under perspective) ----
+const spriteRecs = new Map();
+let spriteMesh = 0;
+const SPRITE_M = new Float64Array(16);
+function spriteQuad() { return spriteMesh ||= backend.createMesh({ positions: Float32Array.of(-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0), normals: Float32Array.of(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1), uvs: Float32Array.of(0, 0, 1, 0, 1, 1, 0, 1), indices: Uint32Array.of(0, 1, 2, 0, 2, 3) }); }
+function spriteMatrix(o, out) {
+ const cam = frameCamera?.matrixWorld?.elements; if (!cam) return false;
+ const e = o.matrixWorld.elements, m = o.material;
+ let sx = Math.hypot(e[0], e[1], e[2]), sy = Math.hypot(e[4], e[5], e[6]);
+ const px = e[12], py = e[13], pz = e[14];
+ const rl = Math.hypot(cam[0], cam[1], cam[2]) || 1, ul = Math.hypot(cam[4], cam[5], cam[6]) || 1, bl = Math.hypot(cam[8], cam[9], cam[10]) || 1;
+ const R = [cam[0] / rl, cam[1] / rl, cam[2] / rl], U = [cam[4] / ul, cam[5] / ul, cam[6] / ul], B = [cam[8] / bl, cam[9] / bl, cam[10] / bl];
+ const persp = frameCamera.isPerspectiveCamera ?? (frameCamera.projectionMatrix?.elements[11] === -1);
+ if (m?.sizeAttenuation === false && persp) { const depth = (px - cam[12]) * -B[0] + (py - cam[13]) * -B[1] + (pz - cam[14]) * -B[2]; sx *= depth; sy *= depth; } // three: scale *= -mvPosition.z
+ const rot = m?.rotation ?? 0, c = Math.cos(rot), s = Math.sin(rot);
+ const c0 = [sx * (c * R[0] + s * U[0]), sx * (c * R[1] + s * U[1]), sx * (c * R[2] + s * U[2])];
+ const c1 = [sy * (-s * R[0] + c * U[0]), sy * (-s * R[1] + c * U[1]), sy * (-s * R[2] + c * U[2])];
+ const cx = (o.center?.x ?? 0.5) - 0.5, cy = (o.center?.y ?? 0.5) - 0.5; // quad spans [-.5,.5]; three offsets by (center - .5)
+ out.set([c0[0], c0[1], c0[2], 0, c1[0], c1[1], c1[2], 0, B[0], B[1], B[2], 0, px - cx * c0[0] - cy * c1[0], py - cx * c0[1] - cy * c1[1], pz - cx * c0[2] - cy * c1[2], 1]);
+ return true;
+}
+function syncSprite(o, vis) {
+ if (!o.material) return;
+ let rec = spriteRecs.get(o);
+ const me = ensureMaterial(o.material, o);
+ if (!spriteMatrix(o, SPRITE_M)) return;
+ const mat = Array.from(SPRITE_M), ro = o.renderOrder ?? 0, v = vis && o.material.visible !== false;
+ if (!rec) {
+  rec = { mat: o.material, matId: me.id, vis: v, ro, m: SPRITE_M.slice(), node: backend.createInstance(spriteQuad(), me.id, mat, { castShadow: false, receiveShadow: false, visible: v, renderOrder: ro, static: false }) };
+  me.users.add(rec); spriteRecs.set(o, rec); stats.created++; stats.sprites = (stats.sprites ?? 0) + 1; return;
+ }
+ if (rec.mat !== o.material) { mats.get(rec.mat)?.users.delete(rec); rec.mat = o.material; me.users.add(rec); }
+ const u = {};
+ if (me.id !== rec.matId) { u.material = me.id; rec.matId = me.id; }
+ if (!eqArr(rec.m, SPRITE_M)) { u.mat4 = mat; rec.m.set(SPRITE_M); }
+ if (v !== rec.vis) { u.visible = v; rec.vis = v; }
+ if (ro !== rec.ro) { u.renderOrder = ro; rec.ro = ro; }
+ for (const _ in u) { backend.updateNode(rec.node, u); upd('sprite'); break; }
+}
+function destroySprite(rec) { backend.removeNode(rec.node); mats.get(rec.mat)?.users.delete(rec); stats.removed++; }
+// ---- r19-pcol: THREE.Points + PointsMaterial. ONE native instance block of the shared unit quad, one camera-facing billboard matrix per point (same basis as Sprite).
+// size: PointsMaterial.size x optional per-point geometry attribute 'size' (itemSize 1). sizeAttenuation:true => world size = size / proj[5] (= size*tan(fov/2): three WebGL gl_PointSize=size*(H/2)/depth);
+//   false => constant pixels (size px at `pointsViewportHeight`, default 720 = backend render height). Ortho: size px-equivalent either way. NOTE the WebGL point-size contract, not WebGPU 1px points.
+// colour: material.vertexColors + geometry 'color' (itemSize 3|4) -> per-instance rgba; 'instanceOpacity' (itemSize 1) -> alpha; PointsMaterial.map = sprite texture (full quad uv); blending/depthWrite/depthTest = material flags.
+// Rebuilt only when camera, object matrix, position/size/color/opacity versions or material size change; drawRange honoured.
+const pointRecs = new Map();
+const PT_IDENT = typeof Float32Array !== 'undefined' ? Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) : null;
+function syncPoints(o, vis) {
+  const g = o.geometry, pos = g?.attributes?.position, m = Array.isArray(o.material) ? o.material[0] : o.material;
+  if (!pos || !m || !frameCamera?.matrixWorld) return;
+  const cam = frameCamera.matrixWorld.elements, proj = frameCamera.projectionMatrix?.elements ?? [], mw = o.matrixWorld.elements;
+  const dr = g.drawRange ?? { start: 0, count: Infinity }, st = Math.max(0, dr.start ?? 0), n = Math.max(0, Math.min(pos.count - st, dr.count ?? Infinity));
+  const sa = g.attributes.size, ca = m.vertexColors ? g.attributes.color : null, oa = g.attributes[INST_OPACITY];
+  const me = ensureMaterial(m, o), v = vis && m.visible !== false, ro = o.renderOrder ?? 0, premult = isPremult(m);
+  const key = `${pos.version}:${sa?.version ?? ''}:${ca?.version ?? ''}:${oa?.version ?? ''}:${st}:${n}:${m.size}:${+(m.sizeAttenuation !== false)}:${proj[5]}:${proj[11]}:${+premult}`;
+  let rec = pointRecs.get(o);
+  const stale = !rec || rec.key !== key || !eqArr(rec.cam, cam) || !eqArr(rec.mw, mw);
+  if (stale && n > 0) {
+    const mats = rec && rec.mats.length === n * 16 ? rec.mats : new Float32Array(n * 16);
+    const cols = ca || oa ? (rec && rec.cols?.length === n * 4 ? rec.cols : new Float32Array(n * 4)) : null;
+    const rl = Math.hypot(cam[0], cam[1], cam[2]) || 1, ul = Math.hypot(cam[4], cam[5], cam[6]) || 1, bl = Math.hypot(cam[8], cam[9], cam[10]) || 1;
+    const R0 = cam[0] / rl, R1 = cam[1] / rl, R2 = cam[2] / rl, U0 = cam[4] / ul, U1 = cam[5] / ul, U2 = cam[6] / ul, B0 = cam[8] / bl, B1 = cam[9] / bl, B2 = cam[10] / bl;
+    const persp = proj[11] === -1, p5 = proj[5] || 1, base = m.size ?? 1, att = m.sizeAttenuation !== false, pa = pos.array, pis = pos.itemSize;
+    for (let k = 0; k < n; k++) {
+      const i = st + k, x = pa[i * pis], y = pa[i * pis + 1], z = pis > 2 ? pa[i * pis + 2] : 0;
+      const wx = mw[0] * x + mw[4] * y + mw[8] * z + mw[12], wy = mw[1] * x + mw[5] * y + mw[9] * z + mw[13], wz = mw[2] * x + mw[6] * y + mw[10] * z + mw[14];
+      let s = base * (sa ? sa.array[i * sa.itemSize] : 1);
+      if (persp && att) s /= p5; else { const depth = persp ? Math.max((wx - cam[12]) * -B0 + (wy - cam[13]) * -B1 + (wz - cam[14]) * -B2, 0) : 1; s = s * 2 * depth / (p5 * pointsViewportHeight); }
+      const j = k * 16;
+      mats[j] = R0 * s; mats[j + 1] = R1 * s; mats[j + 2] = R2 * s; mats[j + 3] = 0; mats[j + 4] = U0 * s; mats[j + 5] = U1 * s; mats[j + 6] = U2 * s; mats[j + 7] = 0;
+      mats[j + 8] = B0; mats[j + 9] = B1; mats[j + 10] = B2; mats[j + 11] = 0; mats[j + 12] = wx; mats[j + 13] = wy; mats[j + 14] = wz; mats[j + 15] = 1;
+      if (cols) {
+        const cs = ca?.itemSize ?? 0, a = (cs >= 4 ? ca.array[i * cs + 3] : 1) * (oa ? oa.array[i * oa.itemSize] : 1), q = premult ? a : 1, c = k * 4;
+        cols[c] = (ca ? ca.array[i * cs] : 1) * q; cols[c + 1] = (ca ? ca.array[i * cs + 1] : 1) * q; cols[c + 2] = (ca ? ca.array[i * cs + 2] : 1) * q; cols[c + 3] = a;
+      }
+    }
+    if (!rec) {
+      rec = { mat: m, matId: me.id, vis: v, ro, n, key, cam: new Float64Array(16), mw: new Float64Array(16), mats, cols, node: backend.createInstanced(spriteQuad(), me.id, mats, n, { castShadow: false, receiveShadow: false, visible: v, renderOrder: ro, static: false, matrix: PT_IDENT, ...(cols ? { colors: cols, colorStride: 4 } : {}) }) };
+      me.users.add(rec); pointRecs.set(o, rec); stats.created++; stats.points = (stats.points ?? 0) + 1;
+    } else { backend.updateInstances(rec.node, mats, n, PT_IDENT, cols, 4); rec.mats = mats; rec.cols = cols; rec.n = n; upd('points'); }
+    rec.key = key; rec.cam.set(cam); rec.mw.set(mw);
+    for (const a of [pos, sa, ca, oa]) a?.clearUpdateRanges?.();
+  }
+  if (!rec) return;
+  if (rec.mat !== m) { mats.get(rec.mat)?.users.delete(rec); rec.mat = m; me.users.add(rec); }
+  const u = {};
+  if (me.id !== rec.matId) { u.material = me.id; rec.matId = me.id; }
+  if (v !== rec.vis) { u.visible = v; rec.vis = v; }
+  if (ro !== rec.ro) { u.renderOrder = ro; rec.ro = ro; }
+  for (const _ in u) { backend.updateNode(rec.node, u); upd('points'); break; }
+}
+function destroyPoints(rec) { backend.removeNode(rec.node); mats.get(rec.mat)?.users.delete(rec); stats.removed++; }
 const _bm = typeof Float32Array !== 'undefined' ? new Float32Array(16) : null;
 function batchGeometry(o, gi) {
   const g = o.geometry, gInfo = o._geometryInfo[gi], pos = g.attributes.position, nrm = g.attributes.normal, uv = g.attributes.uv;
@@ -445,6 +583,9 @@ const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frame
 if (!vis && treeVis && (o.isMesh || o.isLight)) stats.layerCulled = (stats.layerCulled ?? 0) + 1;
 if (vis && treeVis && o.isMesh && isShadowOnly(o)) { stats.shadowOnly = (stats.shadowOnly ?? 0) + 1; if (o.isInstancedMesh) stats.shadowOnlyInst = (stats.shadowOnlyInst ?? 0) + (o.count ?? 0); } // r10 census
 if (o.isLight) { seen.add(o); syncLight(o, vis); }
+else if (o.isSprite) { seen.add(o); syncSprite(o, vis); }
+else if (o.isPoints && nativeInst()) { seen.add(o); syncPoints(o, vis); }
+else if (o.isPoints) stats.unsupported.add('Points:no-createInstanced')
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
 else {
@@ -531,8 +672,8 @@ if (moved && !o.isInstancedMesh) (u ??= {}).mat4 = Array.from(o.matrixWorld.elem
 if (flagsChanged) u = Object.assign(u ?? {}, f);
 if (swapped) { const mk2 = matKey(o.material, o), me = ensureMaterial(mk2, o); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = mk2; (u ??= {}).material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
-const ic = o.instanceColor?.version ?? -1;
-if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const c = instColors(o); backend.updateInstances(p.node, instanceMats(o), o.count, o.matrixWorld.elements, c.colors ?? null, c.colorStride); p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
+const ic = instVers(o);
+if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const pk = packInst(o, p.pk ??= {}, isPremult(p.mat)); backend.updateInstances(p.node, instanceMats(o), o.count, o.matrixWorld.elements, pk.colors ?? null, pk.colorStride); if ((pk.uvs || p.hasUv) && backend.setInstanceUvs) { backend.setInstanceUvs(p.node, pk.uvs ?? null); p.hasUv = !!pk.uvs; } p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
 }
 if (u) { backend.updateNode(p.node, u); upd('node'); }
 // refresh material conversion (property edits) — cheap, once per material per frame (epoch-gated inside)
@@ -552,8 +693,9 @@ matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? 
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
+{ const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
-if (updateMatrices) scene.updateMatrixWorld(true);
+if (updateMatrices) { scene.updateMatrixWorld(true); camera?.updateMatrixWorld?.(); /* r18: sprites billboard against THIS frame's camera */ }
 const t1 = now();
 const seen = new Set();
 amb.sky.fill(0); amb.ground.fill(0); amb.n = 0;
@@ -565,6 +707,8 @@ const t2 = now();
 for (const [o, rec] of recs) if (!seen.has(o)) { destroyParts(rec); recs.delete(o); }
 for (const [o, r] of skinRecs) if (!seen.has(o)) { destroySkinned(r); skinRecs.delete(o); }
 for (const [o, r] of batchRecs) if (!seen.has(o)) { destroyBatched(r); batchRecs.delete(o); }
+for (const [o, r] of spriteRecs) if (!seen.has(o)) { destroySprite(r); spriteRecs.delete(o); }
+for (const [o, r] of pointRecs) if (!seen.has(o)) { destroyPoints(r); pointRecs.delete(o); }
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
 const t3 = now();
@@ -579,6 +723,6 @@ const t4 = now();
 // last-frame phase breakdown (ms): matrixWorld (three's own updateMatrixWorld, 0 when updateMatrices=false) · visit (per-object diff + backend calls) · sweep (removed objects + gc) · camera/live uniforms
 stats.phase = { matrixWorld: t1 - t0, visit: t2 - t1, sweep: t3 - t2, camera: t4 - t3, total: t4 - t0, backendSkinUpload: skinMs, skinUploads: skinCalls };
 },
-dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of batchRecs) destroyBatched(r); batchRecs.clear(); for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
+dispose() { for (const [, rec] of recs) destroyParts(rec); recs.clear(); for (const [, r] of skinRecs) destroySkinned(r); skinRecs.clear(); for (const [, r] of batchRecs) destroyBatched(r); batchRecs.clear(); for (const [, r] of spriteRecs) destroySprite(r); spriteRecs.clear(); for (const [, r] of pointRecs) destroyPoints(r); pointRecs.clear(); if (spriteMesh) { backend.destroyMesh(spriteMesh); spriteMesh = 0; } for (const [, r] of lights) backend.removeLight(r.id); lights.clear(); gc(); },
 };
 }

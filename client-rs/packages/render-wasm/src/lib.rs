@@ -260,6 +260,16 @@ let core = RenderCore::new(&device, &queue, opts);
             .map_err(err)?;
         Ok(id)
     }
+    /// r13-bc: block-compressed 2D texture. `mips` = concatenated mip chain (see gaia-render create_texture_compressed); flip_y = data is GL-order (three flipY=false).
+    #[wasm_bindgen(js_name = createTextureCompressed)]
+    pub fn create_texture_compressed(&mut self, gl_format: u32, width: u32, height: u32, mip_count: u32, data: &[u8], srgb: bool, flip_y: bool) -> Result<u32, JsError> {
+        let id = self.id("texture");
+        self.core.create_texture_compressed(&self.device, &self.queue, id, gl_format, width, height, mip_count, data, srgb, flip_y).map_err(err)?;
+        Ok(id)
+    }
+    /// r13-bc: [gpu_native, cpu_no_bc_feature, cpu_bc1rgb_punchthrough, cpu_unaligned_or_unflippable, cpu_single_mip(+gpu mipgen), refused]
+    #[wasm_bindgen(js_name = compressedStats)]
+    pub fn compressed_stats(&self) -> Vec<u32> { self.core.bc_stats.to_vec() }
     /// r4 (lampas/r4-uniforms): RGBA8 sampled without sRGB decode (three colorSpace != srgb).
     #[wasm_bindgen(js_name = createTextureLinear)]
     pub fn create_texture_linear(&mut self, width: u32, height: u32, rgba: &[u8]) -> Result<u32, JsError> {
@@ -302,10 +312,10 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_mesh_colors(&mut self, id: u32, rgba: &[f32]) -> Result<(), JsError> {
         self.core.set_mesh_colors(&self.device, id, rgba).map_err(err)
     }
-        /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
+        /// blend: 0 opaque/none, 1 alpha, 2 additive, 3 subtractive, 4 multiply, 5 premultiplied. depth_write: -1 default, 0/1. cast_shadow: -1 default, 0/1.
     #[wasm_bindgen(js_name = setMaterialFlags)]
     pub fn set_material_flags(&mut self, id: u32, blend: u32, unlit: bool, depth_write: i32, render_order: i32, cast_shadow: i32) {
-        let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), _ => None };
+        let b = match blend { 1 => Some(BlendKind::Alpha), 2 => Some(BlendKind::Additive), 3 => Some(BlendKind::Subtractive), 4 => Some(BlendKind::Multiply), 5 => Some(BlendKind::Premultiplied), _ => None };
         self.core.set_material_blend(id, blend != 0);
         self.core.set_material_flags(&self.device, id, MaterialFlags { blend: b, unlit, depth_write: (depth_write >= 0).then_some(depth_write != 0), render_order, cast_shadow: (cast_shadow >= 0).then_some(cast_shadow != 0), ..Default::default() });
     }
@@ -323,6 +333,16 @@ let core = RenderCore::new(&device, &queue, opts);
     #[wasm_bindgen(js_name = setMaterialNoGi)]
     pub fn set_material_no_gi(&mut self, id: u32, on: bool) {
         self.core.set_material_no_gi(&self.device, id, on);
+    }
+    /// three material.fog=false: scene fog skipped for this material. Call after setMaterialFlags.
+    /// lampas L-wgpu-tex: material lit by the extra directional lights (setExtraDirs) -- character materials only (three userData.dsChrLight). Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialChrLight)]
+    pub fn set_material_chr_light(&mut self, id: u32, on: bool) {
+        self.core.set_material_chr_light(&self.device, id, on);
+    }
+    #[wasm_bindgen(js_name = setMaterialNoFog)]
+    pub fn set_material_no_fog(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_fog(&self.device, id, on);
     }
     
     /// three colorWrite:false (depth-only / occluder mesh): empty colour write mask, depth per depthWrite. Call after setMaterialFlags (which resets it).
@@ -545,6 +565,11 @@ let core = RenderCore::new(&device, &queue, opts);
         self.core.update_instance_block(id, mats, colors, color_stride as usize, count as usize, w);
         Ok(())
     }
+    /// r19-pcol: per-instance uv window, 4 floats/instance (offsetU, offsetV, scaleU, scaleV); empty = identity. Flipbook / atlas.
+    #[wasm_bindgen(js_name = setInstanceBlockUvs)]
+    pub fn set_instance_block_uvs(&mut self, id: u32, uvs: &[f32]) {
+        self.core.set_instance_block_uvs(id, uvs);
+    }
     #[wasm_bindgen(js_name = setInstanceBlockFlags)]
     pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
         self.core.set_instance_block_flags(id, cast_shadow, is_static);
@@ -721,6 +746,12 @@ o.into()
         let g = on.then_some(gaia_render::GtaoParams { radius, thickness, samples, distance_exponent, distance_fall_off, scale, resolution_scale, intensity, fade_start, fade_end });
         self.core.set_gtao(g).map_err(|e| err(&e))
     }
+    /// r18-tone: 16 f32 column-major display-referred colour matrix (DS1 ColAdj shape) applied after tone map; empty/len!=16 = off.
+    #[wasm_bindgen(js_name = setColorGrade)]
+    pub fn set_color_grade(&mut self, m: &[f32]) -> Result<(), JsError> {
+        let g = (m.len() == 16).then(|| { let mut o = [[0.0f32; 4]; 4]; for c in 0..4 { for r in 0..4 { o[c][r] = m[c * 4 + r]; } } o });
+        self.core.set_color_grade(g).map_err(|e| err(&e))
+    }
     /// r10: eye adaptation. `on` = run the GPU meter; `mul` = host-adapted linear multiplier (scene before bloom/tone map).
     #[wasm_bindgen(js_name = setAutoExposure)]
     pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), JsError> {
@@ -752,15 +783,10 @@ o.into()
         self.core.set_clear_color([rgba[0] as f64, rgba[1] as f64, rgba[2] as f64, rgba[3] as f64]);
         Ok(())
     }
-    /// packed 8 f32 / light: x y z range r g b intensity (index 7). Returns lights drawn (max 64).
+    /// packed 9 f32 / light: x y z range r g b intensity falloff (>= 0 three decay, < 0 DS1 ramp: begin/range = -falloff - 1). Returns lights drawn (max 64).
     #[wasm_bindgen(js_name = setPointLights)]
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {
         self.core.set_point_lights(packed)
-    }
-    /// lane dynlight: packed 9 f32 / light = the 8 above + falloff (>= 0 three decay, < 0 DS1 ramp: begin/range = -falloff - 1). Returns lights drawn (max 64).
-    #[wasm_bindgen(js_name = setPointLightsDecay)]
-    pub fn set_point_lights_decay(&mut self, packed: &[f32]) -> usize {
-        self.core.set_point_lights_decay(packed)
     }
     /// lane dynlight: extra directional lights beyond the primary sun, packed 7 f32: dir xyz (direction the light travels), rgb, intensity. No shadows. Returns count kept (max 4).
     #[wasm_bindgen(js_name = setExtraDirs)]

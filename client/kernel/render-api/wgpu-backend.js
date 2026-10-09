@@ -121,8 +121,10 @@ function debugOutPkg(pkg) {
 // r4-browser (additive): `options.shadows` = ShadowOptions object (camelCase keys, passed to wasm create). `staticInstances`:
 // 'none' (default) = every instance DYNAMIC in the shadow system (safe for moving games) · 'non-skinned' = every instance whose mesh is NOT a
 // skinned mesh is marked static (cached shadow layers; moving one re-renders the cache) — per-node override: flags.static / updateNode({static}).
+// r18-perf: 'non-skinned' is now AUTO-static (was: every non-skinned node static at creation -> every per-frame move bumped the core static_gen = static shadow cache re-rendered EVERY frame):
+// a node is static only when flags.static===true (explicit, never auto-changes) | flags.staticHint (three matrixAutoUpdate=false: starts static) | it has NOT moved for `staticAfterFrames` render frames; any move demotes it to dynamic.
 // flags.castShadow (three semantics; the adapter always sends a bool) → core per-instance cast flag; undefined = core default (casts).
-export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl', staticInstances = 'none' } = {}) {
+export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl', staticInstances = 'none', staticAfterFrames = 60 } = {}) {
   if (!canvas) throw new Error('createWgpuBackend requires { canvas }');
   if (!wasm?.GaiaRender) throw new Error('createWgpuBackend requires { wasm } = the render_wasm.js module');
   if (!navigator.gpu) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)');
@@ -139,7 +141,8 @@ export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 
   const skinnedMeshes = new Set(); // wasm mesh ids that are skinned (always dynamic casters)
 const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owned by that material
   const texByKey = new Map();    // texture descriptor key (uuid:version, material-map) → { id, refs } — one GPU texture shared by every material using it
-  const texStats = { uploads: 0, hits: 0 };
+const texStats = { uploads: 0, hits: 0 };
+const refusedTex = new Set(); // r13-bc: texture uploads the core refused (drained into the adapter's stats.unsupported via backend.drainUnsupported)
   // textures[slot] = {width,height,data,key?}. With a `key` the GPU texture is shared + refcounted and `data` (lazy getter in material-map) is only
   // read on a MISS → an idle frame / a second material on the same image does 0 pixel reads and 0 uploads.
   function acquireTexture(t) {
@@ -155,6 +158,16 @@ c.version = t.version; texStats.layerUploads = (texStats.layerUploads ?? 0) + di
 }
 return { id: c.id, key: t.key };
 }
+}
+if (t.compressed) { // r13-bc: block-compressed 2D texture (mip chain concatenated). Core = native BC when the device has it, else CPU decode (counted in gpu.compressedStats()). Failure = id 0 (white) + RECORDED in unsupported, never a thrown frame.
+  let id = 0;
+  try {
+    if (!gpu.createTextureCompressed) throw new Error('wasm pkg predates createTextureCompressed');
+    id = gpu.createTextureCompressed(t.format, t.width, t.height, t.mipCount, t.data, t.srgb !== false, !!t.flipY);
+    texStats.uploads++; texStats.compressed = (texStats.compressed ?? 0) + 1;
+  } catch (e) { refusedTex.add(`texture:compressed ${t.format} ${t.width}x${t.height}: ${String(e?.message ?? e).slice(0, 120)}`); return { id: 0, key: null }; }
+  if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version, fresh: null });
+  return { id, key: t.key ?? null };
 }
 const data = t.data;
 if (!data || !(t.cube ? t.size > 0 : (t.width > 0 && t.height > 0))) throw new Error('createMaterial: texture map needs { width, height, data }');
@@ -185,7 +198,7 @@ return h;
 function releaseStorage(h) { if (--h.refs <= 0) { gpu.destroyStorageBuffer(h.id); storByAttr.delete(h.attr); } }
 function releaseTexture(h) {
 if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
-else gpu.destroyTexture(h.id);
+else if (h.id) gpu.destroyTexture(h.id); // id 0 = refused compressed upload (nothing to free)
 }
 // side: three Side (FrontSide=cull back -> 1, BackSide -> 2, DoubleSide -> 0 in the core encoding). Render FLAGS (blend/unlit/depthWrite/renderOrder/shadow) = r8/r9 setMatFlags below.
 // r7: emissiveMap === map (same key) -> emissive x base texel (4th emissive float = flag), emissive slot NOT bound (would multiply twice); distinct emissiveMap -> bound in its own slot (r6 maps).
@@ -208,9 +221,10 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
   const flagStats = { noColorWrite: 0, noDepthTest: 0 }; // r11: counts of per-material colorWrite:false / depthTest:false pushes to the core (live-proof counters, generic)
   const matFlags = new Map(); // MaterialId → { blend, unlit, dw, toneMapped, ro, pushed }
   function flagsFromParams(params = {}) {
-    const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
+    const BL = { additive: 2, subtractive: 3, multiply: 4, premultiplied: 5 }; // r19-pcol: core setMaterialFlags blend codes (1 alpha, 2 add, 3 sub, 4 mul, 5 premult)
+    const blend = BL[params.blending] ?? ((params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0);
     // r9: three r180 renders `shadowSide ?? side` into the shadow map -> a FrontSide material casts only from its front faces (core caster pass culls back faces); Double/Back keep the double-sided caster
-    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, nocw: params.colorWrite === false, nodt: params.depthTest === false, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi };
+    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, nocw: params.colorWrite === false, nodt: params.depthTest === false, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi, nofog: params.fog === false, chr: !!params.chrLight };
   }
   function pushFlags(id) {
     const f = matFlags.get(id); if (!f) return;
@@ -224,11 +238,14 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
       if (f.nodt) { flagStats.noDepthTest++; gpu.setMaterialNoDepthTest?.(id, true); } // r11: three depthTest:false → depth compare ALWAYS (draws over nearer geometry); ?. = older wasm pkg stays depth-tested
       f.pushed = !!nondefault;
     }
+    if (!!f.nofog !== !!f.nofogPushed || (f.nofog && reset)) { gpu.setMaterialNoFog?.(id, !!f.nofog); f.nofogPushed = !!f.nofog; }
+    if (!!f.chr !== !!f.chrPushed || (f.chr && reset)) { gpu.setMaterialChrLight?.(id, !!f.chr); f.chrPushed = !!f.chr; } // lampas L-wgpu-tex: userData.dsChrLight -> extra directionals (setExtraDirs) light this material; default = they do not (?. = older wasm: extra dirs light nothing)
+// r18: three material.fog=false -> core skips scene fog (?. = older wasm pkg keeps fog)
     if (f.nogi) gpu.setMaterialNoGi?.(id, true); // r9: material not GI-eligible in three (plain non-node material) → hemisphere only. Default (eligible) materials push nothing.
     if (reset) f.cullPushed = false;
     if (!!f.cull !== !!f.cullPushed) { gpu.setMaterialShadowCullBack?.(id, !!f.cull); f.cullPushed = !!f.cull; } // ?. = older wasm pkg without the r9 export keeps the double-sided caster
   }
-  function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, norecv: prev?.norecv ?? false, cullPushed: prev?.cullPushed ?? false, pushed: prev?.pushed ?? false }); pushFlags(id); }
+  function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, norecv: prev?.norecv ?? false, cullPushed: prev?.cullPushed ?? false, nofogPushed: prev?.nofogPushed ?? false, chrPushed: prev?.chrPushed ?? false, pushed: prev?.pushed ?? false }); pushFlags(id); }
   // r8 receiveShadow:false → core per-MATERIAL flag: a material stops sampling the sun shadow only when EVERY instance using it has receiveShadow false (mixed = receives, the old behaviour).
   const recvUsers = new Map(); // MaterialId → Map<NodeId, bool receive>
   function trackReceive(node) {
@@ -249,6 +266,24 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
   }
   let lightsDirty = false;
   let sunId = 0;
+  // r18-perf auto-static bookkeeping (see createWgpuBackend header comment)
+  let frameNo = 0;
+  const staticCand = new Set(); // auto nodes currently dynamic, waiting to settle
+  const autoMode = (node) => node.static === undefined && staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh);
+  const staticNow = (node) => (node.static !== undefined ? !!node.static : !!node.autoStatic);
+  function initAuto(node) { node.autoStatic = false; if (!autoMode(node)) return; node.movedFrame = frameNo; if (node.staticHint) node.autoStatic = true; else staticCand.add(node); }
+  // returns true when the static flag flipped (caller pushes it to the core)
+  function markMoved(node) { if (!autoMode(node)) return false; node.movedFrame = frameNo; staticCand.add(node); if (node.autoStatic) { node.autoStatic = false; return true; } return false; }
+  function tickStatic() {
+    frameNo++;
+    for (const n of staticCand) {
+      if (!nodes.has(n.id) || !autoMode(n)) { staticCand.delete(n); continue; }
+      if (!n.rid || frameNo - n.movedFrame < staticAfterFrames) continue;
+      n.autoStatic = true; staticCand.delete(n);
+      if (n.kind === 'instanced') gpu.setInstanceBlockFlags(n.rid, n.castShadow !== false, true); else gpu.setInstanceStatic(n.rid, true);
+    }
+  }
+  const f32eq = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
 
   const need = (map, id, what) => { const v = map.get(id); if (!v) throw new Error(`render-api(wgpu): unknown ${what} ${id}`); return v; };
   const asMat = (m) => { if (!isMat4(m)) throw new Error('render-api(wgpu): mat4 must be 16 finite numbers'); return m; };
@@ -260,13 +295,15 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
     if (node.kind === 'instance') {
       if (eff) {
         const w = Float32Array.from(node.world);
-        if (node.rid && node.ridMat === node.material && node.ridMesh === node.mesh) gpu.updateInstance(node.rid, w);
+        if (node.rid && node.ridMat === node.material && node.ridMesh === node.mesh) {
+ if (!node.lastW || !f32eq(node.lastW, w)) { node.lastW = w; if (markMoved(node)) gpu.setInstanceStatic(node.rid, false); gpu.updateInstance(node.rid, w); } // r18-perf: unchanged matrix = no core call
+ }
         else {
           if (node.rid) gpu.removeInstance(node.rid);
           node.rid = gpu.createInstance(node.mesh, node.material, w);
 if (node.instAttrs) for (const [k, v] of Object.entries(node.instAttrs)) gpu.setInstanceAttribute(node.rid, k, v.length, v);
-          node.ridMat = node.material; node.ridMesh = node.mesh;
-          applyShadowFlags(node); applyGroups(node); relinkGroupChildren(node);
+          node.ridMat = node.material; node.ridMesh = node.mesh; node.lastW = w; initAuto(node);
+applyShadowFlags(node); applyGroups(node); relinkGroupChildren(node);
         }
       } else if (node.rid) { gpu.removeInstance(node.rid); node.rid = 0; }
     }
@@ -288,25 +325,27 @@ if (node.instAttrs) for (const [k, v] of Object.entries(node.instAttrs)) gpu.set
   }
   function relinkGroupChildren(parentNode) { for (const n of nodes.values()) if (n.groups?.parent === parentNode.id) applyGroups(n); }
   // native block upload: create / update / remove per visibility; `flagsDirty` re-applies shadow flags (material change = recreate).
-function pushBlock(node, flagsDirty = false) {
+function pushBlock(node, flagsDirty = false, moved = false) {
   if (!node.visible || node.count === 0) { if (node.rid) { gpu.removeInstanceBlock(node.rid); node.rid = 0; } return; }
   const colors = node.colors ?? new Float32Array(0), stride = node.colors ? node.stride : 0;
   if (node.rid && (node.ridMat !== node.material || node.ridMesh !== node.mesh)) { gpu.removeInstanceBlock(node.rid); node.rid = 0; }
   if (!node.rid) {
     node.rid = gpu.createInstanceBlock(node.mesh, node.material, node.mats, colors, stride, node.count, node.world);
-    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true;
-  } else gpu.updateInstanceBlock(node.rid, node.mats, colors, stride, node.count, node.world);
+    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true; initAuto(node); if (node.uvs) { node.uvsPushed = false; pushUvs(node); }
+} else { if (moved && markMoved(node)) flagsDirty = true; gpu.updateInstanceBlock(node.rid, node.mats, colors, stride, node.count, node.world); }
   if (flagsDirty) {
-    const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
-    gpu.setInstanceBlockFlags(node.rid, node.castShadow !== false, !!st);
+    gpu.setInstanceBlockFlags(node.rid, node.castShadow !== false, staticNow(node));
     if (gpu.setInstanceBlockShadowOnly) gpu.setInstanceBlockShadowOnly(node.rid, !!node.shadowOnly);
   }
+}
+function pushUvs(node) { // r19-pcol: uv windows live in the core block; (re)sent after block (re)creation and whenever setInstanceUvs ran (the adapter calls it only on a version change)
+  if (!gpu.setInstanceBlockUvs) return;
+  if (node.uvs || node.uvsPushed) { gpu.setInstanceBlockUvs(node.rid, node.uvs ?? new Float32Array(0)); node.uvsPushed = !!node.uvs; }
 }
 function applyShadowFlags(node) {
   if (node.castShadow !== undefined) gpu.setInstanceCastShadow(node.rid, node.castShadow);
   if (node.shadowOnly && gpu.setInstanceShadowOnly) gpu.setInstanceShadowOnly(node.rid, true); // r10: depth-only caster (main camera's layers exclude it)
-  const st = node.static !== undefined ? node.static : (staticInstances === 'non-skinned' && !skinnedMeshes.has(node.mesh));
-  if (st) gpu.setInstanceStatic(node.rid, true);
+  if (staticNow(node)) gpu.setInstanceStatic(node.rid, true);
   }
   function link(node, parentId) {
     if (parentId) need(nodes, parentId, 'parent node').children.add(node.id);
@@ -319,21 +358,12 @@ function applyShadowFlags(node) {
 
   function pushLights() {
     const pts = [...lights.values()].filter((l) => l.kind === 'point');
-    if (gpu.setPointLightsDecay) { // lane dynlight: per-light falloff = three getDistanceAttenuation(decay) or, with light.rampBegin, the DS1 ramp (core encodes ramp as falloff = -1 - begin/range)
-      const packed9 = new Float32Array(pts.length * 9);
-      pts.forEach((l, i) => {
-        const range = l.distance > 0 ? l.distance : 1e4;
-        const falloff = l.rampBegin != null && l.distance > 0 ? -1 - Math.min(Math.max(l.rampBegin / l.distance, 0), 0.9999) : (l.decay ?? 2);
-        packed9.set([...l.position, range, ...l.color, l.intensity, falloff], i * 9);
-      });
-      gpu.setPointLightsDecay(packed9);
-    } else {
-    const packed = new Float32Array(pts.length * 8);
+    const packed = new Float32Array(pts.length * 9);
     pts.forEach((l, i) => {
-      packed.set([...l.position, l.distance > 0 ? l.distance : 1e4, ...l.color, l.intensity], i * 8);
+      const falloff = l.rampBegin != null && l.distance > 0 ? -1 - Math.min(Math.max(l.rampBegin / l.distance, 0), 0.9999) : (l.decay ?? 2); // three decay, or DS1 ramp (falloff = -1 - begin/range)
+      packed.set([...l.position, l.distance > 0 ? l.distance : 1e4, ...l.color, l.intensity, falloff], i * 9);
     });
     gpu.setPointLights(packed);
-    }
     const sun = lights.get(sunId);
     if (sun) gpu.setSun(Float32Array.from(sun.direction.map((v) => -v)), Float32Array.from(sun.color), sun.intensity);
     lightsDirty = false;
@@ -342,7 +372,7 @@ function applyShadowFlags(node) {
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'instance-opacity', 'instance-uv', 'points', 'blend-multiply', 'blend-premultiplied', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     flagStats,
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
@@ -394,7 +424,8 @@ threeSkipped() { return gpu.threeSkipped(); },
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
-    textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size } }; },
+textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size }, compressedCore: gpu.compressedStats ? Array.from(gpu.compressedStats()) : null /* [gpu_native, cpu_no_bc_feature, cpu_bc1rgb_punchthrough, cpu_unaligned_or_unflippable, cpu_single_mip, refused] */ }; },
+    drainUnsupported() { const r = [...refusedTex]; refusedTex.clear(); return r; }, // r13-bc: texture refusals since the last drain -> scene-adapter stats.unsupported
     // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the
     // package's non-enumerable textureSources (uuid → three Texture); a texture binding without readable pixels = loud Error.
     createShaderMaterial(pkg) {
@@ -488,7 +519,7 @@ createNode(mat4, parent = 0) {
     },
     createInstance(mesh, material, mat4, flags = {}) {
       const node = { id: next++, kind: 'instance', parent: 0, children: new Set(), local: Float64Array.from(asMat(mat4)), world: null,
-        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, groups: flags.groups ? normalizeGroups(flags.groups) : undefined, instAttrs: flags.instAttrs ?? null, renderOrder: flags.renderOrder || 0, receiveShadow: flags.receiveShadow };
+        visible: flags.visible !== false, mesh, material, rid: 0, ridMat: 0, ridMesh: 0, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, staticHint: !!flags.staticHint, groups: flags.groups ? normalizeGroups(flags.groups) : undefined, instAttrs: flags.instAttrs ?? null, renderOrder: flags.renderOrder || 0, receiveShadow: flags.receiveShadow };
       nodes.set(node.id, node); link(node, flags.parent);
       if (node.renderOrder) setMatOrder(material, node.renderOrder);
       trackReceive(node);
@@ -499,24 +530,33 @@ createNode(mat4, parent = 0) {
     // mats = count×16 local mat4s (three instanceMatrix.array), flags.matrix = node matrixWorld (premultiplied in the core), flags.colors = count×stride rgb(a) (three instanceColor.array; stride 3|4).
     createInstanced(mesh, material, mats, count, flags = {}) {
       const node = { id: next++, kind: 'instanced', parent: 0, children: new Set(), mesh, material, rid: 0, mats, count, world: Float32Array.from(flags.matrix ?? IDENTITY_MAT4),
-        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, ridMat: 0, ridMesh: 0 };
-      nodes.set(node.id, node); pushBlock(node); return node.id;
+        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, staticHint: !!flags.staticHint, ridMat: 0, ridMesh: 0 };
+      nodes.set(node.id, node); if (flags.renderOrder) setMatOrder(material, flags.renderOrder); /* r17-fx: InstancedMesh renderOrder -> core per-material order (was dropped: only createInstance forwarded it) */ pushBlock(node); return node.id;
+    },
+    // r19-pcol: per-instance uv window for an instanced block: Float32Array count*4 (offsetU, offsetV, scaleU, scaleV) or null (= identity). Pushed to the core only when it changed (identity buffer / same array+length = no call).
+    setInstanceUvs(id, uvs) {
+      const node = need(nodes, id, 'node'); if (node.kind !== 'instanced') throw new Error('setInstanceUvs: not an instanced node');
+      node.uvs = uvs || null; node.uvsPushed = false; if (node.rid) pushUvs(node);
     },
     updateInstances(id, mats, count, matrixWorld, colors = null, colorStride = 3) {
       const node = need(nodes, id, 'node');
       node.mats = mats; node.count = count; if (matrixWorld) node.world = Float32Array.from(matrixWorld); node.colors = colors; node.stride = colorStride;
-      pushBlock(node);
+pushBlock(node, false, true);
     },
     updateNode(id, patch = {}) {
       const node = need(nodes, id, 'node');
       if (node.kind === 'instanced') {
-        if (patch.visible !== undefined) node.visible = !!patch.visible;
-        if (patch.material !== undefined) node.material = patch.material;
-        if (patch.castShadow !== undefined) node.castShadow = !!patch.castShadow;
-        if (patch.castShadow !== undefined) node.shadowOnly = !!patch.shadowOnly;
-        if (patch.static !== undefined) node.static = !!patch.static;
-        if (patch.mat4) node.world = Float32Array.from(patch.mat4);
-        pushBlock(node, true); return;
+        // r18-perf: re-upload only on a REAL change (the adapter sends the full flag set for every InstancedMesh every frame; was: updateInstanceBlock + flags bump each time)
+let ch = false;
+const set = (k, v) => { if (node[k] !== v) { node[k] = v; ch = true; } };
+if (patch.visible !== undefined) set('visible', !!patch.visible);
+if (patch.material !== undefined) set('material', patch.material);
+if (patch.castShadow !== undefined) { set('castShadow', !!patch.castShadow); set('shadowOnly', !!patch.shadowOnly); }
+if (patch.static !== undefined) set('static', !!patch.static);
+if (patch.mat4) { node.world = Float32Array.from(patch.mat4); ch = true; }
+if (patch.renderOrder !== undefined) setMatOrder(node.material, patch.renderOrder || 0);
+if (ch) pushBlock(node, true, !!patch.mat4);
+return;
       }
       if (patch.mat4) node.local = Float64Array.from(asMat(patch.mat4));
       if (patch.visible !== undefined) node.visible = !!patch.visible;
@@ -559,9 +599,9 @@ createNode(mat4, parent = 0) {
       lightsDirty = true;
       return sunId;
     },
-    addPointLight({ position = [0, 0, 0], color = [1, 1, 1], intensity = 1, distance = 0, decay = 2 } = {}) {
+    addPointLight({ position = [0, 0, 0], color = [1, 1, 1], intensity = 1, distance = 0, decay = 2, rampBegin = null } = {}) {
       const id = next++;
-      lights.set(id, { kind: 'point', position: [...position], color: colorOf(color), intensity, distance, decay });
+      lights.set(id, { kind: 'point', position: [...position], color: colorOf(color), intensity, distance, decay, rampBegin });
       lightsDirty = true;
       return id;
     },
@@ -596,21 +636,25 @@ createNode(mat4, parent = 0) {
     // r12-post GTAO (three GTAONode + rig composite) or null = off. Normals are reconstructed from depth in the core.
     setGtao(g) { if (g) gpu.setGtao(true, g.radius, g.thickness, g.samples, g.distanceExponent ?? 1, g.distanceFallOff ?? 1, g.scale ?? 1, g.resolutionScale ?? 1, g.intensity ?? 1, g.fadeStart ?? 1e9, g.fadeEnd ?? 2e9); else gpu.setGtao(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); },
     // r10-shadow-18 eye adaptation: GPU meter on/off + host multiplier; grid = Float32Array(64) mean log2 luma (raw HDR) or empty
+    setColorGrade(m) { gpu.setColorGrade(m && m.length === 16 ? Float32Array.from(m) : new Float32Array(0)); },
     setAutoExposure(on, mul) { gpu.setAutoExposure(!!on, mul); },
     autoExposureGrid() { return gpu.autoExposureGrid(); },
     setBackground(rgb) { gpu.setBackgroundColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0)); },
     renderFrame(/* dt */) {
-    if (lightsDirty) pushLights();
+tickStatic();
+if (lightsDirty) pushLights();
       return gpu.render();
     },
     // wgpu-only: render + Promise<ms submit→queue-done> (wall clock incl. queue latency, not pure GPU time)
     renderFrameTimed() {
-      if (lightsDirty) pushLights();
+tickStatic();
+if (lightsDirty) pushLights();
       return gpu.renderTimed();
     },
     // wgpu-only: render + Promise<{scene,upscale,total} GPU-timestamp ms | null> (null: no timestamp-query / sample in flight)
     renderFrameGpuTimed() {
-      if (lightsDirty) pushLights();
+tickStatic();
+if (lightsDirty) pushLights();
       const frame = gpu.renderGpuTimed(), skin = gpu.skinGpuMs?.() ?? Promise.resolve(null);
       // per-pass GPU ms: scene / upscale / shadow (timestamp-pairs, sum = total) + skin compute (own pair; total excludes it, totalAll adds it) + span (earliest begin → latest end of the timed passes: includes GPU idle gaps / overlap)
       return Promise.all([frame, skin]).then(([t, sk]) => (t ? { ...t, skin: sk ?? 0, totalAll: t.total + (sk ?? 0) } : null));

@@ -82,6 +82,10 @@ struct PostUniform {
     blur: [f32; 4],
 /// x = GTAO composite on (0/1), y = intensity
 ao: [f32; 4],
+/// r18-tone: x = colour grade on
+grade_on: [f32; 4],
+/// column-major 4x4 applied to (display rgb, 1)
+grade: [[f32; 4]; 4],
 }
 struct Sized {
     size: (u32, u32),
@@ -145,6 +149,8 @@ pub gtao: Option<GtaoParams>,
     sized: Option<Sized>,
     /// three tone-mapping constant (NoToneMapping 0, Linear 1, Reinhard 2, Cineon 3, ACESFilmic 4, AgX 6, Neutral 7).
     pub tone_mapping: u32,
+    /// r18-tone: column-major 4x4 display-referred colour matrix applied after exposure/tone map (DS1 Fil_HDR_ColAdj shape). None = off.
+    pub color_grade: Option<[[f32; 4]; 4]>,
     pub bloom: Option<BloomParams>,
     timing: Option<PostTiming>,
     timed: bool,
@@ -218,7 +224,7 @@ let meter = Meter { pipe: mk("fs_meter", wgpu::TextureFormat::R32Float), view: m
             readback: device.create_buffer(&wgpu::BufferDescriptor { label: Some("post ts readback"), size: 16, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
             period_ns: queue.get_timestamp_period(),
         });
-        Self { layout, ao_layout, p_ao, noise, scene_view: None, depth_view: None, proj: [[0.0; 4]; 4], proj_inv: [[0.0; 4]; 4], gtao: None, meter, meter_on: false, ae_mul: 1.0, p_high, p_blur, p_resolve, sampler, dummy, uniform, sized: None, tone_mapping, bloom: None, timing, timed: false }
+        Self { layout, ao_layout, p_ao, noise, scene_view: None, depth_view: None, proj: [[0.0; 4]; 4], proj_inv: [[0.0; 4]; 4], gtao: None, meter, meter_on: false, ae_mul: 1.0, p_high, p_blur, p_resolve, sampler, dummy, uniform, sized: None, tone_mapping, color_grade: None, bloom: None, timing, timed: false }
     }
     fn mk_target(device: &wgpu::Device, w: u32, h: u32, label: &str) -> wgpu::TextureView {
         device
@@ -241,7 +247,7 @@ self.depth_view = Some(depth.clone());
         let vs: Vec<_> = sizes.iter().map(|s| Self::mk_target(device, s.0, s.1, "bloom v")).collect();
         let mut blur_u = Vec::new();
         let mk_u = |dev: &wgpu::Device, dir: [f32; 2], inv: [f32; 2], k: f32| {
-            let u = PostUniform { tone: [0.0; 4], bloom: [0.0; 4], blur: [dir[0] * inv[0], dir[1] * inv[1], k, 0.0], ao: [0.0; 4] };
+            let u = PostUniform { tone: [0.0; 4], bloom: [0.0; 4], blur: [dir[0] * inv[0], dir[1] * inv[1], k, 0.0], ao: [0.0; 4], grade_on: [0.0; 4], grade: [[0.0; 4]; 4] };
             dev.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("blur uniform"), contents: bytemuck::bytes_of(&u), usage: wgpu::BufferUsages::UNIFORM })
         };
         for i in 0..BLOOM_MIPS {
@@ -301,6 +307,8 @@ pub fn size(&self) -> Option<(u32, u32)> {
             bloom: b.map_or([0.0, 0.0, 0.0, self.ae_mul], |b| [b.radius, b.threshold, b.smooth_width, self.ae_mul]),
             blur: [0.0; 4],
 ao: self.gtao.map_or([0.0; 4], |g| [if s.ao_target.is_some() { 1.0 } else { 0.0 }, g.intensity, 0.0, 0.0]),
+grade_on: [if self.color_grade.is_some() { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+grade: self.color_grade.unwrap_or([[0.0; 4]; 4]),
 };
 queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
         let mut first = true;

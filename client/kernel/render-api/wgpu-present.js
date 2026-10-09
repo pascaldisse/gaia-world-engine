@@ -1,6 +1,6 @@
 // render-api/wgpu-present.js — run the WHOLE live scene through the wasm wgpu renderer (engine seam, ?renderBackend=wgpu).
 // three still builds/animates the scene graph (game code unchanged); this replaces only the draw: scene-adapter.sync → wgpu backend → overlay canvas.
-// Params: ?renderBackend=wgpu &wgpuPkg=<url of render_wasm.js (default /pkg/render_wasm.js)> &wgpuHeight=<internal render height> &wgpuShadows=0|1 &wgpuTsl=1 (opt-in: export NodeMaterials to WGSL — dies on game custom vertex attributes today) &wgpuStats=1 &wgpuGi=0|1 (probe GI atlases, default on when gi open mode is live) &wgpuGiEvery=30
+// Params: ?renderBackend=wgpu &wgpuPkg=<url of render_wasm.js (default /pkg/render_wasm.js)> &wgpuHeight=<internal render height> &wgpuShadows=0|1 &wgpuTsl=0|1 (r14: DEFAULT ON — NodeMaterials with custom nodes are translated to WGSL; =0 = PBR fallback for those) &wgpuStats=1 &wgpuGi=0|1 (probe GI atlases, default on when gi open mode is live) &wgpuGiEvery=30
 import { installGpuMirror } from './gpu-mirror.js';
 import { createWgpuBackend } from './wgpu-backend.js';
 import { createSceneAdapter } from './scene-adapter.js';
@@ -26,7 +26,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   if (params.get('wgpuTslWalkCheck') === '1') structCache.walkCheck = true;
   if (params.get('wgpuTslKeyProf') === '1') structCache.keyProf = { prim: 0, kids: 0, props: 0, join: 0, nodes: 0, parts: 0, walks: 0 }; // r10-9 key-walk cost breakdown (opt-in)
   structCache.share = params.get('wgpuShare') !== '0'; // r10-4 A/B flag (also togglable live: __wgpu.tslCache.share)
-  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') !== '1' ? null : exportNodeMaterial, tslOptions: { THREE, coreShadow: params.get('wgpuCoreShadow') !== '0', cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0', recvVariants: params.get('wgpuRecvVar') === '1', dbgNoAlphaCast: params.get('wgpuDbgNoAlphaCast') === '1', dbgNoCast: params.get('wgpuDbgNoCast') === '1' });
+  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') === '0' ? null : exportNodeMaterial, tslOptions: { THREE, coreShadow: params.get('wgpuCoreShadow') !== '0', cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0', recvVariants: params.get('wgpuRecvVar') === '1', dbgNoAlphaCast: params.get('wgpuDbgNoAlphaCast') === '1', dbgNoCast: params.get('wgpuDbgNoCast') === '1' });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)

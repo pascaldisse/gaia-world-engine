@@ -1,6 +1,7 @@
 // render-api/material-map.js — three Material → render-api material description. NO three import (duck-typed).
 import { arrayMirror } from './gpu-mirror.js';
 import { readCube } from './env-image.js';
+import { lightRegistry } from './light-registry.js';
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
@@ -42,7 +43,29 @@ function readPixels(im, w, h) {
   if (out) { textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
   return out;
 }
+// r13-bc: three CompressedTexture (DDS/KTX2 loaders: image {width,height}, mipmaps[{data,width,height}], format = GL internal format) -> compressed descriptor
+// {compressed,format,width,height,mipCount,flipY,srgb,key,data(getter: mip chain concatenated)}. The GPU core decides native BC upload vs CPU decode (gaia-render create_texture_compressed).
+// Anything we cannot hand over (unknown format / no mips / mip data not bytes / mips not a halving chain) = { compressed, refused } -> materialToParams records it in unsupported (never silent).
+export const COMPRESSED_GL = { 33776: 'BC1-rgb', 33777: 'BC1-rgba', 33778: 'BC2', 33779: 'BC3', 36283: 'BC4', 36285: 'BC5', 36492: 'BC7' }; // GL internal formats the core uploads (mirrors gaia-render bc::from_gl)
+function compressedData(t) {
+  const im = t.image, mm = t.mipmaps;
+  const w = im?.width ?? mm?.[0]?.width, h = im?.height ?? mm?.[0]?.height;
+  if (!COMPRESSED_GL[t.format]) return { compressed: true, refused: `compressed format ${t.format} (only ${Object.values(COMPRESSED_GL).join('/')} are uploaded; ASTC/ETC2/PVRTC/BC6H/signed-RGTC refused)` };
+  if (!Array.isArray(mm) || !mm.length) return { compressed: true, refused: 'CompressedTexture without mipmaps[]' };
+  if (!(w > 0 && h > 0)) return { compressed: true, refused: 'CompressedTexture without image size' };
+  const levels = [];
+  for (let l = 0; l < mm.length; l++) {
+    const m = mm[l], d = m?.data;
+    if (!d || !ArrayBuffer.isView(d)) return { compressed: true, refused: `mip ${l} data is not a byte view (${d?.constructor?.name})` };
+    if (m.width !== Math.max(1, w >> l) || m.height !== Math.max(1, h >> l)) return { compressed: true, refused: `mip ${l} size ${m.width}x${m.height} is not ${Math.max(1, w >> l)}x${Math.max(1, h >> l)}` };
+    levels.push(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+  }
+  let bytes; // lazy: concatenated only on a backend cache MISS
+  return { compressed: true, format: t.format, width: w, height: h, mipCount: levels.length, flipY: !!t.flipY, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`,
+    get data() { if (!bytes) { const n = levels.reduce((a, b) => a + b.length, 0); bytes = new Uint8Array(n); let o = 0; for (const l of levels) { bytes.set(l, o); o += l.length; } } return bytes; } };
+}
 function textureData(t) {
+  if (t?.isCompressedTexture) { const c = texCache.get(t); if (c && c.version === t.version && c.mm === t.mipmaps) return c.desc; const desc = compressedData(t); texCache.set(t, { version: t.version, image: t.image, mm: t.mipmaps, desc }); return desc; }
   const im = t?.image;
   if (!im) return null;
   const c = texCache.get(t);
@@ -85,7 +108,7 @@ export function cubeTextureData(t) {
 }
 export { textureData };
 export function pbrParams(m) {
-const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
+const kind = m.isMeshBasicMaterial || m.isMeshBasicNodeMaterial || m.isSpriteMaterial || m.isPointsMaterial ? 'basic' : m.isMeshLambertMaterial ? 'lambert' : m.isMeshPhysicalMaterial ? 'physical' : 'standard';
 const p = {
 color: rgb(m.color), opacity: m.opacity ?? 1, transparent: !!m.transparent, doubleSide: m.side === 2, backSide: m.side === 1,
 flatShading: !!m.flatShading, fog: m.fog !== false, wireframe: !!m.wireframe, depthWrite: m.depthWrite !== false, depthTest: m.depthTest !== false, colorWrite: m.colorWrite !== false,
@@ -97,9 +120,16 @@ emissive: rgb(m.emissive ?? { r: 0, g: 0, b: 0 }), emissiveIntensity: m.emissive
 if (kind === 'basic' && !(m.isNodeMaterial && hasNodes(m))) { p.unlit = true; p.toneMapped = true; /* r8 MEASURED (r8-blend.html): three r180 WebGPURenderer with renderer.toneMapping set tone-maps EVERY canvas fragment, `material.toneMapped:false` white opaque reads 188 (= Reinhard(1) sRGB) not 255 → unlit stays tone-mapped in the core */ }
 if (kind === 'physical') for (const k of ['clearcoat', 'clearcoatRoughness', 'transmission', 'ior', 'thickness', 'sheen', 'iridescence']) if (m[k]) p[k] = m[k];
 if (m.userData?.preset) p.preset = m.userData.preset;
+if (m.userData?.dsChrLight) p.chrLight = true; // lampas L-wgpu-tex: set on the mesh (adapter matKey chr variant) or the material -> core extra directional lights (setExtraDirs) apply to this material only
 // r9: three's GI attach (kernel/gi/gi-attach.js isGIEligibleMaterial) only wires probe GI into Standard/Physical/Lambert *NodeMaterial*; a plain MeshStandardMaterial (GLTFLoader figure, skinned or not) is lit by the hemisphere light only → tell the core not to sample the probes for it.
 if (!(m.isMeshStandardNodeMaterial || m.isMeshPhysicalNodeMaterial || m.isMeshLambertNodeMaterial)) p.noGi = true;
+if (m.isSpriteMaterial || m.isPointsMaterial) p.doubleSide = true; // r19-pcol: PointsMaterial quads are camera-facing too // r18: THREE.Sprite billboard quad is drawn from either side (camera-facing; never culled)
+// r19-pcol blend modes -> core BlendKind. three: 2 Additive, 3 Subtractive, 4 Multiply, 5 Custom (blendSrc/blendDst decoded: One/OneMinusSrcAlpha = premultiplied, SrcAlpha/One = additive, Zero/SrcColor = multiply; other = normal alpha).
+// Normal + premultipliedAlpha:true = three multiplies rgb by alpha in the shader then blends One/OneMinusSrcAlpha == plain alpha blending -> 'alpha' (no extra mode needed).
 if (m.blending === 2) p.blending = 'additive';
+else if (m.blending === 3) p.blending = 'subtractive';
+else if (m.blending === 4) p.blending = 'multiply';
+else if (m.blending === 5) { const bs = m.blendSrc, bd = m.blendDst; p.blending = bs === 201 && bd === 205 ? 'premultiplied' : (bs === 204 || bs === 201) && bd === 201 ? 'additive' : (bs === 208 && bd === 200) || (bs === 200 && bd === 202) ? 'multiply' : 'alpha'; } // three consts: Zero 200, One 201, SrcColor 202, SrcAlpha 204, OneMinusSrcAlpha 205, DstColor 208
 return p;
 }
 
@@ -108,7 +138,7 @@ const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = 
 export function materialSig(m, { exportNodeMaterial = null } = {}) {
   if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;
   const c = m.color, e = m.emissive;
-  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${m.toneMapped}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${+(m.colorWrite !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}${SLOT_SIG(m)}`;
+  return `pbr:${c ? c.r + ',' + c.g + ',' + c.b : ''}|${m.opacity}|${+!!m.transparent}|${m.side}|${+!!m.flatShading}|${m.roughness}|${m.metalness}|${e ? e.r + ',' + e.g + ',' + e.b : ''}|${m.emissiveIntensity}|${m.alphaTest}|${+(m.visible !== false)}|${m.blending}|${m.blendSrc ?? ''}|${m.blendDst ?? ''}|${+!!m.premultipliedAlpha}|${m.toneMapped}|${+!!m.wireframe}|${+(m.depthWrite !== false)}|${+(m.depthTest !== false)}|${+(m.colorWrite !== false)}|${m.clearcoat ?? ''}|${m.clearcoatRoughness ?? ''}|${m.transmission ?? ''}|${m.ior ?? ''}|${m.thickness ?? ''}|${m.sheen ?? ''}|${m.iridescence ?? ''}|${m.userData?.preset ?? ''}|f${+(m.fog !== false)}|c${+!!m.userData?.dsChrLight}${SLOT_SIG(m)}`; // r18: fog flag is a core material flag -> part of the sig
 }
 const customCache = new WeakMap(); // NodeMaterial → { version, v }
 export function customNodeMaterial(m) { return customNode(m); }
@@ -117,23 +147,30 @@ export function materialToParams(m, { exportNodeMaterial = null, three = null, t
   const params = pbrParams(m);
   // r6: legacy GLSL ShaderMaterial/RawShaderMaterial (bp-sky dome) — WebGPURenderer rejects it ('Material "ShaderMaterial" is not compatible'), so three draws NOTHING; match it (never a default-PBR sphere) + say so loudly. GLSL->WGSL translation REFUSED (see docs §10).
   if (m.isShaderMaterial || m.isRawShaderMaterial) return { kind: 'pbr', params: { ...params, visible: false }, textures: null, sig: materialSig(m), degraded: 'ShaderMaterial-GLSL-unsupported:not-drawn(three-parity)' };
-  const textures = {};
-  for (const slot of TEX_SLOTS) { const t = m[slot]; if (!t) continue; const d = textureData(t); if (d) textures[slot] = d; }
+const textures = {}, unsupported = [];
+  for (const slot of TEX_SLOTS) {
+    const t = m[slot]; if (!t) continue;
+    const d = textureData(t);
+    if (d?.refused) unsupported.push(`texture:${slot}:${d.refused}`); // r13-bc: a refused texture is dropped from the material but RECORDED (stats.unsupported), never silent
+    else if (d) textures[slot] = d;
+    else if (t.image) unsupported.push(`texture:${slot}:image not CPU-readable (${t.image.constructor?.name ?? typeof t.image})`);
+  }
   const hasTex = Object.keys(textures).length > 0;
   const sig = materialSig(m, { exportNodeMaterial });
   if (m.isNodeMaterial && customNode(m)) {
-    if (!exportNodeMaterial) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
+    if (!exportNodeMaterial) return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: 'NodeMaterial-without-exporter:pbr-fallback' };
     let c = nodeCache.get(m);
     const recv = !!tslOptions?.receiveShadow; // r10-shadow-5: the package depends on the receiver flag (hook) → part of the cache key
-if (!c || c.version !== m.version || c.recv !== recv) {
+const lg = tslOptions?.scene ? lightRegistry(tslOptions.scene).gen : 0; // r16-fcull: the package BAKES the scene's light set -> a never-seen light (grow-only registry gen) must rebuild it; adapter's sig-suffix re-export alone hit this cache and re-shipped the STALE package (new lights never entered the LightsNode)
+if (!c || c.version !== m.version || c.recv !== recv || c.lg !== lg) {
   // r6: an export failure is a LOUD per-material refusal (adapter counts + logs it, material drops to PBR) — never a thrown frame
-  try { c = { version: m.version, recv, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, recv, error: String(e?.message ?? e) }; }
+  try { c = { version: m.version, recv, lg, package: exportNodeMaterial(m, { ...tslOptions }) }; } catch (e) { c = { version: m.version, recv, lg, error: String(e?.message ?? e) }; }
   nodeCache.set(m, c);
 }
-if (c.error) return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
-return { kind: 'wgsl', package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
+if (c.error) return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: 'tsl-export-refused:pbr-fallback', tslRefused: { stage: 'export', reason: c.error } };
+return { kind: 'wgsl', unsupported: unsupported.length ? unsupported : undefined, package: c.package, fallbackParams: params, fallbackTextures: hasTex ? textures : null, sig };
   }
-  return { kind: 'pbr', params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined }; // emissiveMap: === map -> emissive x base texel (r7), distinct -> own slot (r6 maps)
+  return { kind: 'pbr', unsupported: unsupported.length ? unsupported : undefined, params, textures: hasTex ? textures : null, sig, degraded: m.isNodeMaterial ? 'NodeMaterial-without-exporter:pbr-fallback' : undefined }; // emissiveMap: === map -> emissive x base texel (r7), distinct -> own slot (r6 maps)
 }
 // a *NodeMaterial with no custom *Node slot set renders exactly like its non-node twin → plain PBR is faithful
 function hasNodes(m) {

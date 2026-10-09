@@ -334,6 +334,11 @@ let core = RenderCore::new(&device, &queue, opts);
     pub fn set_material_no_gi(&mut self, id: u32, on: bool) {
         self.core.set_material_no_gi(&self.device, id, on);
     }
+    /// three material.fog=false: scene fog skipped for this material. Call after setMaterialFlags.
+    #[wasm_bindgen(js_name = setMaterialNoFog)]
+    pub fn set_material_no_fog(&mut self, id: u32, on: bool) {
+        self.core.set_material_no_fog(&self.device, id, on);
+    }
     
     /// three colorWrite:false (depth-only / occluder mesh): empty colour write mask, depth per depthWrite. Call after setMaterialFlags (which resets it).
     #[wasm_bindgen(js_name = setMaterialNoColorWrite)]

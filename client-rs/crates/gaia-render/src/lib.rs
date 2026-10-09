@@ -414,6 +414,8 @@ pub struct MaterialFlags {
     pub no_receive_shadow: bool,
     /// true = probe GI is NOT sampled for this material (hemisphere ambient only). three attaches GI only to Standard/Physical/Lambert *NodeMaterial* (gi-attach.js isGIEligibleMaterial); plain MeshStandardMaterial (GLTFLoader figures) never gets it.
     pub no_gi: bool,
+    /// true = three `material.fog === false`: scene fog is NOT applied to this material (lit and unlit paths). Default false = fogged.
+    pub no_fog: bool,
     /// true = the shadow CASTER pass culls back faces (three: a FrontSide material renders `side = shadowSide ?? side` = FrontSide into the shadow map, so a single-sided surface whose front faces AWAY from the sun casts nothing). Default false = double-sided caster (old behaviour). Per MATERIAL.
     pub shadow_cull_back: bool,
     /// None = default (opaque writes, blended does not).
@@ -1141,6 +1143,19 @@ impl RenderCore {
         }
     }
 
+    /// three `material.fog = false`: skip scene fog for this material. Call AFTER `set_material_flags` (which resets it).
+    pub fn set_material_no_fog(&mut self, device: &wgpu::Device, id: u32, on: bool) {
+        let mut f = self.material_flags.get(&id).copied().unwrap_or_default();
+        if f.no_fog == on {
+            return;
+        }
+        f.no_fog = on;
+        self.material_flags.insert(id, f);
+        if let Some(desc) = self.materials.get(&id).and_then(|m| m.desc.clone()) {
+            self.create_material(device, id, desc);
+        }
+    }
+
     pub fn material_flags(&self, id: u32) -> MaterialFlags {
         self.material_flags.get(&id).copied().unwrap_or_default()
     }
@@ -1320,7 +1335,7 @@ impl RenderCore {
                 has_tex,
             ],
             emissive: [desc.emissive[0], desc.emissive[1], desc.emissive[2], lm_fac],
-            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, self.material_flags.get(&id).map_or(0.0, |f| (f.no_receive_shadow as u32 | (f.no_gi as u32) << 1) as f32)],
+            flags: [if self.material_flags.get(&id).is_some_and(|f| f.unlit) { 1.0 } else { 0.0 }, if desc.emissive_from_base && has_tex > 0.5 { 1.0 } else { 0.0 }, if self.material_flags.get(&id).is_some_and(|f| f.unlit && f.unlit_tone_mapped) { 1.0 } else { 0.0 }, self.material_flags.get(&id).map_or(0.0, |f| (f.no_receive_shadow as u32 | (f.no_gi as u32) << 1 | (f.no_fog as u32) << 2) as f32)],
             maps0: [arr.is_some() as u32 as f32, if mm.normal_scale == 0.0 { 1.0 } else { mm.normal_scale }, tv(mm.normal).is_some() as u32 as f32, tv(mm.roughness).is_some() as u32 as f32],
             maps1: [tv(mm.metalness).is_some() as u32 as f32, tv(mm.emissive).is_some() as u32 as f32, tv(mm.ao).is_some() as u32 as f32, mm.side as f32],
         };

@@ -24,7 +24,7 @@ struct Material {
     base_color: vec4<f32>,
     params: vec4<f32>,       // x metallic, y roughness, z alpha cutoff (<0 = none), w has_texture
     emissive: vec4<f32>,
-    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic), w bitfield: 1 = sun shadow NOT sampled (three receiveShadow:false), 2 = probe GI NOT sampled (non-node material: hemi only)
+    flags: vec4<f32>,        // x unlit (1 = base colour only: no lights/shadow/tonemap exposure), y emissive x base texture (three emissiveMap === map), z unlit but tone-mapped (three toneMapped:true Basic), w bitfield: 4 = scene fog NOT applied (three material.fog=false), 1 = sun shadow NOT sampled (three receiveShadow:false), 2 = probe GI NOT sampled (non-node material: hemi only)
     maps0: vec4<f32>,        // x has array base, y normal scale, z has normal map, w has roughness map
     maps1: vec4<f32>,        // x has metalness map, y has emissive map, z has AO map, w side (0 double, 1 front only, 2 back only)
 };
@@ -315,7 +315,7 @@ fn fs_main(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
         discard;
     }
     if (material.flags.x > 0.5) {
-        let cu = apply_fog(base.rgb, in.world);
+        let cu = select(apply_fog(base.rgb, in.world), base.rgb, (u32(material.flags.w + 0.5) & 4u) != 0u); // r18: bit 4 = material.fog=false
         if (material.flags.z > 0.5) { // unlit but tone-mapped (three MeshBasicMaterial toneMapped:true): exposure + Reinhard, no lighting
             if (frame.post.x > 0.5) { return vec4<f32>(cu, base.a); }
         let eu = cu * frame.ambient.w;
@@ -375,7 +375,7 @@ color = color + brdf(n, v, d / dist, base.rgb, metallic, rough) * pl.color.rgb *
     color = color + irr * base.rgb * (1.0 - metallic) * ao + em;
     // IBL diffuse (scene.environment): SH9 irradiance x albedo x (1 - metallic). Specular IBL not implemented.
     if (frame.env.x > 0.5) { color = color + sh_irradiance(n) * frame.env.y * base.rgb * (1.0 - metallic) * ao; }
-    color = apply_fog(color, in.world);
+    color = select(apply_fog(color, in.world), color, (u32(material.flags.w + 0.5) & 4u) != 0u); // r18: bit 4 = material.fog=false
     // exposure + Reinhard; target is *Srgb so the hardware encodes.
     if (frame.post.x > 0.5) { return vec4<f32>(color, base.a); }
     let e = color * frame.ambient.w;

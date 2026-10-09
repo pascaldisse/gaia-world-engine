@@ -223,7 +223,7 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
   function flagsFromParams(params = {}) {
     const blend = params.blending === 'additive' ? 2 : (params.transparent || (params.opacity ?? 1) < 1) ? 1 : 0;
     // r9: three r180 renders `shadowSide ?? side` into the shadow map -> a FrontSide material casts only from its front faces (core caster pass culls back faces); Double/Back keep the double-sided caster
-    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, nocw: params.colorWrite === false, nodt: params.depthTest === false, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi };
+    return { blend, unlit: !!params.unlit, dw: params.depthWrite === false ? 0 : -1, nocw: params.colorWrite === false, nodt: params.depthTest === false, toneMapped: params.toneMapped !== false, cull: !params.doubleSide && !params.backSide, nogi: !!params.noGi, nofog: params.fog === false };
   }
   function pushFlags(id) {
     const f = matFlags.get(id); if (!f) return;
@@ -237,11 +237,13 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
       if (f.nodt) { flagStats.noDepthTest++; gpu.setMaterialNoDepthTest?.(id, true); } // r11: three depthTest:false → depth compare ALWAYS (draws over nearer geometry); ?. = older wasm pkg stays depth-tested
       f.pushed = !!nondefault;
     }
+    if (!!f.nofog !== !!f.nofogPushed || (f.nofog && reset)) { gpu.setMaterialNoFog?.(id, !!f.nofog); f.nofogPushed = !!f.nofog; }
+    // r18: three material.fog=false -> core skips scene fog (?. = older wasm pkg keeps fog)
     if (f.nogi) gpu.setMaterialNoGi?.(id, true); // r9: material not GI-eligible in three (plain non-node material) → hemisphere only. Default (eligible) materials push nothing.
     if (reset) f.cullPushed = false;
     if (!!f.cull !== !!f.cullPushed) { gpu.setMaterialShadowCullBack?.(id, !!f.cull); f.cullPushed = !!f.cull; } // ?. = older wasm pkg without the r9 export keeps the double-sided caster
   }
-  function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, norecv: prev?.norecv ?? false, cullPushed: prev?.cullPushed ?? false, pushed: prev?.pushed ?? false }); pushFlags(id); }
+  function setMatFlags(id, params) { const prev = matFlags.get(id); matFlags.set(id, { ...flagsFromParams(params), ro: prev?.ro ?? 0, norecv: prev?.norecv ?? false, cullPushed: prev?.cullPushed ?? false, nofogPushed: prev?.nofogPushed ?? false, pushed: prev?.pushed ?? false }); pushFlags(id); }
   // r8 receiveShadow:false → core per-MATERIAL flag: a material stops sampling the sun shadow only when EVERY instance using it has receiveShadow false (mixed = receives, the old behaviour).
   const recvUsers = new Map(); // MaterialId → Map<NodeId, bool receive>
   function trackReceive(node) {

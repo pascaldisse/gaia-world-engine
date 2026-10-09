@@ -1905,6 +1905,10 @@ pub fn gtao_dims(&self) -> Option<(u32, u32)> { self.post.as_ref()?.gtao_dims() 
 pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         match self.post.as_mut() { Some(p) => { p.bloom = b; Ok(()) } None => Err("set_bloom: core built without hdr_scene".into()) }
     }
+    /// r18-tone: display-referred 4x4 colour matrix (column-major) applied after exposure/tone map; None = off. Err without `hdr_scene`.
+    pub fn set_color_grade(&mut self, m: Option<[[f32; 4]; 4]>) -> Result<(), String> {
+        match self.post.as_mut() { Some(p) => { p.color_grade = m; Ok(()) } None => Err("set_color_grade: core built without hdr_scene".into()) }
+    }
     /// r10 eye adaptation: `on` runs the GPU luminance meter (8x8 log2 grid); `mul` = host-adapted linear multiplier on the HDR scene before bloom/tone map. Err without `hdr_scene`.
     pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), String> {
         match self.post.as_mut() { Some(p) => { p.meter_on = on; p.ae_mul = if mul.is_finite() && mul > 0.0 { mul } else { 1.0 }; Ok(()) } None => Err("set_auto_exposure: core built without hdr_scene".into()) }

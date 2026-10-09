@@ -736,6 +736,12 @@ o.into()
         let g = on.then_some(gaia_render::GtaoParams { radius, thickness, samples, distance_exponent, distance_fall_off, scale, resolution_scale, intensity, fade_start, fade_end });
         self.core.set_gtao(g).map_err(|e| err(&e))
     }
+    /// r18-tone: 16 f32 column-major display-referred colour matrix (DS1 ColAdj shape) applied after tone map; empty/len!=16 = off.
+    #[wasm_bindgen(js_name = setColorGrade)]
+    pub fn set_color_grade(&mut self, m: &[f32]) -> Result<(), JsError> {
+        let g = (m.len() == 16).then(|| { let mut o = [[0.0f32; 4]; 4]; for c in 0..4 { for r in 0..4 { o[c][r] = m[c * 4 + r]; } } o });
+        self.core.set_color_grade(g).map_err(|e| err(&e))
+    }
     /// r10: eye adaptation. `on` = run the GPU meter; `mul` = host-adapted linear multiplier (scene before bloom/tone map).
     #[wasm_bindgen(js_name = setAutoExposure)]
     pub fn set_auto_exposure(&mut self, on: bool, mul: f32) -> Result<(), JsError> {

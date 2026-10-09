@@ -622,6 +622,7 @@ return;
     // r12-post GTAO (three GTAONode + rig composite) or null = off. Normals are reconstructed from depth in the core.
     setGtao(g) { if (g) gpu.setGtao(true, g.radius, g.thickness, g.samples, g.distanceExponent ?? 1, g.distanceFallOff ?? 1, g.scale ?? 1, g.resolutionScale ?? 1, g.intensity ?? 1, g.fadeStart ?? 1e9, g.fadeEnd ?? 2e9); else gpu.setGtao(false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); },
     // r10-shadow-18 eye adaptation: GPU meter on/off + host multiplier; grid = Float32Array(64) mean log2 luma (raw HDR) or empty
+    setColorGrade(m) { gpu.setColorGrade(m && m.length === 16 ? Float32Array.from(m) : new Float32Array(0)); },
     setAutoExposure(on, mul) { gpu.setAutoExposure(!!on, mul); },
     autoExposureGrid() { return gpu.autoExposureGrid(); },
     setBackground(rgb) { gpu.setBackgroundColor(Float32Array.of(rgb?.[0] ?? 0, rgb?.[1] ?? 0, rgb?.[2] ?? 0)); },

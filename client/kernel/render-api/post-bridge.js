@@ -107,13 +107,16 @@ try { aeChanged = tickAE(); } catch (e) { stats.error = String(e?.message ?? e);
         if (gs?.debug) { refuse('gtao:debug-' + gs.debug, 'debug view is three-only; GTAO not mirrored'); gs = null; }
         else if (gs && typeof backend.setGtao !== 'function') { refuse('gtao:backend', 'backend has no setGtao; AO dropped'); gs = null; }
       }
-      const next = `${s.toneMapping}|${s.exposure}|${bsig}|${gs ? Object.values(gs).join(',') : 'noao'}`;
+      const cg = renderer?.userData?.colorGrade; const grade = Array.isArray(cg) && cg.length === 16 && cg.every(Number.isFinite) ? cg.slice() : null; // r18-tone: game-set 4x4 colour matrix (column-major) on renderer.userData.colorGrade
+      const next = `${s.toneMapping}|${s.exposure}|${bsig}|${grade ? grade.join(',') : 'nograde'}|${gs ? Object.values(gs).join(',') : 'noao'}`;
       if (next === sig) return aeChanged;
       try {
         if (SUPPORTED_TONE_MAPPING.includes(s.toneMapping)) backend.setToneMapping?.(s.toneMapping);
         else stats.unsupported.add(`toneMapping:${s.toneMapping}`);
         backend.setExposure?.(s.exposure);
         backend.setBloom?.(s.bloom);
+        if (typeof backend.setColorGrade === 'function' && (grade || stats.colorGrade)) backend.setColorGrade(grade);
+        stats.colorGrade = grade;
         if (typeof backend.setGtao === 'function' && (gs || stats.gtao)) { backend.setGtao(gs); stats.gtaoPushes++; }
         stats.gtao = gs;
         stats.toneMapping = s.toneMapping; stats.exposure = s.exposure; stats.bloom = s.bloom;

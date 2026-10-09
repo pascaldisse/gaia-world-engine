@@ -23,6 +23,10 @@ pub use post::{BloomParams, GtaoParams, Post};
 use wgpu::util::DeviceExt;
 
 pub const MAX_POINT_LIGHTS: usize = 64;
+/// lane dynlight: directional lights besides the primary sun (DS1 characters = 3 directional + hemisphere, docs/DS-LIGHTING-SHADERS.md s1); no shadows.
+pub const MAX_EXTRA_DIRS: usize = 4;
+/// point-light falloff when the caller gives none (8-float packing): the previous fixed model = inverse-square (three decay 2).
+pub const POINT_DEFAULT_DECAY: f32 = 2.0;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Internal color target: sRGB-encoded LDR after tonemap (filterable everywhere).
 pub const INTERNAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -356,6 +360,13 @@ struct GpuPointLight {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuDirLight {
+    dir: [f32; 4],
+    color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FrameUniform {
     view_proj: [[f32; 4]; 4],
     camera_pos: [f32; 4],
@@ -374,6 +385,10 @@ struct FrameUniform {
     sh: [[f32; 4]; 9],
     /// r10 post flags (appended LAST): x = 1 -> HDR scene (shader outputs linear, no exposure/tone map)
     post: [f32; 4],
+    /// lane dynlight (appended LAST): x = extra directional light count (<= MAX_EXTRA_DIRS)
+    xdir_count: [u32; 4],
+    /// extra directional lights beyond the primary sun (no shadow): xyz = direction the light travels, color = rgb * intensity
+    xdirs: [GpuDirLight; MAX_EXTRA_DIRS],
 }
 
 #[repr(C)]
@@ -1841,19 +1856,45 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         self.opts.clear_color = rgba;
     }
 
-    /// Packed 8 floats/light: x y z range r g b intensity. Extra lights beyond
-    /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn.
+    /// Packed 8 floats/light: x y z range r g b intensity [+ optional 9th = decay when the stride is 9]. Extra lights beyond
+    /// MAX_POINT_LIGHTS are dropped and the count returned is what is drawn. Use `set_point_lights_decay` for the per-light falloff.
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {
+        self.set_point_lights_stride(packed, 8)
+    }
+
+    /// lane dynlight: packed 9 floats/light = the 8 above + falloff. falloff >= 0 = three `getDistanceAttenuation(d, range, decay)` (decay 0 = flat, the window
+    /// (1-(d/range)^4)^2 only; 2 = inverse-square, the old fixed model). falloff < 0 = DS1 point ramp sat((range-d)/(range-begin)) with begin/range = -falloff-1
+    /// (docs/DS-LIGHTING-SHADERS.md s5). The shader reads it from `color.w`.
+    pub fn set_point_lights_decay(&mut self, packed: &[f32]) -> usize {
+        self.set_point_lights_stride(packed, 9)
+    }
+
+    fn set_point_lights_stride(&mut self, packed: &[f32], stride: usize) -> usize {
         let s = self.opts.light_intensity_scale;
-        let n = (packed.len() / 8).min(MAX_POINT_LIGHTS);
+        let n = (packed.len() / stride).min(MAX_POINT_LIGHTS);
         for i in 0..n {
-            let l = &packed[i * 8..i * 8 + 8];
+            let l = &packed[i * stride..(i + 1) * stride];
+            let falloff = if stride >= 9 { l[8] } else { POINT_DEFAULT_DECAY };
             self.frame.points[i] = GpuPointLight {
                 position_range: [l[0], l[1], l[2], l[3]],
-                color: [l[4] * l[7] * s, l[5] * l[7] * s, l[6] * l[7] * s, 1.0],
+                color: [l[4] * l[7] * s, l[5] * l[7] * s, l[6] * l[7] * s, falloff],
             };
         }
         self.frame.counts[0] = n as u32;
+        n
+    }
+
+    /// lane dynlight: extra directional lights (beyond the primary `set_sun`), packed 7 floats: dir xyz (direction the light travels), rgb, intensity. No shadows.
+    /// Returns the count kept (<= MAX_EXTRA_DIRS).
+    pub fn set_extra_dirs(&mut self, packed: &[f32]) -> usize {
+        let s = self.opts.light_intensity_scale;
+        let n = (packed.len() / 7).min(MAX_EXTRA_DIRS);
+        for i in 0..n {
+            let l = &packed[i * 7..i * 7 + 7];
+            let d = Vec3::new(l[0], l[1], l[2]).normalize_or_zero();
+            self.frame.xdirs[i] = GpuDirLight { dir: [d.x, d.y, d.z, 0.0], color: [l[3] * l[6] * s, l[4] * l[6] * s, l[5] * l[6] * s, 1.0] };
+        }
+        self.frame.xdir_count[0] = n as u32;
         n
     }
 

@@ -757,6 +757,16 @@ o.into()
     pub fn set_point_lights(&mut self, packed: &[f32]) -> usize {
         self.core.set_point_lights(packed)
     }
+    /// lane dynlight: packed 9 f32 / light = the 8 above + falloff (>= 0 three decay, < 0 DS1 ramp: begin/range = -falloff - 1). Returns lights drawn (max 64).
+    #[wasm_bindgen(js_name = setPointLightsDecay)]
+    pub fn set_point_lights_decay(&mut self, packed: &[f32]) -> usize {
+        self.core.set_point_lights_decay(packed)
+    }
+    /// lane dynlight: extra directional lights beyond the primary sun, packed 7 f32: dir xyz (direction the light travels), rgb, intensity. No shadows. Returns count kept (max 4).
+    #[wasm_bindgen(js_name = setExtraDirs)]
+    pub fn set_extra_dirs(&mut self, packed: &[f32]) -> usize {
+        self.core.set_extra_dirs(packed)
+    }
 
     // ---- frame ----
     #[wasm_bindgen(js_name = setRenderHeight)]

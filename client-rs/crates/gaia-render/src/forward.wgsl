@@ -1,9 +1,12 @@
 // Forward PBR (metallic-roughness, GGX/Smith/Schlick) — sun + N point lights.
 // Uniform-only bindings (no storage buffers) so the same WGSL runs on Metal and WebGPU.
 const MAX_POINT_LIGHTS: u32 = 64u;
+const MAX_EXTRA_DIRS: u32 = 4u;
 const PI: f32 = 3.14159265;
 
+// color.w = falloff: >= 0 three decay exponent (0 flat, 2 inverse-square); < 0 DS1 ramp, begin/range = -w - 1
 struct PointLight { position_range: vec4<f32>, color: vec4<f32> };
+struct DirLight { dir: vec4<f32>, color: vec4<f32> };
 struct Frame {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
@@ -19,6 +22,8 @@ struct Frame {
     env: vec4<f32>,          // x = IBL diffuse on (1) / off (0), y = intensity
     sh: array<vec4<f32>, 9>, // IBL diffuse irradiance, SH9, already cosine-convolved and /PI: E(n)/PI = sum Y_i(n) sh[i].rgb
     post: vec4<f32>,         // r10: x = 1 HDR scene target (linear out, exposure + tone map happen in the post resolve)
+    xdir_count: vec4<u32>,   // lane dynlight: x = extra directional light count
+    xdirs: array<DirLight, MAX_EXTRA_DIRS>, // extra directional lights (no shadow): dir = direction the light travels, color = rgb * intensity
 };
 struct Material {
     base_color: vec4<f32>,
@@ -347,13 +352,26 @@ var color = brdf(n, v, sun_l, base.rgb, metallic, rough) * frame.sun_color.rgb
         let pl = frame.points[i];
         let d = pl.position_range.xyz - in.world;
         let dist2 = max(dot(d, d), 1e-4);
-        var atten = 1.0 / dist2;
+        let dist = sqrt(dist2);
         let range = pl.position_range.w;
-        if (range > 0.0) {
-            let r = sqrt(dist2) / range;
-            atten = atten * clamp(1.0 - r * r * r * r, 0.0, 1.0);
+        let fo = pl.color.w;
+        var atten = 1.0;
+        if (fo < 0.0) { // DS1 point ramp (docs/DS-LIGHTING-SHADERS.md s5): sat((R - d) * s), s = 1 / (R - begin)
+            let ramp_begin = (-fo - 1.0) * range;
+            atten = clamp((range - dist) / max(range - ramp_begin, 1e-4), 0.0, 1.0);
+        } else { // three getDistanceAttenuation: 1 / max(d^decay, 0.01) x (range > 0 ? clamp(1 - (d/range)^4, 0, 1)^2 : 1)
+            atten = 1.0 / max(pow(dist, fo), 0.01);
+            if (range > 0.0) {
+                let r = dist / range;
+                let w = clamp(1.0 - r * r * r * r, 0.0, 1.0);
+                atten = atten * w * w;
+            }
         }
-        color = color + brdf(n, v, d * inverseSqrt(dist2), base.rgb, metallic, rough) * pl.color.rgb * atten;
+        color = color + brdf(n, v, d / dist, base.rgb, metallic, rough) * pl.color.rgb * atten;
+    }
+    for (var i = 0u; i < min(frame.xdir_count.x, MAX_EXTRA_DIRS); i = i + 1u) { // lane dynlight: extra directional lights (DS1 character LightBank dirs 1,2), unshadowed
+        let xl = frame.xdirs[i];
+        color = color + brdf(n, v, -xl.dir.xyz, base.rgb, metallic, rough) * xl.color.rgb;
     }
     // hemisphere ambient: lerp(ground, sky, 0.5 n.y + 0.5) x albedo (flat when sky == ground)
     let hemi = mix(frame.ambient_ground.rgb, frame.ambient.rgb, clamp(0.5 * n.y + 0.5, 0.0, 1.0));

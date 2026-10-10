@@ -96,28 +96,41 @@ impl GiProbes {
         }
         let rows = |texels: usize| ((texels as u32).div_ceil(GI_TEX_WIDTH)).max(1);
         let (ir, dr) = (rows(irr.len() / 4), rows(depth.len() / 2));
-        let mut recreated = false;
-        if ir != self.irr_rows || dr != self.depth_rows {
-            self.irr = tex(device, "gi irradiance", wgpu::TextureFormat::Rgba32Float, ir, GI_TEX_WIDTH);
-            self.depth = tex(device, "gi depth", wgpu::TextureFormat::Rg32Float, dr, GI_TEX_WIDTH);
-            self.irr_view = self.irr.create_view(&Default::default());
-            self.depth_view = self.depth.create_view(&Default::default());
-            self.irr_rows = ir;
-            self.depth_rows = dr;
-            recreated = true;
-        }
+        let recreated = self.ensure_textures(device, ir, dr);
         write_padded(queue, &self.irr, irr, 4, ir);
         write_padded(queue, &self.depth, depth, 2, dr);
+        self.write_params(queue, params)?;
+        self.uploads += 1;
+        Ok(recreated)
+    }
+    /// (Re)create the sampled atlas textures at `ir`/`dr` rows of GI_TEX_WIDTH. Returns true when recreated (caller must rebuild the frame bind group).
+    pub(crate) fn ensure_textures(&mut self, device: &wgpu::Device, ir: u32, dr: u32) -> bool {
+        if ir == self.irr_rows && dr == self.depth_rows { return false; }
+        self.irr = tex(device, "gi irradiance", wgpu::TextureFormat::Rgba32Float, ir, GI_TEX_WIDTH);
+        self.depth = tex(device, "gi depth", wgpu::TextureFormat::Rg32Float, dr, GI_TEX_WIDTH);
+        self.irr_view = self.irr.create_view(&Default::default());
+        self.depth_view = self.depth.create_view(&Default::default());
+        self.irr_rows = ir;
+        self.depth_rows = dr;
+        true
+    }
+    /// lane nt-gi: native-compute atlas copy targets (gi_compute.rs encode copies its buffers into these).
+    pub(crate) fn textures(&self) -> (&wgpu::Texture, &wgpu::Texture) { (&self.irr, &self.depth) }
+    /// forward.wgsl `Gi` uniform from the packed params (header + per-cascade, see GI_PARAM_*). Validates cascade count / length.
+    pub(crate) fn write_params(&mut self, queue: &wgpu::Queue, params: &[f32]) -> Result<(), String> {
+        if params.len() < GI_PARAM_HEADER { return Err("setGiProbes: params header needs 8 floats".into()); }
+        let n = params[0] as usize;
+        if n == 0 || n > GI_MAX_CASCADES || params.len() < GI_PARAM_HEADER + n * GI_PARAM_CASCADE {
+            return Err(format!("setGiProbes: bad cascade count {n} / params {}", params.len()));
+        }
         let mut u: GiUniform = Zeroable::zeroed();
         u.info = [n as f32, params[1], params[2], params[3]];
         u.tex = [GI_TEX_WIDTH, GI_TEX_WIDTH, params[4] as u32, 0];
         for k in 0..n { u.cas[k].copy_from_slice(&params[GI_PARAM_HEADER + k * GI_PARAM_CASCADE..GI_PARAM_HEADER + (k + 1) * GI_PARAM_CASCADE]); }
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&u));
-        self.uploads += 1;
-        Ok(recreated)
+        Ok(())
     }
 }
-
 fn write_padded(queue: &wgpu::Queue, t: &wgpu::Texture, data: &[f32], comps: usize, rows: u32) {
     let row_f32 = GI_TEX_WIDTH as usize * comps;
     let full = rows as usize * row_f32;

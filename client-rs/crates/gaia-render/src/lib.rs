@@ -11,6 +11,8 @@ mod timing_async;
 pub use three_material::ThreeFrame;
 pub mod skin;
 mod gi;
+mod gi_compute;
+pub use gi_compute::GI_FRAME_LEN;
 pub mod background;
 pub use gi::{GI_MAX_CASCADES, GI_PARAM_CASCADE, GI_PARAM_HEADER, GI_TEX_WIDTH};
 
@@ -668,6 +670,9 @@ pub struct RenderCore {
     frame_bind: wgpu::BindGroup,
     /// r6 probe-GI atlases + params (group 0 bindings 1..3); count 0 = off.
     gi: gi::GiProbes,
+    /// lane nt-gi: native probe-GI update (gi_compute.rs). None = the host feeds atlases through `set_gi_probes` (browser/three readback).
+    gi_compute: Option<gi_compute::GiCompute>,
+    gi_error: Option<String>,
     /// r6-scene: scene.background Texture/CubeTexture pass (colour backgrounds = clear colour).
     background: background::Background,
     /// r10 post chain (Some iff `opts.hdr_scene`)
@@ -883,7 +888,7 @@ impl RenderCore {
             cube_textures: HashMap::new(),
             bc_stats: [0; 6],
             white_cube,
-            storage_buffers: HashMap::new(),
+            storage_buffers: gi_compute_placeholders(device),
             white_array,
             material_maps: HashMap::new(),
             shadow,
@@ -909,6 +914,8 @@ impl RenderCore {
             frame_buffer,
             frame_bind,
             gi: gi_probes,
+            gi_compute: None,
+            gi_error: None,
             background: background::Background::new(device, queue, scene_format, hdr_scene),
             post: hdr_scene.then(|| post::Post::new(device, queue, INTERNAL_FORMAT, tone_mapping0)),
             scene_format,
@@ -1895,6 +1902,47 @@ impl RenderCore {
         self.gi.clear(queue);
     }
 
+    /// lane nt-gi: storage ids reserved for the native GI atlases [irradiance, depth]. They exist from construction (placeholder buffers) so a TSL material
+    /// whose probe-query node binds the atlas can be bound BEFORE `gi_compute_init`; init swaps real buffers in under the same ids.
+    pub fn gi_storage_ids(&self) -> [u32; 2] { [GI_STORAGE_IRR_ID, GI_STORAGE_DEPTH_ID] }
+    /// lane nt-gi: create the native probe-GI compute (cfg = gi-native.js config JSON). Replaces any previous one. The page then stops reading atlases back.
+    pub fn gi_compute_init(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, cfg_json: &str) -> Result<(), String> {
+        let cfg = gi_compute::GcConfig::from_json(cfg_json)?;
+        let g = gi_compute::GiCompute::new(device, cfg)?;
+        let (ir, dr) = (g.irr_rows, g.depth_rows);
+        self.gi.clear(queue); // forward stays at 0 cascades until the first batch is computed + copied
+        if self.gi.ensure_textures(device, ir, dr) {
+            self.frame_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("frame bind"), layout: &self.frame_layout, entries: &frame_entries(&self.frame_buffer, &self.gi) });
+        }
+        self.storage_buffers.insert(GI_STORAGE_IRR_ID, three_material::StorageBuf { buffer: g.irr.clone(), size: g.irr.size() });
+        self.storage_buffers.insert(GI_STORAGE_DEPTH_ID, three_material::StorageBuf { buffer: g.depth.clone(), size: g.depth.size() });
+        self.three.invalidate_bind_groups();
+        self.gi_compute = Some(g);
+        Ok(())
+    }
+    /// lane nt-gi: one dirty-brick range of the CPU voxel window (u32 words from `start`).
+    pub fn gi_compute_voxels(&mut self, queue: &wgpu::Queue, start: u32, words: &[u32]) -> Result<(), String> {
+        self.gi_compute.as_mut().ok_or("giComputeVoxels: giComputeInit not called")?.write_voxels(queue, start, words)
+    }
+    /// lane nt-gi: this frame's GI update (frame layout = GI_FRAME_LEN f32, gi_compute.rs GF_*; `fresh` = global probe indices that entered a window). Encoded in the next render.
+    pub fn gi_compute_step(&mut self, queue: &wgpu::Queue, frame: &[f32], fresh: &[u32]) -> Result<(), String> {
+        self.gi_compute.as_mut().ok_or("giComputeStep: giComputeInit not called")?.step(queue, frame, fresh)
+    }
+    /// lane nt-gi: drop the native compute (GI off / reconfigure). Reserved ids go back to placeholders.
+    pub fn gi_compute_destroy(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.gi_compute.take().is_some() {
+            self.gi.clear(queue);
+            self.storage_buffers.extend(gi_compute_placeholders(device));
+            self.three.invalidate_bind_groups();
+        }
+    }
+    /// lane nt-gi: last native GI failure (voxel/step/encode), taken (cleared) on read.
+    pub fn gi_compute_error(&mut self) -> Option<String> { self.gi_error.take() }
+    /// lane nt-gi: [steps, dispatched probes, voxel range writes, fresh probes, irradiance rows, depth rows] (zeros when no native compute).
+    pub fn gi_compute_stats(&self) -> [f64; 6] {
+        self.gi_compute.as_ref().map_or([0.0; 6], |g| [g.steps as f64, g.dispatched_probes as f64, g.voxel_writes as f64, g.fresh_probes as f64, g.irr_rows as f64, g.depth_rows as f64])
+    }
+
     /// three `scene.background` Color. MEASURED (r6 S4, r180 WebGPURenderer + ReinhardToneMapping): three TONE-MAPS the background colour like any
     /// fragment, so the clear value = Reinhard(c * exposure) (same operator as forward.wgsl); the *Srgb target then encodes it.
     pub fn set_background_color(&mut self, rgb: [f32; 3]) {
@@ -2203,6 +2251,16 @@ let (mesh, material, range) = &self.batches[b];
                     *draws += 1;
         }
     }
+    /// lane nt-gi: native probe-GI update for this frame (before any pass that samples the atlases). A failure is kept in `gi_error` (`gi_compute_error`) and GI stays on the last good batch.
+    fn encode_gi_compute(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        let Some(g) = self.gi_compute.as_mut() else { return };
+        let (irr, depth) = self.gi.textures();
+        match g.encode(queue, encoder, irr, depth) {
+            Ok(Some(params)) => { if let Err(e) = self.gi.write_params(queue, &params) { self.gi_error = Some(format!("forward params: {e}")); } }
+            Ok(None) => {}
+            Err(e) => self.gi_error = Some(e),
+        }
+    }
     fn encode_forward(
         &mut self,
         device: &wgpu::Device,
@@ -2212,6 +2270,7 @@ let (mesh, material, range) = &self.batches[b];
     ) {
         self.ensure_targets(device, output_size);
         self.encode_skinning(device, queue, encoder);
+        self.encode_gi_compute(queue, encoder);
         // white COLOR_0 fallback must cover the largest vertex buffer in use (skinned meshes share one big dst buffer)
         let need = self.meshes.values().map(|m| m.vertices.size() / std::mem::size_of::<scene::Vertex>() as u64).max().unwrap_or(1).max(1) * 16;
         if self.white_colors.size() < need {
@@ -2610,6 +2669,13 @@ fn upload_rgba8_fmt(
     texture.create_view(&Default::default())
 }
 
+/// lane nt-gi: reserved storage-buffer ids for the native GI atlases (above any id the host mints).
+pub const GI_STORAGE_IRR_ID: u32 = u32::MAX - 1;
+pub const GI_STORAGE_DEPTH_ID: u32 = u32::MAX;
+fn gi_compute_placeholders(device: &wgpu::Device) -> HashMap<u32, three_material::StorageBuf> {
+    let mk = |label| three_material::StorageBuf { buffer: device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: 16, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }), size: 16 };
+    HashMap::from([(GI_STORAGE_IRR_ID, mk("gi irradiance placeholder")), (GI_STORAGE_DEPTH_ID, mk("gi depth placeholder"))])
+}
 fn frame_entries<'a>(frame_buffer: &'a wgpu::Buffer, g: &'a gi::GiProbes) -> [wgpu::BindGroupEntry<'a>; 4] {
     [
         wgpu::BindGroupEntry { binding: 0, resource: frame_buffer.as_entire_binding() },

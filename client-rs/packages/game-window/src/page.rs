@@ -24,7 +24,7 @@ const TEMPLATE: &str = r#"(() => {
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   if (cfg.pageLog !== 'off') { // page console -> host stderr (gaia_page_log); cfg.pageLog = off|error|warn|all
     const rank = { error: 0, warn: 1, info: 2, log: 2 }, max = rank[cfg.pageLog === 'all' ? 'log' : cfg.pageLog] ?? 1;
-    const fmt = (a) => a.map((x) => { try { return x instanceof Error ? (x.stack || String(x)) : typeof x === 'object' ? JSON.stringify(x) : String(x); } catch (e) { return String(x); } }).join(' ').slice(0, cfg.pageLogMax);
+    const fmt = (a) => a.map((x) => { try { return x instanceof Error ? `${x.name}: ${x.message}\n${x.stack ?? ''}` : typeof x === 'object' ? JSON.stringify(x) : String(x); } catch (e) { return String(x); } }).join(' ').slice(0, cfg.pageLogMax);
     const send = (level, text) => { try { window.__TAURI_INTERNALS__.invoke('gaia_page_log', { level, text }).catch(() => {}); } catch (e) {} };
     for (const level of ['error', 'warn', 'info', 'log']) { if (rank[level] > max) continue; const orig = console[level].bind(console); console[level] = (...a) => { orig(...a); send(level, fmt(a)); }; }
     addEventListener('error', (e) => send('uncaught', `${e.message} @ ${e.filename}:${e.lineno}:${e.colno} ${e.error?.stack ?? ''}`.slice(0, cfg.pageLogMax)));
@@ -33,6 +33,7 @@ const TEMPLATE: &str = r#"(() => {
   const api = {
     version: 2,
     renderHeight: cfg.renderHeight, upscaler: cfg.upscaler, pageGpu: cfg.pageGpu,
+    ws: cfg.ws && location.origin === cfg.ws.origin ? Object.freeze({ port: cfg.ws.port, token: cfg.ws.token }) : null, // localhost WS transport, game origin only
     info() { return invoke('gaia_native_info'); },
   };
   Object.defineProperty(window, '__GAIA_NATIVE__', { value: Object.freeze(api) });

@@ -2,6 +2,7 @@
 import { arrayMirror } from './gpu-mirror.js';
 import { readCube } from './env-image.js';
 import { lightRegistry } from './light-registry.js';
+import { trackBuffer as memBuf, trackTexture as memTex } from './native/mem-account.js'; // §page-mem-log
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
@@ -48,7 +49,7 @@ function readPixels(im, w, h, keep = true) {
     if (immutable && keep) pixelCache.set(im, out);
     if (!keep && w * h > mapConfig.scratchKeepPx) { scratch.width = 1; scratch.height = 1; } // frees the CPU backing store of a big decode canvas (re-grown on demand)
   }
-  if (out) { textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
+  if (out) { memBuf('pixelRead', out); textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
   return out;
 }
 // r13-bc: three CompressedTexture (DDS/KTX2 loaders: image {width,height}, mipmaps[{data,width,height}], format = GL internal format) -> compressed descriptor
@@ -87,6 +88,7 @@ export function textureEstimate(t) {
   return { key: `${t.uuid}:${t.version}`, bytes: w * h * 4 };
 }
 function textureData(t) {
+  memTex(t);
   if (t?.isCompressedTexture) { const c = texCache.get(t); if (c && c.version === t.version && c.mm === t.mipmaps) return c.desc; const desc = compressedData(t); texCache.set(t, { version: t.version, image: t.image, mm: t.mipmaps, desc }); return desc; }
   const rc = texCache.get(t);
   if (rc && rc.desc.released && rc.version === t.version) return rc.desc; // source dropped after upload: the cached key descriptor is all that is left (backend GPU cache hit)

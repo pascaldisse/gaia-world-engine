@@ -6,6 +6,7 @@
 mod apply;
 mod config;
 mod gpu;
+mod memfoot;
 mod ipc_ws;
 mod page;
 #[cfg(target_os = "macos")]
@@ -52,6 +53,10 @@ Ok(tauri::ipc::Response::new(report))
 /// Forwarded by page.rs init script: console.error/warn/info/log + window error + unhandledrejection, `level` + text.
 #[tauri::command]
 fn gaia_page_log(level: String, text: String) {
+    if level == "mem" { // page byte accounting (page-side mem-account.js) + host/WebContent footprints, one line
+        eprintln!("[page:mem] {text} {}", memfoot::host_suffix());
+        return;
+    }
     eprintln!("[page:{level}] {text}");
 }
 
@@ -136,6 +141,9 @@ let window = tauri::window::WindowBuilder::new(app, WINDOW_LABEL)
             #[cfg(target_os = "macos")]
             if !cfg.occlusion_detection {
                 occlusion::disable(&webview).map_err(std::io::Error::other)?;
+            }
+            if cfg.page_mem_ms > 0 && cfg.page_log != "off" {
+                memfoot::start_sampler(webview.clone(), cfg.page_mem_ms);
             }
             let _ = webview.set_focus(); // keyboard goes to the page from the first frame
 

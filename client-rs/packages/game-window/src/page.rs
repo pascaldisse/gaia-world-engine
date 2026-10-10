@@ -39,6 +39,7 @@ const TEMPLATE: &str = r#"(() => {
   const api = {
     version: 2,
     renderHeight: cfg.renderHeight, upscaler: cfg.upscaler, pageGpu: cfg.pageGpu,
+    pageMemMs: cfg.pageMemMs, // 0 = off; consumed by the page's mem-account.js (native mode) -> gaia_page_log level 'mem'
     ws: cfg.ws && location.origin === cfg.ws.origin ? Object.freeze({ port: cfg.ws.port, token: cfg.ws.token }) : null, // localhost WS transport, game origin only
     info() { return invoke('gaia_native_info'); },
   };
@@ -54,6 +55,7 @@ pub fn init_script(cfg: &GameConfig, ws: Option<(u16, &str)>) -> String {
         "pageLog": cfg.page_log,
         "pageLogMax": cfg.page_log_max,
         "pageHeartbeatMs": cfg.page_heartbeat_ms,
+        "pageMemMs": if cfg.page_log == "off" { 0 } else { cfg.page_mem_ms },
         "ws": ws.map(|(port, token)| serde_json::json!({ "port": port, "token": token, "origin": cfg.url.origin().ascii_serialization() })),
     });
     TEMPLATE.replace("__CFG__", &json.to_string())

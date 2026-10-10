@@ -448,6 +448,8 @@ pendingBytes: gpu.pendingBytes ? () => gpu.pendingBytes() : undefined,
 afterUpload: gpu.afterAck ? (fn) => gpu.afterAck(fn) : undefined,
 /** true when the host already holds this texture key (a create would be a cache hit, 0 wire bytes). */
 textureCached(key) { return !!key && texByKey.has(key); },
+/** nt-frameleak census: backend-owned containers (nodes/textures/flags/lights ...) - all must track the live scene, not grow with frames. */
+census() { return { nodes: nodes.size, lights: lights.size, texKeys: texByKey.size, matFlags: matFlags.size, recvMats: recvUsers.size, matTex: matTextures.size, stor: storByAttr.size, matStor: matStorage.size, skinMeshes: skinnedMeshes.size, staticCand: staticCand.size, refused: refusedTex.size }; },
 textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size }, compressedCore: gpu.compressedStats ? Array.from(gpu.compressedStats()) : null /* [gpu_native, cpu_no_bc_feature, cpu_bc1rgb_punchthrough, cpu_unaligned_or_unflippable, cpu_single_mip, refused] */ }; },
     drainUnsupported() { const r = [...refusedTex]; refusedTex.clear(); return r; }, // r13-bc: texture refusals since the last drain -> scene-adapter stats.unsupported
     // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the

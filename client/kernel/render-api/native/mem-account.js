@@ -21,6 +21,10 @@ const isBuf = (b) => b instanceof ArrayBuffer || (typeof SharedArrayBuffer !== '
 const bufOf = (a) => (isBuf(a) ? a : ArrayBuffer.isView(a) ? a.buffer : null);
 export function register(name, fn) { probes.set(name, fn); }
 export function unregister(name) { probes.delete(name); }
+// nt-frameleak: EXTRA lines printed after the main one every tick (own 1800-char budget: the main line is already near the cap). registerLine(name, fn) fn() -> flat {key: number|string}.
+const lines = new Map();
+export function registerLine(name, fn) { lines.set(name, fn); }
+export function unregisterLine(name) { lines.delete(name); }
 /** weak: the buffer is counted only while the page still references it. Safe to call per allocation (one WeakRef). */
 // nt-frameleak (page-memory.js memTrackSweepAt): the sets only shed dead WeakRefs inside the periodic probe -> with --page-mem-ms 0 (timer never starts) they grew by one WeakRef per tracked buffer/texture forever.
 // Sweep dead refs inline once a set passes the threshold; the next threshold doubles over the survivors (amortised O(1) per add).
@@ -155,7 +159,7 @@ function invokeLog(text) {
 /** Start the periodic line. ms defaults to the host's --page-mem-ms (window.__GAIA_NATIVE__.pageMemMs); 0/absent = off. Idempotent. */
 export function startMemLog(ms = globalThis.__GAIA_NATIVE__?.pageMemMs) {
   if (timer || !(ms > 0)) return false;
-  timer = setInterval(() => invokeLog(snapshot().line), ms);
+  timer = setInterval(() => { const t = performance.now(); invokeLog(snapshot(t).line); for (const [n, fn] of lines) { try { invokeLog(`up=${(t / 1000).toFixed(1)}s |${n}${fmt(fn())}`.slice(0, MEM_PARAMS.maxLineChars)); } catch (e) { invokeLog(`up=${(t / 1000).toFixed(1)}s |${n} ERR=${String(e?.message ?? e).slice(0, 80)}`); } } }, ms);
   return true;
 }
 export function stopMemLog() { if (timer) { clearInterval(timer); timer = null; } }

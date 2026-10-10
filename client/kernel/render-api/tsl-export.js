@@ -230,6 +230,8 @@ const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Da
 export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0 };
 // r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
 export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
+/** nt-frameleak census: structCache sizes (templates pin node graph + package -> material/mesh/textures). */
+export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size }; }
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
 const fnIds = new WeakMap(); let fnN = 0;
 const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };

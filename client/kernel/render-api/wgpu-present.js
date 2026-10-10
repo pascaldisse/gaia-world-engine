@@ -13,6 +13,9 @@ import { threeGpuOff } from './native-mode.js';
 import { createPostBridge } from './post-bridge.js';
 import { configureMaterialMap } from './material-map.js';
 import { pageMemConfig, configureLeakGuards } from './native/page-memory.js';
+import { registerLine as memLine } from './native/mem-account.js';
+import { lightRegistryCensus } from './light-registry.js';
+import { tslCensus } from './tsl-export.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
   const native = params.get('renderBackend') === 'native';
@@ -52,6 +55,8 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)
   const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure, autoExposure: params.get('wgpuAE') !== '0', gtao: params.get('wgpuGtao') !== '0' });
   addEventListener('resize', size);
+  // nt-frameleak: ONE extra [page:mem] line per tick (|census) with the size of every long-lived container on the native path. Diff two ticks: whatever grows with `frames` is the leak. Keys: ad_ scene-adapter, be_ wgpu-backend, tx_ transport/acks/writer, tsl_ TSL template cache, lr_ light registry, gi_ GI attachment.
+  if (native) memLine('census', () => { const o = { frames: st.frames, busySkips: st.busySkips ?? 0 }; const add = (p, c) => { if (c) for (const k in c) if (typeof c[k] === 'number') o[p + k] = c[k]; }; add('ad_', adapter.census?.()); o.ad_updated = adapter.stats.updated; add('be_', backend.census?.()); add('tx_', backend.gpu?.census?.()); add('tsl_', tslCensus()); add('lr_', lightRegistryCensus(scene)); o.gi_att = getGi?.()?._attachment?.attachedCount; return o; });
   const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {
     backend, adapter, canvas, stats: st, giBridge, giNative, noThreeGpu, postBridge, tslCache: structCache,

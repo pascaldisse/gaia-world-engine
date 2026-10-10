@@ -425,7 +425,8 @@ const len = Math.hypot(...d) || 1; return { ...x, dir: d.map((v) => v / len), po
 }
 function syncDirs() {
 const L = seen_dirs.map(dirInfo); seen_dirs = [];
-let pi = L.findIndex((x) => x.vis && x.o.castShadow && x.power > 0); if (pi < 0) { let best = -1; L.forEach((x, i) => { if (x.vis && x.power > best) { best = x.power; pi = i; } }); }
+const sunOk = (x) => !x.o.userData?.gaiaNoSun; // userData.gaiaNoSun: light is meant for a subset of materials (e.g. character-only rig) -> never promoted to the core sun (which lights EVERY mesh); goes to extra dirs instead
+let pi = L.findIndex((x) => x.vis && sunOk(x) && x.o.castShadow && x.power > 0); if (pi < 0) { let best = -1; L.forEach((x, i) => { if (x.vis && sunOk(x) && x.power > best) { best = x.power; pi = i; } }); }
 const prim = pi >= 0 ? L[pi] : null;
 if (prim) {
 const o = prim.o;

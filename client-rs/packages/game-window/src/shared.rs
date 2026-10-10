@@ -33,16 +33,19 @@ pub struct Shared {
     pub apply_messages: AtomicU64,
     pub apply_bytes: AtomicU64,
     pub gpu_errors: AtomicU64,
+    /// --apply-op-top: kinds named in a logged [apply] line (0 = per-op timing off)
+    pub apply_op_top: usize,
 }
 
 impl Shared {
-    pub fn new(info: Info) -> Self {
+    pub fn new(info: Info, apply_op_top: usize) -> Self {
         Self {
             running: AtomicBool::new(true),
             info: Mutex::new(info),
             apply_messages: AtomicU64::new(0),
             apply_bytes: AtomicU64::new(0),
             gpu_errors: AtomicU64::new(0),
+            apply_op_top,
         }
     }
 }

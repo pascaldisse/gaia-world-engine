@@ -10,7 +10,9 @@ pub use commands::{API_HASH, CmdResult, Commands};
 pub use session::{Session, device_descriptor, render_options_from_json, shadow_options_from_json};
 
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::time::Duration;
 use wire::{Framer, OP_CORRUPT, OP_FREE, OP_HELLO, Reader, StreamError};
 
 // native wgpu is Send; the web backend is not (wasm32 is single-threaded, nothing to assert there).
@@ -20,6 +22,32 @@ const _: fn() = || {
     is_send::<Host>(); // Host lives in a Mutex shared by the IPC thread and the frame loop
 };
 
+/// Wall time spent in one op kind during the LAST `Host::apply` (see `Host::time_ops`).
+#[derive(Clone, Debug)]
+pub struct OpTiming {
+    pub kind: &'static str,
+    pub count: u32,
+    pub total: Duration,
+    /// slowest single command of this kind
+    pub max: Duration,
+}
+/// wasm32 has no `Instant::now` (panics): per-op timing is native-only, never on there.
+#[cfg(not(target_arch = "wasm32"))]
+fn now() -> Option<std::time::Instant> {
+    Some(std::time::Instant::now())
+}
+#[cfg(target_arch = "wasm32")]
+fn now() -> Option<std::time::Instant> {
+    None
+}
+fn kind_name(op: u16) -> &'static str {
+    match op {
+        OP_HELLO => "hello",
+        OP_FREE => "free",
+        OP_CORRUPT => "corrupt",
+        _ => commands::op_name(op),
+    }
+}
 pub struct Host {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -31,12 +59,15 @@ pub struct Host {
     rendered: u64,
     /// log failed commands to stderr as they happen (they are always also returned in the report).
     pub log_errors: bool,
+    /// time every command inside `apply` per op kind (off by default; native hosts only). Read back with `last_apply_ops`.
+    pub time_ops: bool,
+    op_times: HashMap<u16, (u32, Duration, Duration)>,
 }
 
 impl Host {
     /// `surface_format`: format of the view passed to `render` (sRGB view format). `render_size`: that view's size in px.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, surface_format: wgpu::TextureFormat, render_size: (u32, u32)) -> Self {
-        Self { device, queue, surface_format, output: render_size, session: None, framer: Framer::default(), committed: 0, rendered: 0, log_errors: true }
+        Self { device, queue, surface_format, output: render_size, session: None, framer: Framer::default(), committed: 0, rendered: 0, log_errors: true, time_ops: false, op_times: HashMap::new() }
     }
 
     /// Output (target view) size changed.
@@ -80,13 +111,34 @@ s.render_queue(output)?;
 self.rendered = self.committed;
 Ok(true)
 }
+/// Per-op-kind timings of the last `apply` (needs `time_ops`): slowest `top` kinds first, + (total commands, sum of ALL kinds' time).
+/// `apply` wall time minus that sum = framing/copy/report overhead outside any op.
+pub fn last_apply_ops(&self, top: usize) -> (Vec<OpTiming>, u32, Duration) {
+let mut v: Vec<OpTiming> = self.op_times.iter().map(|(op, (count, total, max))| OpTiming { kind: kind_name(*op), count: *count, total: *total, max: *max }).collect();
+let cmds = v.iter().map(|x| x.count).sum();
+let sum = v.iter().map(|x| x.total).sum();
+v.sort_by(|a, b| b.total.cmp(&a.total));
+v.truncate(top);
+(v, cmds, sum)
+}
 /// Feed one IPC message (any slice of the stream). Returns the UTF-8 JSON report for the IPC response:
     /// `{"errors":[{op,id,msg}], "q":{queries}, "frame":n}` (`q`/`frame` only when a frame was committed or hello ran).
     pub fn apply(&mut self, bytes: &[u8]) -> Vec<u8> {
         let mut errors: Vec<StreamError> = Vec::new();
         let mut want_q = false;
         let mut framer = std::mem::take(&mut self.framer);
-        framer.feed(bytes, |op, payload| self.on_command(op, payload, &mut errors, &mut want_q));
+        self.op_times.clear();
+framer.feed(bytes, |op, payload| {
+let t = if self.time_ops { now() } else { None };
+self.on_command(op, payload, &mut errors, &mut want_q);
+if let Some(t) = t {
+let d = t.elapsed();
+let e = self.op_times.entry(op).or_insert((0, Duration::ZERO, Duration::ZERO));
+e.0 += 1;
+e.1 += d;
+e.2 = e.2.max(d);
+}
+});
         self.framer = framer;
         let mut rep = json!({ "errors": errors.iter().map(|x| json!({ "op": x.op, "id": x.id, "msg": x.msg })).collect::<Vec<_>>() });
         if self.log_errors {

@@ -92,7 +92,7 @@ fn main() {
         pointer_lock: if cfg.pointer_lock_spi { "pending".into() } else { "off (stock wry: WebKit denies requestPointerLock)".into() },
         page_gpu: page::page_gpu_name(cfg.page_gpu),
         ..Default::default()
-    }));
+    }, cfg.apply_op_top));
     let run_shared = shared.clone();
     let setup_cfg = cfg.clone();
     tauri::Builder::default()

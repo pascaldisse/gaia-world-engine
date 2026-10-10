@@ -97,7 +97,8 @@ impl Presenter {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
-        let host = Host::new(device.clone(), queue.clone(), format, (config.width, config.height));
+        let mut host = Host::new(device.clone(), queue.clone(), format, (config.width, config.height));
+        host.time_ops = cfg.apply_op_top > 0;
         let info = adapter.get_info();
         let adapter_name = format!("{} ({:?})", info.name, info.backend);
         eprintln!("[gpu] {adapter_name} surface {format:?} {}x{} features={features:?} upscaler={}", config.width, config.height, cfg.upscaler.name());

@@ -16,6 +16,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils, MToonMaterialLoaderPlugin } from '@pixiv/three-vrm';
 import { MToonNodeMaterial } from '@pixiv/three-vrm/nodes';
 import { VRMAnimationLoaderPlugin, createVRMAnimationClip } from '@pixiv/three-vrm-animation';
+import { trackBuffer as memBuf } from './render-api/native/mem-account.js';
 
 // ---- semantic slot map (spec §4.1) ------------------------------------------
 // VRoid names materials `F<base>_<variant>_<slot>_<Region>_<nn>_<CATEGORY>`;
@@ -78,7 +79,7 @@ export function fetchVrmBytes(src) {
       src,
       fetch(src).then((r) => {
         if (!r.ok) throw new Error(`vrm fetch failed: ${src} (${r.status})`);
-        return r.arrayBuffer();
+        return r.arrayBuffer().then((b) => (memBuf('vrmBytes', b), b)); // §page-mem-log
       }),
     );
   }

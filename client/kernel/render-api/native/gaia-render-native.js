@@ -15,6 +15,7 @@
 import { API_HASH, GaiaRenderNativeGen, OP_FRAME_COMMIT, QUERIES } from './gaia-render-native.gen.js';
 import { Writer } from './native-wire.js';
 import { createTransport, customProtocolSend, tauriInvokeSend, wsSend } from './native-transport.js';
+import { attachNative as memAttach } from './mem-account.js'; // §page-mem-log
 
 const OP_HELLO = 0, OP_FREE = 0xffff; // wire.rs
 const MiB = 1 << 20;
@@ -72,6 +73,7 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
       },
     };
     const gpu = new GaiaRenderNative(rt, transport, self);
+memAttach({ transport, writer: w, send }); // [page:mem] probes + timer (--page-mem-ms)
     // HELLO: api hash + options; await the host's answer so a stale JS/host pair fails here, loudly.
     w.begin(OP_HELLO); w.u32(API_HASH); w.json(options); w.end(); w.flush();
     await transport.idle();

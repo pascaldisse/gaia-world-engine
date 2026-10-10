@@ -5,7 +5,7 @@ import { lightRegistry } from './light-registry.js';
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
 //   NodeMaterial (TSL)                           → { kind:'wgsl', package, fallbackParams, sig }  (createShaderMaterial; package from tsl-export.js)
 // sig = cheap string compared every frame to detect edits that three's `version` counter does not cover (m.color.set(), m.opacity=…).
-const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'alphaMap'];
+export const TEX_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'alphaMap'];
 const rgb = (c) => (c ? [c.r, c.g, c.b] : [1, 1, 1]);
 const nodeCache = new WeakMap(); // NodeMaterial → { version, package }
 
@@ -17,12 +17,19 @@ const texCache = new WeakMap();   // Texture → { version, image, desc }
 const pixelCache = new WeakMap(); // immutable image (ImageBitmap/HTMLImageElement/ImageData) → Uint8Array rgba
 export const textureReads = { count: 0, ms: 0 }; // instrumentation: how many CPU pixel reads happened (proof: idle frame = 0)
 let scratch = null;
+// nt-pagemem (docs/NATIVE.md §page-memory): native mode = the host owns the pixels after upload, so the page must not keep a CPU copy. Defaults = browser behaviour (unchanged);
+// wgpu-present.js calls configureMaterialMap(pageMemConfig(params)) when renderBackend=native (defaults + URL params: native/page-memory.js).
+export const mapConfig = { retainPixels: true, scratchKeepPx: 1 << 20, releaseSources: false, released: 0 };
+export function configureMaterialMap(o = {}) { for (const k of ['retainPixels', 'scratchKeepPx', 'releaseSources']) if (o[k] !== undefined) mapConfig[k] = o[k]; return mapConfig; }
+const EMPTY_U8 = new Uint8Array(0);
+const releasedTex = new WeakSet(); // textures whose CPU source was dropped after upload (materialSig must still see 'has image')
+const releaseFlag = (t) => (t.userData?.nativeRelease !== undefined ? !!t.userData.nativeRelease : mapConfig.releaseSources);
 const isBytes = (d) => d instanceof Uint8Array || d instanceof Uint8ClampedArray;
 function drawable(im) {
   return (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) || (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement) ||
     (typeof VideoFrame !== 'undefined' && im instanceof VideoFrame) || (typeof OffscreenCanvas !== 'undefined' && im instanceof OffscreenCanvas) || (typeof HTMLCanvasElement !== 'undefined' && im instanceof HTMLCanvasElement);
 }
-function readPixels(im, w, h) {
+function readPixels(im, w, h, keep = true) {
   const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
   let out = null;
   if (isBytes(im.data) && im.data.length === w * h * 4) out = new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.length);
@@ -32,13 +39,14 @@ function readPixels(im, w, h) {
     if (d) out = new Uint8Array(d.data.buffer, d.data.byteOffset, d.data.byteLength);
   } else if (drawable(im)) {
     const immutable = !(typeof HTMLCanvasElement !== 'undefined' && im instanceof HTMLCanvasElement) && !(typeof OffscreenCanvas !== 'undefined' && im instanceof OffscreenCanvas);
-    if (immutable && pixelCache.has(im)) return pixelCache.get(im);
+    if (immutable && keep && pixelCache.has(im)) return pixelCache.get(im);
     if (!scratch) scratch = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
     if (scratch.width !== w || scratch.height !== h) { scratch.width = w; scratch.height = h; }
     const c = scratch.getContext('2d', { willReadFrequently: true });
     c.globalCompositeOperation = 'copy'; c.drawImage(im, 0, 0, w, h);
     out = new Uint8Array(c.getImageData(0, 0, w, h).data.buffer);
-    if (immutable) pixelCache.set(im, out);
+    if (immutable && keep) pixelCache.set(im, out);
+    if (!keep && w * h > mapConfig.scratchKeepPx) { scratch.width = 1; scratch.height = 1; } // frees the CPU backing store of a big decode canvas (re-grown on demand)
   }
   if (out) { textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
   return out;
@@ -60,21 +68,39 @@ function compressedData(t) {
     if (m.width !== Math.max(1, w >> l) || m.height !== Math.max(1, h >> l)) return { compressed: true, refused: `mip ${l} size ${m.width}x${m.height} is not ${Math.max(1, w >> l)}x${Math.max(1, h >> l)}` };
     levels.push(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
   }
-  let bytes; // lazy: concatenated only on a backend cache MISS
-  return { compressed: true, format: t.format, width: w, height: h, mipCount: levels.length, flipY: !!t.flipY, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`,
-    get data() { if (!bytes) { const n = levels.reduce((a, b) => a + b.length, 0); bytes = new Uint8Array(n); let o = 0; for (const l of levels) { bytes.set(l, o); o += l.length; } } return bytes; } };
+  let bytes; // lazy: concatenated only on a backend cache MISS; kept only while mapConfig.retainPixels (browser) — native writes `chunks` straight into the stream (no concat, no memo)
+  const total = levels.reduce((a, b) => a + b.length, 0);
+  const desc = { compressed: true, format: t.format, width: w, height: h, mipCount: levels.length, flipY: !!t.flipY, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`, bytes: total, released: false,
+    get data() { if (desc.released) return null; if (bytes) return bytes; const b = new Uint8Array(total); let o = 0; for (const l of levels) { b.set(l, o); o += l.length; } if (mapConfig.retainPixels) bytes = b; return b; },
+    get chunks() { return desc.released ? null : levels; },
+    /** after the host acked the upload: drop the game-owned mip views (opt-in: texture.userData.nativeRelease / ?nativeReleaseSrc=1). Re-upload of this texture is then impossible (loud). */
+    release: !releaseFlag(t) ? null : () => { if (desc.released) return; desc.released = true; bytes = null; levels.length = 0; for (const m of mm) m.data = EMPTY_U8; releasedTex.add(t); mapConfig.released++; } };
+  return desc;
+}
+const isImageSource = (im) => (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) || (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement);
+/** cheap pre-flight (NO pixel read, no descriptor): { key, bytes } a texture would cost on the wire if its key is not yet on the host. Used by the adapter's encode budget. */
+export function textureEstimate(t) {
+  if (!t) return null;
+  if (t.isCompressedTexture) { let n = 0; for (const m of t.mipmaps ?? []) n += m?.data?.byteLength ?? 0; return { key: `${t.uuid}:${t.version}`, bytes: n }; }
+  const im = t.image; if (!im) return releasedTex.has(t) ? { key: `${t.uuid}:${t.version}`, bytes: 0 } : null;
+  const w = im.width ?? im.videoWidth ?? im.displayWidth ?? 0, h = im.height ?? im.videoHeight ?? im.displayHeight ?? 0;
+  return { key: `${t.uuid}:${t.version}`, bytes: w * h * 4 };
 }
 function textureData(t) {
   if (t?.isCompressedTexture) { const c = texCache.get(t); if (c && c.version === t.version && c.mm === t.mipmaps) return c.desc; const desc = compressedData(t); texCache.set(t, { version: t.version, image: t.image, mm: t.mipmaps, desc }); return desc; }
+  const rc = texCache.get(t);
+  if (rc && rc.desc.released && rc.version === t.version) return rc.desc; // source dropped after upload: the cached key descriptor is all that is left (backend GPU cache hit)
   const im = t?.image;
   if (!im) return null;
-  const c = texCache.get(t);
+  const c = rc;
   if (c && c.version === t.version && c.image === im) return c.desc;
   const w = im.width ?? im.videoWidth ?? im.displayWidth, h = im.height ?? im.videoHeight ?? im.displayHeight;
   const readable = isBytes(im.data) || drawable(im) || typeof im.getContext === 'function' || (typeof ImageData !== 'undefined' && im instanceof ImageData);
   if (!readable || !(w > 0 && h > 0)) return undefined; // present but not CPU-readable here
-  let px; // lazy + memoised
-  const desc = { width: w, height: h, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`, get data() { return px ??= readPixels(im, w, h); } };
+  let px; // lazy; memoised only while mapConfig.retainPixels (browser). Native: every read is a transient (the host owns the pixels once uploaded)
+  const desc = { width: w, height: h, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`, bytes: w * h * 4, released: false,
+    get data() { if (desc.released) return null; if (!mapConfig.retainPixels) return readPixels(im, w, h, false); return px ??= readPixels(im, w, h); },
+    release: !releaseFlag(t) || !(isImageSource(im)) ? null : () => { if (desc.released) return; desc.released = true; px = null; if (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) im.close(); try { t.source.data = null; } catch { /* three Source setter */ } releasedTex.add(t); mapConfig.released++; } };
   texCache.set(t, { version: t.version, image: im, desc });
   return desc;
 }
@@ -133,7 +159,7 @@ else if (m.blending === 5) { const bs = m.blendSrc, bd = m.blendDst; p.blending 
 return p;
 }
 
-const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = m[slot]; if (t) s += `|${slot}:${t.uuid}:${t.version}:${t.image ? 1 : 0}`; } return s; };
+const SLOT_SIG = (m) => { let s = ''; for (const slot of TEX_SLOTS) { const t = m[slot]; if (t) s += `|${slot}:${t.uuid}:${t.version}:${t.image || releasedTex.has(t) ? 1 : 0}`; } return s; };
 // cheap per-frame change signature (NO allocation of params/textures, NO pixel reads). conv.sig === materialSig(m) by construction.
 export function materialSig(m, { exportNodeMaterial = null } = {}) {
   if (m.isNodeMaterial && exportNodeMaterial && customNode(m)) return `wgsl:${m.uuid}:${m.version}`;

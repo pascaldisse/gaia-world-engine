@@ -144,6 +144,10 @@ const matTextures = new Map(); // MaterialId → [texture handles {id,key}] owne
   const texByKey = new Map();    // texture descriptor key (uuid:version, material-map) → { id, refs } — one GPU texture shared by every material using it
 const texStats = { uploads: 0, hits: 0 };
 const refusedTex = new Set(); // r13-bc: texture uploads the core refused (drained into the adapter's stats.unsupported via backend.drainUnsupported)
+const isNative = !!wasm.GaiaRender.native;
+// nt-pagemem: native only — once the host acked the bytes (gpu.afterAck), the descriptor may drop the game-owned CPU source (desc.release; opt-in flag, material-map.js). No-op in the browser (gpu.afterAck undefined).
+const releaseAfterAck = (t) => { if (t.release && gpu.afterAck) gpu.afterAck(t.release); };
+const goneErr = () => new Error('texture source was released after upload (userData.nativeRelease / ?nativeReleaseSrc) and its GPU texture is gone: cannot re-upload');
   // textures[slot] = {width,height,data,key?}. With a `key` the GPU texture is shared + refcounted and `data` (lazy getter in material-map) is only
   // read on a MISS → an idle frame / a second material on the same image does 0 pixel reads and 0 uploads.
   function acquireTexture(t) {
@@ -164,12 +168,14 @@ if (t.compressed) { // r13-bc: block-compressed 2D texture (mip chain concatenat
   let id = 0;
   try {
     if (!gpu.createTextureCompressed) throw new Error('wasm pkg predates createTextureCompressed');
-    id = gpu.createTextureCompressed(t.format, t.width, t.height, t.mipCount, t.data, t.srgb !== false, !!t.flipY);
-    texStats.uploads++; texStats.compressed = (texStats.compressed ?? 0) + 1;
+    if (t.released) throw goneErr();
+    id = gpu.createTextureCompressed(t.format, t.width, t.height, t.mipCount, isNative && t.chunks ? { chunks: t.chunks } : t.data, t.srgb !== false, !!t.flipY); // native: mip levels go straight into the stream (Writer.chunked), no concat copy
+    texStats.uploads++; texStats.compressed = (texStats.compressed ?? 0) + 1; releaseAfterAck(t);
   } catch (e) { refusedTex.add(`texture:compressed ${t.format} ${t.width}x${t.height}: ${String(e?.message ?? e).slice(0, 120)}`); return { id: 0, key: null }; }
   if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version, fresh: null });
   return { id, key: t.key ?? null };
 }
+if (t.released) { refusedTex.add(`texture:${goneErr().message}`); return { id: 0, key: null }; } // loud (stats.unsupported), never a thrown frame: the material draws untextured
 const data = t.data;
 if (!data || !(t.cube ? t.size > 0 : (t.width > 0 && t.height > 0))) throw new Error('createMaterial: texture map needs { width, height, data }');
 const bytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer ?? data);
@@ -177,7 +183,7 @@ let id;
 if (t.cube) id = gpu.createTextureCube(t.size, bytes, t.srgb !== false);
 else if (t.array) { id = gpu.createTextureArray(t.width, t.height, t.layers, bytes, t.srgb !== false); t.takeLayerUpdates?.(); }
 else id = t.srgb === false ? gpu.createTextureLinear(t.width, t.height, bytes) : gpu.createTexture(t.width, t.height, bytes); // colour space flag honored (three colorSpace)
-texStats.uploads++;
+texStats.uploads++; releaseAfterAck(t);
 if (t.key) texByKey.set(t.key, { id, refs: 1, version: t.version, fresh: t.fresh ?? null });
 return { id, key: t.key ?? null };
 }
@@ -186,6 +192,7 @@ const storByAttr = new Map(); // BufferAttribute -> { id, refs, version }
 const matStorage = new Map(); // MaterialId -> [{key, attr, h}]
 const storStats = { creates: 0, hits: 0, updates: 0 };
 const bytesOf = (a) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+const f32 = (a) => (a instanceof Float32Array ? a : Float32Array.from(a)); // no defensive copy of an array that is already f32: both the wasm call and the native Writer copy it into their own storage anyway
 // r10-shadow-6: a storage attribute whose authoritative data lives on THREE's GPU (compute-written probe atlases) carries a CPU readback mirror; its upload version is
 // userData.gpuMirrorVersion (bumped by gi-bridge per readback) — NOT attr.version, which three itself would re-upload (clobbering partial compute updates).
 const verOf = (attr) => attr.userData?.gpuMirrorVersion ?? attr.version;
@@ -392,8 +399,8 @@ function applyShadowFlags(node) {
       const n = validateMeshArrays(arrays);
       const indices = arrays.indices instanceof Uint32Array ? arrays.indices : Uint32Array.from(arrays.indices || Array.from({ length: n }, (_, i) => i));
       const positions = arrays.positions instanceof Float32Array ? arrays.positions : Float32Array.from(arrays.positions);
-      const normals = arrays.normals ? Float32Array.from(arrays.normals) : computeNormals(positions, indices);
-      const uvs = arrays.uvs ? Float32Array.from(arrays.uvs) : new Float32Array(n * 2);
+      const normals = arrays.normals ? f32(arrays.normals) : computeNormals(positions, indices);
+      const uvs = arrays.uvs ? f32(arrays.uvs) : new Float32Array(n * 2);
       const mid = gpu.createMesh(positions, normals, uvs, indices);
       if (arrays.uv1) gpu.setMeshUv1(mid, arrays.uv1);
       if (arrays.colors) gpu.setMeshColors(mid, arrays.colors);
@@ -412,10 +419,10 @@ threeSkipped() { return gpu.threeSkipped(); },
     createSkinnedMesh(arrays, skin) {
       const n = validateMeshArrays(arrays);
       const indices = arrays.indices instanceof Uint32Array ? arrays.indices : Uint32Array.from(arrays.indices || Array.from({ length: n }, (_, i) => i));
-      const positions = Float32Array.from(arrays.positions);
-      const normals = arrays.normals ? Float32Array.from(arrays.normals) : computeNormals(positions, indices);
-      const uvs = arrays.uvs ? Float32Array.from(arrays.uvs) : new Float32Array(n * 2);
-      const mid = gpu.createSkinnedMesh(skin, positions, normals, uvs, Uint32Array.from(arrays.joints), Float32Array.from(arrays.weights), indices);
+      const positions = f32(arrays.positions);
+      const normals = arrays.normals ? f32(arrays.normals) : computeNormals(positions, indices);
+      const uvs = arrays.uvs ? f32(arrays.uvs) : new Float32Array(n * 2);
+      const mid = gpu.createSkinnedMesh(skin, positions, normals, uvs, arrays.joints instanceof Uint32Array ? arrays.joints : Uint32Array.from(arrays.joints), f32(arrays.weights), indices);
       skinnedMeshes.add(mid); return mid;
     },
     destroySkinnedMesh(id) { skinnedMeshes.delete(id); gpu.destroySkinnedMesh(id); },
@@ -436,6 +443,11 @@ threeSkipped() { return gpu.threeSkipped(); },
       for (const h of old) releaseTexture(h);
       if (owned.length) matTextures.set(id, owned); else matTextures.delete(id);
     },
+/** nt-pagemem: native-only capabilities (undefined in the browser, so the adapter's encode budget / source release are off there). */
+pendingBytes: gpu.pendingBytes ? () => gpu.pendingBytes() : undefined,
+afterUpload: gpu.afterAck ? (fn) => gpu.afterAck(fn) : undefined,
+/** true when the host already holds this texture key (a create would be a cache hit, 0 wire bytes). */
+textureCached(key) { return !!key && texByKey.has(key); },
 textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storStats, live: storByAttr.size }, compressedCore: gpu.compressedStats ? Array.from(gpu.compressedStats()) : null /* [gpu_native, cpu_no_bc_feature, cpu_bc1rgb_punchthrough, cpu_unaligned_or_unflippable, cpu_single_mip, refused] */ }; },
     drainUnsupported() { const r = [...refusedTex]; refusedTex.clear(); return r; }, // r13-bc: texture refusals since the last drain -> scene-adapter stats.unsupported
     // three r180 TSL package (tsl-export.js) as-is → gaia-render create_three_material. Texture bindings resolved through the

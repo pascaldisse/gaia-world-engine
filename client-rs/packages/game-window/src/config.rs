@@ -19,6 +19,8 @@ const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("render-backend", "GAIA_RENDER_BACKEND", "native", "value forced into the page URL's ?renderBackend= (nt-ipc's GaiaRenderNative = native)"),
     ("stats-every", "GAIA_STATS_EVERY", "300", "print fps/cpu line every N frames (0 = off)"),
     ("dry-run", "GAIA_DRY_RUN", "0", "1 = print the resolved config (final URL etc.) and exit; opens no window"),
+    ("page-log", "GAIA_PAGE_LOG", "warn", "page console forwarded to stderr as [page:<level>]: off | error | warn (error+warn+uncaught) | all"),
+    ("page-log-max", "GAIA_PAGE_LOG_MAX", "2000", "max chars per forwarded page console line"),
     ("query", "GAIA_GAME_QUERY", "", "extra raw query appended to the URL (e.g. nativeFlushMB=8)"),
 ];
 
@@ -53,6 +55,8 @@ pub struct GameConfig {
     pub fullscreen: bool,
     pub page_gpu: PageGpu,
     pub pointer_lock_spi: bool,
+    pub page_log: String,
+    pub page_log_max: u32,
     pub devtools: bool,
     pub idle_sleep: std::time::Duration,
     pub dry_run: bool,
@@ -129,6 +133,9 @@ impl GameConfig {
             "off" => false,
             other => return Err(format!("--pointer-lock must be spi|off, got {other:?}")),
         };
+        let page_log = get("page-log");
+        if !matches!(page_log.as_str(), "off" | "error" | "warn" | "all") { return Err(format!("--page-log must be off|error|warn|all, got {page_log:?}")); }
+        let page_log_max = num("page-log-max")? as u32;
         let render_height = num("render-height")? as u32;
         let (w, h) = (num("width")?, num("height")?);
         let fps_cap = num("fps-cap")?;
@@ -145,6 +152,8 @@ impl GameConfig {
             fullscreen: flag("fullscreen")?,
             page_gpu,
             pointer_lock_spi,
+            page_log,
+            page_log_max,
             devtools: flag("devtools")?,
             dry_run: flag("dry-run")?,
             idle_sleep: std::time::Duration::from_secs_f64(num("idle-sleep-ms")?.max(0.0) / 1e3),

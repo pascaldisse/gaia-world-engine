@@ -40,9 +40,11 @@ const ASYNC_REJECT = ['getArrayBufferAsync', 'readRenderTargetPixelsAsync', 'has
 export function lockThreeGpu(renderer, warn = (m) => console.warn(m)) {
   const blocked = (renderer.userData ??= {}).threeGpuBlocked = {};
   const hit = (name) => { if (!blocked[name]) warn(`[gaia] three GPU is OFF (native mode): renderer.${name}() blocked — this feature has no native path yet (docs/NATIVE.md §three-gpu)`); blocked[name] = (blocked[name] ?? 0) + 1; };
-  for (const n of NOOP) if (typeof renderer[n] === 'function') renderer[n] = () => { hit(n); };
-  for (const n of ASYNC_OK) if (typeof renderer[n] === 'function') renderer[n] = async () => { if (n !== 'init') hit(n); return renderer; };
-  for (const n of ASYNC_REJECT) if (typeof renderer[n] === 'function') renderer[n] = async () => { hit(n); throw new Error(`renderer.${n}: three GPU is off (native mode)`); };
+  // own-property define (not assignment): some entry points are prototype GETTERS (r180 `get compile()` -> compileAsync), and assigning over a getter-only accessor throws in module (strict) code
+  const put = (n, fn) => Object.defineProperty(renderer, n, { value: fn, writable: true, configurable: true, enumerable: false });
+  for (const n of NOOP) if (typeof renderer[n] === 'function') put(n, () => { hit(n); });
+  for (const n of ASYNC_OK) if (typeof renderer[n] === 'function') put(n, async () => { if (n !== 'init') hit(n); return renderer; });
+  for (const n of ASYNC_REJECT) if (typeof renderer[n] === 'function') put(n, async () => { hit(n); throw new Error(`renderer.${n}: three GPU is off (native mode)`); });
   renderer.userData.threeGpuLocked = true;
   return renderer;
 }

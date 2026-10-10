@@ -22,7 +22,7 @@ use std::{
 use tauri::{Manager, PhysicalPosition, WebviewUrl};
 
 /// == build.rs app manifest == capabilities/local.json. Remote capability below is generated from this list.
-const COMMANDS: &[&str] = &["gaia_render_apply", "gaia_native_info"];
+const COMMANDS: &[&str] = &["gaia_render_apply", "gaia_native_info", "gaia_page_log"];
 const WINDOW_LABEL: &str = "game-window";
 const WEBVIEW_LABEL: &str = "game";
 
@@ -44,6 +44,13 @@ async fn gaia_render_apply(
     shared.apply_messages.fetch_add(1, Ordering::Relaxed);
     shared.apply_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     Ok(tauri::ipc::Response::new(report))
+}
+
+/// Page console -> host stderr (WKWebView has no CDP; without this a page that dies during load is silent).
+/// Forwarded by page.rs init script: console.error/warn/info/log + window error + unhandledrejection, `level` + text.
+#[tauri::command]
+fn gaia_page_log(level: String, text: String) {
+    eprintln!("[page:{level}] {text}");
 }
 
 #[tauri::command]
@@ -81,7 +88,7 @@ fn main() {
     let setup_cfg = cfg.clone();
     tauri::Builder::default()
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![gaia_render_apply, gaia_native_info])
+        .invoke_handler(tauri::generate_handler![gaia_render_apply, gaia_native_info, gaia_page_log])
         .setup(move |app| {
             let cfg = setup_cfg;
             // Remote page (vite on http://127.0.0.1:port) may only call OUR commands, only from its own origin.

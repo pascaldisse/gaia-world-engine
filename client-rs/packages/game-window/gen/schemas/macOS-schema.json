@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the gaia_native_info command without any pre-configured scope."
         },
         {
+          "description": "Enables the gaia_page_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-gaia-page-log",
+          "markdownDescription": "Enables the gaia_page_log command without any pre-configured scope."
+        },
+        {
           "description": "Enables the gaia_render_apply command without any pre-configured scope.",
           "type": "string",
           "const": "allow-gaia-render-apply",
@@ -193,6 +199,12 @@
           "type": "string",
           "const": "deny-gaia-native-info",
           "markdownDescription": "Denies the gaia_native_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the gaia_page_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-gaia-page-log",
+          "markdownDescription": "Denies the gaia_page_log command without any pre-configured scope."
         },
         {
           "description": "Denies the gaia_render_apply command without any pre-configured scope.",

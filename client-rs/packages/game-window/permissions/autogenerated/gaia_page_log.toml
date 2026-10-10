@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gaia-page-log"
+description = "Enables the gaia_page_log command without any pre-configured scope."
+commands.allow = ["gaia_page_log"]
+
+[[permission]]
+identifier = "deny-gaia-page-log"
+description = "Denies the gaia_page_log command without any pre-configured scope."
+commands.deny = ["gaia_page_log"]

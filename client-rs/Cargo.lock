@@ -1023,6 +1023,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "gaia-render",
+ "pollster",
  "serde_json",
  "wgpu",
 ]

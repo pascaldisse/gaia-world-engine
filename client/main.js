@@ -912,7 +912,7 @@ function captureShot() {
 }
 
 // ?renderBackend=wgpu: draw through the wasm wgpu renderer (render-api/wgpu-present.js); three keeps owning the scene graph.
-const wgpuPresent = new URLSearchParams(location.search).get('renderBackend') === 'wgpu'
+const wgpuPresent = ['wgpu', 'native'].includes(new URLSearchParams(location.search).get('renderBackend'))
   ? await (await import('./kernel/render-api/wgpu-present.js')).createWgpuPresenter({ renderer, scene, camera, THREE, getGi: () => environment.gi, getPost: () => post, getAutoExposure: () => environment.lighting?.lightingPost?.autoExposure ?? null })
   : null;
 if (wgpuPresent) window.__wgpu = wgpuPresent;

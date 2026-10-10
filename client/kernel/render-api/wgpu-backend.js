@@ -127,7 +127,7 @@ function debugOutPkg(pkg) {
 export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl', staticInstances = 'none', staticAfterFrames = 60 } = {}) {
   if (!canvas) throw new Error('createWgpuBackend requires { canvas }');
   if (!wasm?.GaiaRender) throw new Error('createWgpuBackend requires { wasm } = the render_wasm.js module');
-  if (!navigator.gpu) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)');
+  if (!navigator.gpu && !wasm.GaiaRender.native) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)'); // native: GaiaRenderNative (Tauri IPC → Metal) needs no webview WebGPU
   await (wasmUrl ? wasm.default(wasmUrl) : wasm.default());
   // r11-pipe: ?wgpuPipeShare=0 turns off content-keyed three-material pipeline sharing + pipeline-sorted opaque draws (default on); options.pipeShare wins.
   const pipeShare = options.pipeShare ?? !(typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuPipeShare') === '0');

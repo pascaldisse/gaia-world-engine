@@ -694,6 +694,40 @@ o.into()
     pub fn clear_gi_probes(&mut self) {
         self.core.clear_gi_probes(&self.queue);
     }
+    /// lane nt-gi: NATIVE probe GI (the page holds no GPU state). Storage ids reserved for the atlases [irradiance, depth]: bind TSL storage bindings of the probe-query node to these.
+    #[wasm_bindgen(js_name = giStorageIds)]
+    pub fn gi_storage_ids(&self) -> Vec<u32> {
+        self.core.gi_storage_ids().to_vec()
+    }
+    /// cfg = JSON from client/kernel/render-api/gi-native.js `giNativeConfig()`.
+    #[wasm_bindgen(js_name = giComputeInit)]
+    pub fn gi_compute_init(&mut self, cfg_json: &str) -> Result<(), JsError> {
+        self.core.gi_compute_init(&self.device, &self.queue, cfg_json).map_err(err)
+    }
+    /// one dirty brick range of the CPU voxel window (u32 words from `start`)
+    #[wasm_bindgen(js_name = giComputeVoxels)]
+    pub fn gi_compute_voxels(&mut self, start: u32, words: &[u32]) -> Result<(), JsError> {
+        self.core.gi_compute_voxels(&self.queue, start, words).map_err(err)
+    }
+    /// frame = GI_FRAME_LEN f32 (gi-native.js GI_FRAME / gaia-render gi_compute.rs GF_*); fresh = global probe indices that entered a window
+    #[wasm_bindgen(js_name = giComputeStep)]
+    pub fn gi_compute_step(&mut self, frame: &[f32], fresh: &[u32]) -> Result<(), JsError> {
+        self.core.gi_compute_step(&self.queue, frame, fresh).map_err(err)
+    }
+    #[wasm_bindgen(js_name = giComputeDestroy)]
+    pub fn gi_compute_destroy(&mut self) {
+        self.core.gi_compute_destroy(&self.device, &self.queue);
+    }
+    /// [steps, dispatchedProbes, voxelRangeWrites, freshProbes, irrRows, depthRows]
+    #[wasm_bindgen(js_name = giComputeStats)]
+    pub fn gi_compute_stats(&self) -> Vec<f64> {
+        self.core.gi_compute_stats().to_vec()
+    }
+    /// last native GI failure (cleared on read) or undefined
+    #[wasm_bindgen(js_name = giComputeError)]
+    pub fn gi_compute_error(&mut self) -> Option<String> {
+        self.core.gi_compute_error()
+    }
     /// three scene.background Color (linear rgb): tone-mapped like three does (Reinhard x exposure) → clear colour.
     #[wasm_bindgen(js_name = setFog)]
     pub fn set_fog(&mut self, mode: u32, color: &[f32], near: f32, far: f32, density: f32) -> Result<(), JsError> {

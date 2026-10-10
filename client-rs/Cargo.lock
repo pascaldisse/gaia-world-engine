@@ -1018,6 +1018,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gaia-render-host"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "gaia-render",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "gdk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

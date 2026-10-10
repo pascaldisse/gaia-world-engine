@@ -1,0 +1,46 @@
+{
+  "_doc": "Policy for tools/gen-render-native.mjs. Everything else is derived from render-wasm lib.rs. Unknown param types / unclassified return values make the generator FAIL (no silent skips).",
+  "source": "client-rs/packages/render-wasm/src/lib.rs",
+  "outRust": "client-rs/crates/gaia-render-host/src/commands.gen.rs",
+  "outJs": "client/kernel/render-api/native/gaia-render-native.gen.js",
+  "manual": ["create"],
+  "frame": {
+    "render": "commit",
+    "renderTimed": "timed",
+    "renderGpuTimed": "gpuTimed",
+    "skinGpuMs": "skinGpuMs"
+  },
+  "commitMethod": "render",
+  "params": {
+    "createShaderMaterial.bindings": "bindings",
+    "createThreeMaterial.texture_names": "strlist",
+    "setShadowOptions.opts": "json"
+  },
+  "local": {
+    "setPointLights": "Math.min((packed.length / 9) | 0, 64)",
+    "setExtraDirs": "Math.min((packed.length / 7) | 0, 4)",
+    "setThreeUniforms": "0",
+    "setThreeUniformsBatch": "0"
+  },
+  "drain": ["autoExposureGrid"],
+  "queryTypes": {
+    "sizes": "f32",
+    "autoExposureGrid": "f32",
+    "compressedStats": "u32",
+    "passStats": "u32"
+  },
+  "queryDefaults": {
+    "compressedStats": [0, 0, 0, 0, 0, 0],
+    "passStats": [],
+    "threeSkipped": 0,
+    "drawnInstanceCount": 0,
+    "instanceCount": 0,
+    "lastGroupHidden": 0,
+    "drawCalls": 0,
+    "hasTimestamps": false,
+    "hdrScene": false,
+    "shadowStats": { "enabled": false },
+    "sizes": [0, 0, 0, 0],
+    "autoExposureGrid": []
+  }
+}

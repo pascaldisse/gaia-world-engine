@@ -123,3 +123,46 @@ TSL materials: atlas attr tagged userData.nativeStorage → bindThreeStorage(res
 * Params in ONE place: interval = `config.rs OPTIONS` row `page-mem-ms`; JS: `MEM_PARAMS` in `client/kernel/render-api/native/mem-account.js` (decoded bytes/pixel, line cap, log level, scene root getter). Registry: `register(name, fn→{k:v})` (keys ending `Bytes` print `_MB`, `__total` summed), `trackBuffer(cat, buf)`, `trackTexture(tex)`.
 * Hooks (minimal, merge-safe): `gaia-render-native.js` +import +`memAttach({transport, writer, send})`; `material-map.js` +import, `memTex(t)` first line of `textureData`, `memBuf('pixelRead', out)` in `readPixels`; `vrm.js` +import, `memBuf('vrmBytes', b)` in `fetchVrmBytes`.
 * NOT tracked: JS heap (no WebKit API: `performance.memory`/`measureUserAgentSpecificMemory` absent → `js_heap=none`; infer from `wc_MB` gap) · GLB/glTF raw bytes of three's `GLTFLoader`/`FileLoader` (no hook; only VRM bytes) · textures reachable only through TSL node graphs and not shipped via `textureData` · compressed-texture concatenated level buffer in texture desc · pending Promise/closure/string garbage (JSON, TSL sources/`nodeCache` packages, adapter Maps) · decoded-image size is an estimate · WebKit GPU/Networking processes (only WebContent + game-window) · render-host (Rust, inside `gw_MB`).
+## §image-decode (lane nt-imgdecode, 10-10) — decode artifacts released once the host owns the pixels. ALL UNVERIFIED at runtime (node --check + a headless mock of material-map; no app/browser run).
+* Why: WebKit keeps decoded image backings (ImageBitmap, HTMLImageElement frame cache, canvas 2D backing, blob/Response bodies) in WebKit malloc, NOT the JS Gigacage. In native mode three never uploads → every three-side release (onUpload / dispose) never fires → decoded images lived as long as their Texture. Live: WebKit malloc 4.0 GB vs Gigacage 0.55 GB; `tex_decodedEst` 362 MB / 213 tex.
+* Knobs (ONE place `native/page-memory.js`, URL names): `releaseDecoded`=1 `?nativeReleaseDecoded` · `detachImages`=1 `?nativeDetachImg` · `threeCache`=0 `?nativeThreeCache` (1 = leave THREE.Cache as the game set it) · `scratchIdleMs`=500 `?nativeScratchIdleMs` · `shrinkEnvCanvas`=1 `?nativeEnvShrink`. Native only; browser defaults in `mapConfig`/`envConfig` unchanged (all off).
+### Paths traced (S = w·h·4, E = encoded file bytes, C = BC mip chain)
+| path | texture.image | pixels read by | holders (before) | after (default native) |
+|------|---------------|----------------|------------------|------------------------|
+| GLTFLoader PNG/JPEG (Safari ≥17 → `ImageBitmapLoader`, else `TextureLoader`) | ImageBitmap (`premultiplyAlpha:'none'`, colorSpaceConversion none) | material-map `readPixels`: shared `scratch` OffscreenCanvas `drawImage`+`getImageData` | see copy table | ImageBitmap closed at ack, `source.data` = stub |
+| `TextureLoader` / ffx-runtime.mjs / GLTFLoader on old WebKit | HTMLImageElement (blob: URL for GLB bufferViews, revoked by GLTFLoader right after load) | same | Image element + WebKit CachedImage decoded frame + encoded data | `removeAttribute('src')` + stub |
+| `CanvasTexture` / OffscreenCanvas (game-owned, redrawn) | canvas | `getContext('2d').getImageData` per `texture.version` | game canvas backing S | untouched (dynamic). Opt-in `userData.nativeRelease=true` → canvas shrunk 1×1 + stub |
+| `DataTexture` / ImageData | `{data}` | zero-copy view | game bytes S | untouched (game writes it) |
+| `CompressedTexture` (DDS/KTX2; DS = `MSFT_texture_dds`) | `{width,height}` + `mipmaps[]` | `chunks` straight into Writer (nt-pagemem) | C (game ArrayBuffer views) | unchanged: `releaseSources`/`userData.nativeRelease` (not a decode artifact) |
+| `CubeTexture` / `scene.background|environment` | image[6] / image | `env-image.readCube/readTexture`: NEW `OffscreenCanvas` per face per read | 6 canvases + `desc.data` 6·size·size·4 kept in `cubeCache` | canvases shrunk at once; cube desc.data + faces dropped at ack (stubs). bg/env 2D: opt-in only (see hazards) |
+| TSL `textureSources` bindings | any of the above | `textureData(t)` (same path) | same | same |
+| `wgpu-backend.texturePixels` | — | `new OffscreenCanvas` per call | no caller | n/a |
+### Copies per ImageBitmap texture (GLTF PNG/JPEG, 1 use, native, UNVERIFIED estimates; WebKit malloc = M, Gigacage = G)
+| # | copy | holder | MB (S=4 MiB ≈ 1024²) | lifetime before → after |
+|---|------|--------|-------------------------|------------------------|
+| 1 | bufferView bytes | game (`glb-slim` / loader) G | E | until game drops GLB → same (game) |
+| 2 | `new Blob([bufferView])` BlobData | WebKit BlobRegistry M | E | revoked right after load; Blob object until GC → same |
+| 3 | `fetch(blobURL)` Response body + `res.blob()` | ImageBitmapLoader M | E | until GC → same (three internal) |
+| 4 | **decoded ImageBitmap** (premultiplied RGBA) | `texture.source.data` M | **S** | Texture lifetime (= page life) → **until host ack** |
+| 5 | shared decode canvas backing | `material-map scratch` M | S_max | forever (grow-only) → 1×1 after read if > `scratchKeepPx`, else after `scratchIdleMs` idle |
+| 6 | `getImageData` ImageData (unpremultiply conversion; WebKit also builds a temp) | transient G (+M temp) | S (+S) | GC → same (transient) |
+| 7 | Writer copy + queue slice/coalesce | page G | S (+S) | until sent → same (nt-pagemem bounds it) |
+| 8 | `texCache` entry `{image: im}` + desc closure (`im`, `px`) | material-map | pins #4 even after close() | Texture lifetime → stub / `src=null` at release |
+| 9 | 2nd/3rd clone of the same Source (GLTF: one Texture per sampler use) | each its own key `uuid:version` → own read + own host texture | S each | → clone reuses the first one's host key (shared GPU texture, 0 reads) |
+| 10 | `THREE.Cache` (if the game enabled it): FileLoader ArrayBuffer (GLB!) / ImageLoader Image / ImageBitmapLoader bitmap+promise | THREE.Cache.files | up to everything | forever → off + cleared (checked each frame) |
+* Steady state per texture: before ≈ S (#4) + E (#2,#3 till GC) + shared #5; after ≈ E only (till GC). Over 213 tex ≈ 362 MB est → ~0 (+ whatever WebKit leaves in its MemoryCache for the revoked blob URLs; not controllable from JS).
+* Image-element path (FFX PNG): Image element + CachedImage decoded frame (S, WebKit prunes only when no client holds it) + encoded E in MemoryCache; after: element detached (client dropped) + stub.
+### Mechanism (material-map.js)
+* `desc.release` (called by wgpu-backend `releaseAfterAck` = `GaiaRenderNative.afterAck`) → `releaseTextureImage(t)`: `ImageBitmap.close()` · `HTMLImageElement.removeAttribute('src')` (`detachImages`) · `t.source.data = {width,height,gaiaReleased:true}` (size kept: UV maths, `textureSize`, TSL; `texture.version` NOT bumped; `materialSig` still sees an image) · `texCache` entry re-pointed at the stub · closure `src=null`.
+* Source clones: first desc of an ImageBitmap defines `srcInfo.keys[srgb]`; later textures on the same image use that key (backend `texByKey` hit → refcount, no read, no upload). After release a clone still binds it (`desc.released`, `bytes:0`); if the host texture is already destroyed (last material using it removed) → loud `stats.unsupported texture:…released…`, material untextured.
+* Counters: `mapConfig.releasedDecoded` (images freed), `.sharedKeys` (key reuses), `.released` (all releases); `[page:mem] tex_releasedN` (stubs), `tex_decodedN/EstMB` should fall to the unreleased remainder; `__wgpu`-presenter `stats.cacheDisabled/cacheCleared`.
+### Re-upload hazards (default release = no CPU pixels survive)
+* Texture edit / `needsUpdate` with the SAME image: key unchanged → host copy reused (no-op). Edit with a NEW image object (`tex.image = newBitmap; needsUpdate=true`): new key, normal upload, old one released at its own ack. Pixel edit of a released image: impossible (it is gone) → use a `DataTexture`/canvas (never auto-released) for anything the game rewrites.
+* GPU texture destroyed (all materials using it removed/disposed) then re-added: no source left → loud refusal. Cell streaming that removes + re-adds the SAME Texture object needs `?nativeReleaseDecoded=0` or `userData.nativeRelease=false` on that texture (per-texture override wins).
+* `scene.background` / `environment`: released only with `userData.nativeRelease=true` (a later `backgroundIntensity`/`environmentIntensity` change re-reads the image → would fail).
+* Anything of the game reading pixels from `texture.image` after upload (drawImage, `.src`) gets the stub. `humanoid-tex.js imageIdentity` runs at load time (before upload) — unaffected.
+### Not done / floor
+* E copies (#1-#3) belong to the loader (three/GLTFLoader/WebKit); needs a loader-side change (ship the encoded PNG/JPEG to the host and decode in Rust → no ImageBitmap, no scratch, no getImageData at all) — biggest remaining win for PNG/JPEG assets, not started.
+* VRM `byteCache` (vrm.js) keeps whole VRM file bytes for the page's life (tracked `buf_vrmBytes`).
+* `createImageBitmap` itself unconstrained (WebKit decodes at full size; no `resizeWidth` since the host needs full res).
+* Proof to run (Pascal): `[page:mem]` at 11/30/60 s default vs `&nativeReleaseDecoded=0&nativeThreeCache=1&nativeScratchIdleMs=0&nativeEnvShrink=0`; `wc_MB` slope + `tex_decodedEst_MB`, `tex_releasedN`.

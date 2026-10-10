@@ -114,6 +114,11 @@ impl Session {
         let (w, h) = (self.output.0.max(1), self.output.1.max(1));
         self.core.render(&self.device, &self.queue, encoder, target, UpscaleSize { width: w, height: h });
     }
+    /// Queue-mode upscalers (MetalFX): `RenderCore::render_frame` into `output` (size = the session's output size). Submits.
+    pub fn render_queue(&mut self, output: &wgpu::Texture) -> Result<(), String> {
+        let (w, h) = (self.output.0.max(1), self.output.1.max(1));
+        self.core.render_frame(&self.device, &self.queue, output, UpscaleSize { width: w, height: h }).map_err(|e| format!("render_frame: {e}"))
+    }
     fn write_material(&mut self, id: u32, base_color: &[f32], metallic: f32, roughness: f32, tex: u32, alpha_cutoff: f32, emissive: &[f32]) -> CmdResult {
         // emissive: 3 floats, or 4 with [3] = 1 -> emissive x base texture (three emissiveMap === map)
         if base_color.len() != 4 || !(emissive.len() == 3 || emissive.len() == 4) {

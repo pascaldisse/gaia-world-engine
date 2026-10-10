@@ -69,7 +69,18 @@ impl Host {
         true
     }
 
-    /// Feed one IPC message (any slice of the stream). Returns the UTF-8 JSON report for the IPC response:
+    /// Queue-mode counterpart of `render` (MetalFX etc.: the scaler commits its OWN command buffer, so `render`, Encoder-mode only, would panic):
+/// renders the latest committed scene + upscales into `output` (SUBMITTED on return; encode copies/presents afterwards) and consumes the
+/// commit exactly like `render` ("frame consumed": `frame_pending()` clears, so idle frames need not re-render).
+/// Ok(false) = nothing created yet (nothing rendered). Err = upscaler/queue failure (loud, never swallowed; the commit stays pending).
+pub fn render_queue(&mut self, output: &wgpu::Texture) -> Result<bool, String> {
+let Some(s) = self.session.as_mut() else { return Ok(false) };
+s.output = self.output;
+s.render_queue(output)?;
+self.rendered = self.committed;
+Ok(true)
+}
+/// Feed one IPC message (any slice of the stream). Returns the UTF-8 JSON report for the IPC response:
     /// `{"errors":[{op,id,msg}], "q":{queries}, "frame":n}` (`q`/`frame` only when a frame was committed or hello ran).
     pub fn apply(&mut self, bytes: &[u8]) -> Vec<u8> {
         let mut errors: Vec<StreamError> = Vec::new();

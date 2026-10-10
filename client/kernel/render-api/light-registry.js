@@ -12,8 +12,18 @@ const reg = new WeakMap(); // scene -> { set:Set<Light> (insertion-ordered), gen
 export function lightRegistry(scene) { let r = reg.get(scene); if (!r) reg.set(scene, (r = { set: new Set(), ws: new WeakSet(), refs: [], gen: 0, dead: 0 })); return r; }
 const allAlive = (r) => { const out = []; let w = 0; for (let i = 0; i < r.refs.length; i++) { const l = r.refs[i].deref(); if (l) { out.push(l); r.refs[w++] = r.refs[i]; } else r.dead++; } r.refs.length = w; return out; };
 // fold the scene's current lights into the registry; returns { live:[lights now in scene], gen (bumps only on growth) }.
+// nt-exportcost (leakGuards.exportLightMemo): the adapter bumps the epoch once per sync; every observeLights() after the first in that epoch answers from the memo (a TSL export called it TWICE per material: buildPackage + preParts, each a full scene.traverse).
+let lightEpoch = 0; export const lightMemoStats = { hits: 0, scans: 0 };
+export function bumpLightEpoch() { lightEpoch++; }
 export function observeLights(scene) {
-  const r = lightRegistry(scene), live = [], weak = leakGuards.weakRegistries && typeof WeakRef !== 'undefined';
+  const r = lightRegistry(scene);
+  if (leakGuards.exportLightMemo && r.memo && r.memo.epoch === lightEpoch) { lightMemoStats.hits++; return { live: r.memo.res.live.slice(), all: r.memo.res.all.slice(), gen: r.memo.res.gen }; } // copies: a consumer (LightsNode) may keep/mutate its array
+  const res = scanLights(scene, r); lightMemoStats.scans++;
+  if (leakGuards.exportLightMemo) r.memo = { epoch: lightEpoch, res };
+  return res;
+}
+function scanLights(scene, r) {
+  const live = [], weak = leakGuards.weakRegistries && typeof WeakRef !== 'undefined';
   scene.traverse?.((o) => { if (isShadingLight(o)) { live.push(o); if (weak) { if (!r.ws.has(o)) { r.ws.add(o); r.refs.push(new WeakRef(o)); r.gen++; } } else if (!r.set.has(o)) { r.set.add(o); r.gen++; } } });
   return { live, all: weak ? allAlive(r) : [...r.set], gen: r.gen };
 }

@@ -7,9 +7,9 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS, releaseTextureImage, textureReads } from './material-map.js';
+import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS, releaseTextureImage, textureReads, textureData } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
-import { observeLights } from './light-registry.js';
+import { observeLights, bumpLightEpoch } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
 import { leakGuards } from './native/page-memory.js'; // nt-frameleak
 
@@ -18,7 +18,7 @@ const now = () => (typeof performance !== 'undefined' ? performance.now() : Date
 // nt-pagemem (native only; both need backend.pendingBytes / backend.afterUpload, which only the native backend has — browser/wasm behaviour is unchanged):
 //   encodeCapBytes  = writer-side backpressure: no NEW big create (mesh / material textures) is encoded while backend.pendingBytes() (serialized, not host-acked) exceeds this; 0 = off. Default set by page-memory.js encodeCapMB.
 //   releaseSources  = global default for geometry.userData.nativeRelease (drop normal/uv arrays after the host acked the mesh; 'all' also position+index). See docs/NATIVE.md §page-memory.
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0, exportProbe = null } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0, exportProbe = null, exportDedupe = false } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -57,6 +57,10 @@ function sigDiff(a, b) {
   return { name, a: x[i], b: y[i] };
 }
 const r1 = (x) => Math.round(x * 10) / 10;
+function dedupeCensus() { // nt-exportcost: how many three materials vs distinct HOST materials, and what dedupe did
+  const ids = new Set(); let tsl = 0, pbr = 0, fell = 0, shared = 0; for (const e of mats.values()) { ids.add(e.id); if (e.fellBack) fell++; else if (e.conv?.kind === 'wgsl') tsl++; else pbr++; if (e.grp && e.grp.members.size > 1) shared++; }
+  return { matsTsl: tsl, matsPbr: pbr, matsFell: fell, hostMats: ids.size, matShared: shared, dedGroups: groups.size, dedHit: stats.dedupeHit, dedNew: stats.dedupeNew, dedSplit: stats.dedupeSplit, dedRefused: stats.dedupeRefused };
+}
 function exportCostCensus() { // all numbers (the page:mem census line takes numeric keys only)
   const t = syLast.tsl, o = { expParamsMs: r1(syLast.params), expCreateMs: r1(syLast.create), expTexMs: r1(syLast.tex), expPbrN: syLast.pbrN, expPbrMs: r1(syLast.pbrMs), expTslN: syLast.tslN,
     expTotParamsMs: Math.round(syTot.params), expTotCreateMs: Math.round(syTot.create), expTotTexMs: Math.round(syTot.tex), expTotPbrMs: Math.round(syTot.pbrMs), expTotTsl: syTot.tslN, expTotPbr: syTot.pbrN };
@@ -245,13 +249,15 @@ return p;
 let frameScene = null, frameCamera = null;
 function syncLiveUniforms() {
   let batch = null;
-  for (const [, e] of mats) {
+  for (const [m, e] of mats) {
     const wg = e.conv?.kind === 'wgsl' && !e.fellBack && e.epoch === epoch;
 if (wg && backend.updateShaderBuffers) { const tb = now(); const n = backend.updateShaderBuffers(e.id); sub.updateShaderBuffers += now() - tb; if (n) stats.bufferWrites = (stats.bufferWrites ?? 0) + n; } // r6-tsl-2: storage buffers follow BufferAttribute.version
 const live = wg ? e.conv.package?.live : null;
 if (!live) continue;
     const tl = now(); sub.liveMats++;
-    const changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined, frameToken: epoch });
+    let changed = live.update({ scene: frameScene, camera: frameCamera ?? undefined, frameToken: epoch });
+    if (e.grp) changed = groupFilter(e, m, changed);
+    if (e.pre) { if (e.pre.length) changed = changed.length ? e.pre.concat(changed) : e.pre; e.pre = null; } // nt-exportcost: changes of the early (dedupe) update ride the first sync - AFTER the group filter: they are what the host material still lacks (group.ref already includes them)
     sub.liveUpdate += now() - tl;
     if (!changed.length) continue;
     const ts = now();
@@ -302,23 +308,89 @@ sub.exportCalls++; if (!e || e.sig !== sig) noteWhy(e, sig, isTsl); const tmp = 
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (conv.unsupported) for (const u of conv.unsupported) stats.unsupported.add(u); // r13-bc: refused/unreadable textures (material-map), recorded not silent
 if (!e) {
-const id = createMat(conv, m);
-e = { id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.degraded, first: o ? { name: o.name, recv: !!o.receiveShadow } : null };
-e.fellBack = !!conv.fellBack;
+const hs = acquireHost(conv, m, o);
+e = { id: hs.id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.degraded, first: o ? { name: o.name, recv: !!o.receiveShadow } : null };
+attach(e, hs); e.fellBack = !!conv.fellBack;
 mats.set(m, e); stats.created++;
 } else {
 if (!admit(convCost(conv), 'materials')) { e.epoch = epoch; return e; } // nt-pagemem: texture edit would push new bytes while the pipe is over encodeCap -> keep the old description (sig unchanged => retried next sync)
 if (conv.kind === 'pbr' && e.conv.kind === 'pbr' && backend.updateMaterial) { backend.updateMaterial(e.id, conv.params, conv.textures); }
 else { // swap handle on every user
-const old = e.id; e.id = createMat(conv, m); e.fellBack = !!conv.fellBack;
-for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); }
-backend.destroyMaterial(old);
+const old = e.id; leaveGroup(e); const hs = acquireHost(conv, m, o); e.id = hs.id; attach(e, hs); e.fellBack = !!conv.fellBack;
+swapUsers(e, m);
+releaseHost(old);
 }
 e.sig = conv.sig + sigSfx; e.conv = conv; e.degraded = conv.degraded; e.epoch = epoch; upd('material');
 }
 if (conv.degraded) stats.degraded.add(conv.degraded);
 if (backend.drainUnsupported) for (const u of backend.drainUnsupported()) stats.unsupported.add(u); // r13-bc: backend-side texture upload refusals
 return e;
+}
+// ---- nt-exportcost: DEDUPE of TSL host materials (exportDedupe = page-memory knob exportDedupe; default off for the browser path) ----
+// The game builds one NodeMaterial INSTANCE per object (ad_mats grows ~1:1 with ad_recs). Two instances with the same template key (exporter's structural key id, pkg.kh) + same texture host keys/sampler state + same pipeline meta + same
+// uniform VALUES produce byte-identical host materials -> they share ONE host id (hostRefs = refcount). Each member still owns its own package/live closure; the per-frame check below keeps the invariant
+// 'every member's last-seen values == group.ref (what the host holds)': a member whose values move away is split off (createShaderMaterial + full uniform state). A solo group streams its changes and moves ref along.
+// Only Mesh-like users (o.isMesh): batch/sprite/points records cache the material id themselves. Packages with storage buffers / node attributes / non-2D textures are never shared.
+const hostRefs = new Map(); // host material id -> refcount (ids created while exportDedupe is on)
+const groups = new Map();   // gk (dk + '#' + JSON values) -> { id, gk, dk, ref:[plain...], members:Set<entry> }
+stats.dedupeHit = 0; stats.dedupeNew = 0; stats.dedupeSplit = 0; stats.dedupeRefused = 0;
+const EMPTY = [];
+const hasKeys = (o) => { for (const _ in o) return true; return false; };
+function eqPlain(a, b) { if (a === b) return true; if (typeof a === 'number' && typeof b === 'number') return a !== a && b !== b; if (!a || !b || typeof a !== 'object' || a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i] && !(a[i] !== a[i] && b[i] !== b[i])) return false; return true; }
+// null = not shareable. update=true runs the package's first live update NOW (its changes are returned as .pre and shipped with the host material if it is not shared) so the snapshot is this material's TRUE state.
+function dedupeInfo(conv, update) {
+  const pkg = conv.package;
+  if (!exportDedupe || conv.kind !== 'wgsl' || conv.tslRefused || !pkg?.kh || typeof pkg.live?.snapshot !== 'function') return null;
+  if (hasKeys(pkg.bufferSources) || hasKeys(pkg.attributeSources)) { stats.dedupeRefused++; return null; }
+  let tk = '';
+  for (const g of pkg.bindGroups) for (const b of g.bindings) {
+    if (b.textureUuid === undefined || b.kind === 'sampler') continue;
+    if (b.kind !== 'texture-2d') { stats.dedupeRefused++; return null; }
+    const t = pkg.textureSources?.[b.textureUuid], d = t && textureData(t);
+    if (!d || d.refused || !d.key) { stats.dedupeRefused++; return null; }
+    tk += `${b.name}=${d.key}:${t.wrapS}${t.wrapT}${t.minFilter}${t.magFilter}${t.flipY ? 1 : 0}${t.generateMipmaps ? 1 : 0};`;
+  }
+  const pm = pkg.material, meta = `${pm.type}|${+pm.transparent}|${pm.side}|${+pm.depthWrite}|${+pm.depthTest}|${+pm.colorWrite}|${pm.blending}`; // name excluded: debug only
+  let pre = null;
+  if (update) pre = pkg.live.update({ scene: frameScene, camera: frameCamera ?? undefined, frameToken: epoch });
+  const sn = pkg.live.snapshot(); if (!sn.ok) { stats.dedupeRefused++; return update ? { dk: null, pre } : null; }
+  const dk = `${pkg.kh}|${meta}|${tk}`;
+  return { dk, vals: sn.vals, gk: dk + '#' + JSON.stringify(sn.vals), pre };
+}
+function unreg(g) { if (groups.get(g.gk) === g) groups.delete(g.gk); }
+function regroup(g) { unreg(g); g.gk = g.dk + '#' + JSON.stringify(g.ref); if (!groups.has(g.gk)) groups.set(g.gk, g); }
+function leaveGroup(e) { const g = e.grp; if (!g) return; g.members.delete(e); e.grp = null; if (!g.members.size) unreg(g); }
+function releaseHost(id) { const n = hostRefs.get(id); if (n === undefined || n <= 1) { hostRefs.delete(id); backend.destroyMaterial(id); } else hostRefs.set(id, n - 1); }
+// host material for a conv: join the group with identical (key, textures, values), else create (and open a group)
+function acquireHost(conv, m, o) {
+  const di = o?.isMesh ? dedupeInfo(conv, true) : null;
+  if (di?.dk) { const g = groups.get(di.gk); if (g) { hostRefs.set(g.id, (hostRefs.get(g.id) ?? 1) + 1); stats.dedupeHit++; return { id: g.id, g, pre: null }; } }
+  const id = createMat(conv, m); let g = null;
+  if (di?.dk && !conv.fellBack) { g = { id, gk: di.gk, dk: di.dk, ref: di.vals, keys: conv.package.live.keys, members: new Set() }; groups.set(g.gk, g); hostRefs.set(id, 1); stats.dedupeNew++; }
+  return { id, g, pre: di?.pre?.length ? di.pre : null };
+}
+function attach(e, hs) { e.pre = hs.pre; e.kidx = null; e.grp = hs.g; if (hs.g) hs.g.members.add(e); }
+// a shared member whose values left the group's: own host material, full uniform state
+function unshare(e, m) {
+  const conv = e.conv, old = e.id, pkg = conv.package; leaveGroup(e); stats.dedupeSplit++;
+  const di = dedupeInfo(conv, false); const id = createMat(conv, m); e.id = id; e.fellBack = !!conv.fellBack; e.pre = null;
+  let all = EMPTY;
+  if (!e.fellBack) { const sn = pkg.live.snapshot(); all = pkg.live.keys.map((key, i) => ({ key, value: sn.vals[i] })); }
+  if (di?.dk && !e.fellBack) { const g = { id, gk: di.gk, dk: di.dk, ref: di.vals, keys: pkg.live.keys, members: new Set([e]) }; if (!groups.has(g.gk)) groups.set(g.gk, g); hostRefs.set(id, 1); e.grp = g; }
+  swapUsers(e, m); releaseHost(old);
+  return all;
+}
+function swapUsers(e, m) { for (const u of e.users) { if (u.parts) { for (const part of u.parts) if (part.mat === m && part.node) backend.updateNode(part.node, { material: e.id }); } else if (u.node && u.mat === m) backend.updateNode(u.node, { material: e.id }); } }
+// per-frame, after the member's own live.update: returns what to send to e.id
+function groupFilter(e, m, changed) {
+  const g = e.grp, live = e.conv.package.live;
+  if (!e.kidx) { e.kidx = new Map(); live.keys.forEach((k, i) => e.kidx.set(k, i)); }
+  if (g.members.size === 1) { // solo: stream the changes under the host material's OWN uniform keys (g.keys = the creator's package; this member may have joined later) and move ref along
+    if (!changed.length) return changed;
+    const out = []; for (const c of changed) { const i = e.kidx.get(c.key); if (i !== undefined) { g.ref[i] = c.value; out.push({ key: g.keys[i], value: c.value }); } } regroup(g); return out;
+  }
+  for (const c of changed) { const i = e.kidx.get(c.key); if (i === undefined || !eqPlain(g.ref[i], c.value)) return unshare(e, m); }
+  return EMPTY; // every change is already what the host holds
 }
 function createMat(conv, m) {
 if (conv.kind !== 'wgsl' || exportBudgetMs <= 0) { const tc = now(); try { return createMat0(conv, m); } finally { sy.create += now() - tc; } }
@@ -437,7 +509,7 @@ rec.parts = [];
 }
 function gc() { // drop unused geometries/materials
 for (const [g, e] of geos) { for (const [k, p] of e.parts) if (p.users.size === 0) { backend.destroyMesh(p.id); e.parts.delete(k); } if (e.parts.size === 0) geos.delete(g); }
-for (const [m, e] of mats) if (e.users.size === 0) { backend.destroyMaterial(e.id); mats.delete(m); }
+for (const [m, e] of mats) if (e.users.size === 0) { leaveGroup(e); releaseHost(e.id); mats.delete(m); }
 }
 
 // lane dynlight: directional lights -> core. primary = the shadow caster (else the strongest) -> setSun; the rest (<= MAX) -> setExtraDirs (unshadowed). Before this the core kept ONE sun and every
@@ -816,14 +888,14 @@ return {
 stats,
 // r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
 /** nt-frameleak census: every adapter-owned container (all must track the LIVE scene, not grow with frames). */
-census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length, exportDeferred: stats.exportDeferred, expPendMats: pendLast, expPendObjs: pendObjsLast, expMsLast: Math.round(stats.exportMsLast), expNLast: stats.exportNLast, ...exportCostCensus() }; },
+census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length, exportDeferred: stats.exportDeferred, expPendMats: pendLast, expPendObjs: pendObjsLast, expMsLast: Math.round(stats.exportMsLast), expNLast: stats.exportNLast, ...exportCostCensus(), ...dedupeCensus() }; },
 matPkg(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e?.conv?.package ?? null; },
 matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
 sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
-{ const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
+bumpLightEpoch(); /* nt-exportcost: scene-light scans are memoised per sync */ { const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
 expMs = 0; expN = 0; pendNow = new Set(); pendObjs = 0; // nt-tslbudget
 sy.params = sy.create = sy.pbrN = sy.pbrMs = sy.tslN = 0; sy.tex0 = textureReads.ms; exportProbe?.begin(); // nt-exportcost
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;

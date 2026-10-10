@@ -12,6 +12,7 @@
 // touches `node.isMesh` nodes, and `THREE.Sprite.isMesh` is not set.
 
 import { attachGI, detachGI } from './gi-material.js';
+import { leakGuards } from '../render-api/native/page-memory.js'; // nt-frameleak
 
 // MeshLambertNodeMaterial / MeshStandardNodeMaterial / MeshPhysicalNodeMaterial
 // all set `this.lights = true` AND use a lighting model whose
@@ -50,19 +51,25 @@ function countMeshes(scene) {
 export class GISceneAttachment {
   constructor() {
     this._originals = new Map(); // material -> its setupLights before attachGI wrapped it
+    // nt-frameleak (native: leakGuards.weakRegistries, ?nativeWeakRegs=0 = old): the strong Map above pinned EVERY eligible material ever attached (+ its textures) until detachAll, even after the
+    // mesh left the scene. Weak mode: `_wm` (WeakMap material -> original) answers "attached?", `_refs` (Set<WeakRef>) keeps detachAll able to restore the survivors.
+    this._wm = new WeakMap(); this._refs = new Set();
     this._lastMeshCount = -1;
   }
+  _weak() { return leakGuards.weakRegistries && typeof WeakRef !== 'undefined'; }
 
   /** Attach to every eligible, not-yet-attached material. Idempotent. @returns count newly attached */
   attachAll(scene, giQueryNode) {
     if (!scene) return 0;
     let attached = 0;
+    const weak = this._weak();
+    if (weak && this._refs.size > 2048) for (const r of this._refs) if (!r.deref()) this._refs.delete(r);
     forEachMeshMaterial(scene, (mat) => {
       if (!isGIEligibleMaterial(mat)) return;
-      if (this._originals.has(mat)) return; // already attached, skip (idempotent)
+      if (weak ? this._wm.has(mat) : this._originals.has(mat)) return; // already attached, skip (idempotent)
       const original = mat.setupLights;
       attachGI(mat, giQueryNode);
-      this._originals.set(mat, original);
+      if (weak) { this._wm.set(mat, original); this._refs.add(new WeakRef(mat)); } else this._originals.set(mat, original);
       mat.needsUpdate = true;
       attached++;
     });
@@ -84,10 +91,14 @@ export class GISceneAttachment {
       mat.needsUpdate = true;
     }
     this._originals.clear();
+    for (const r of this._refs) { const mat = r.deref(); if (mat) { detachGI(mat, this._wm.get(mat)); mat.needsUpdate = true; this._wm.delete(mat); } }
+    this._refs.clear();
     this._lastMeshCount = -1;
   }
 
   get attachedCount() {
-    return this._originals.size;
+    let n = this._originals.size;
+    for (const r of this._refs) { if (r.deref()) n++; else this._refs.delete(r); } // dead refs are pruned here (census/probe cadence)
+    return n;
   }
 }

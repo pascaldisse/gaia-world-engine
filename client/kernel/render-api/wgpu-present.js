@@ -12,13 +12,13 @@ import { createGiNative } from './gi-native.js';
 import { threeGpuOff } from './native-mode.js';
 import { createPostBridge } from './post-bridge.js';
 import { configureMaterialMap } from './material-map.js';
-import { pageMemConfig } from './native/page-memory.js';
+import { pageMemConfig, configureLeakGuards } from './native/page-memory.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
   const native = params.get('renderBackend') === 'native';
   // nt-pagemem: native page-memory policy (defaults + &native* params: native/page-memory.js, docs/NATIVE.md §page-memory). null in the browser = old behaviour everywhere.
   const pm = native ? pageMemConfig(params) : null;
-  if (pm) configureMaterialMap(pm);
+  if (pm) { configureMaterialMap(pm); configureLeakGuards(pm); } // nt-frameleak: retention guards (native/page-memory.js leakGuards)
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = native ? (await import('./native/gaia-render-native.js')).nativeModule(params) : await import(/* @vite-ignore */ pkg);
   // three has NO device in native mode (renderBackend=native, or wgpu + threeGpu=0): nothing can be written into it, so there is nothing to mirror.
@@ -34,6 +34,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' }, hdrScene: params.get('wgpuPost') === '0' ? 0 : 1 } });
+  if (pm?.tslTemplateMax > 0) structCache.maxTemplates = pm.tslTemplateMax; // nt-frameleak: native default 64 (browser 128): each template pins node graph + package -> material/mesh/textures; &wgpuTslCacheMax below still wins
   { const mt = Number(params.get('wgpuTslCacheMax')); if (Number.isFinite(mt) && mt > 0) structCache.maxTemplates = mt; } // r10-7 template retention bound
   if (params.get('wgpuTslKeyDump') === '1') structCache.keySamples = new Map();
   if (params.get('wgpuTslWalkCheck') === '1') structCache.walkCheck = true;

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # native-play — run the JS game inside the native macOS host (client-rs/packages/game-window): Tauri webview for the game page,
-# Rust gaia-render on Metal at internal height -> MetalFX -> surface. Does NOT start the game servers (world/bridge/vite): use the DS
-# launcher for that (~/projects/nari-world-companion/tools/ds-world/play.sh; it opens Brave at the end -- PLAY_BRAVE=/usr/bin/true skips it, UNVERIFIED), then run this.
+# Rust gaia-render on Metal at internal height -> MetalFX -> surface. Does NOT start the game servers (world/bridge/vite): the game's
+# own launcher starts them and passes --url (engine knows no game path).
 # usage: tools/native-play.sh [--url U] [--render-height N] [--upscaler metalfx-spatial|bilinear] [--build] [-- <extra game-window args>]
 # Params (flag > env > default):
 #   --url              NATIVE_URL            default = url.txt of the CURRENT play.sh session under NATIVE_PLAY_ROOT
 #   --render-height    NATIVE_RENDER_HEIGHT  720
 #   --upscaler         NATIVE_UPSCALER       metalfx-spatial
-#   NATIVE_PLAY_ROOT   ~/projects/nari-world-companion        (session lookup: <root>/.scratch/live/CURRENT -> <dir>/url.txt)
+#   NATIVE_PLAY_ROOT   (no default; game repo root) session lookup <root>/.scratch/live/CURRENT -> <dir>/url.txt, only when no --url
 #   NATIVE_RENDER_BACKEND native       forced into the page URL's ?renderBackend= BY game-window (play.sh's url says wgpu = the in-browser wasm path); ?wgpuHeight= is forced the same way from --render-height
 #   NATIVE_PROFILE     release         cargo profile of the binary
 #   CARGO_TARGET_DIR   <repo>/client-rs/target      CARGO_BUILD_JOBS 4
@@ -17,7 +17,7 @@
 set -u
 R="$(cd "$(dirname "$0")/.." && pwd)"
 URL="${NATIVE_URL:-}"; H="${NATIVE_RENDER_HEIGHT:-720}"; UP="${NATIVE_UPSCALER:-metalfx-spatial}"
-ROOT="${NATIVE_PLAY_ROOT:-$HOME/projects/nari-world-companion}"; BACKEND="${NATIVE_RENDER_BACKEND:-native}"
+ROOT="${NATIVE_PLAY_ROOT:-}"; BACKEND="${NATIVE_RENDER_BACKEND:-native}"
 PROFILE="${NATIVE_PROFILE:-release}"; BUILD="${NATIVE_BUILD:-0}"
 TARGET="${CARGO_TARGET_DIR:-$R/client-rs/target}"; BIN="${NATIVE_BIN:-$TARGET/$PROFILE/game-window}"
 EXTRA=()
@@ -27,6 +27,7 @@ while [ $# -gt 0 ]; do case "$1" in
   -h|--help) sed -n '2,22p' "$0"; exit 0;;
   *) echo "REFUSED: unknown arg $1 (see --help)" >&2; exit 2;; esac; done
 if [ -z "$URL" ]; then
+  [ -n "$ROOT" ] || { echo "REFUSED: no --url/NATIVE_URL and no NATIVE_PLAY_ROOT (engine has no game default)" >&2; exit 2; }
   CUR="$ROOT/.scratch/live/CURRENT"
   [ -f "$CUR" ] && [ -f "$(cat "$CUR")/url.txt" ] || { echo "REFUSED: no --url/NATIVE_URL and no play.sh session ($CUR -> url.txt). Start the game servers first." >&2; exit 2; }
   URL="$(cat "$(cat "$CUR")/url.txt")"

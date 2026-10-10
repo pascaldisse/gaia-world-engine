@@ -378,10 +378,10 @@ gatedCtors.set(Ctor, G); return G;
 // Lifecycle per recipe key rk: M0 full build registers {state:'learn'} (+ its pre-walk) · M1 full (singleton 'prove') · M2 full+rebind = PROOF (every node rebind maps by position must be a pre-walk node or a light-owned node; end-to-end compare of the pre-walk-mapped rebind vs the position-mapped rebind) -> 'ok' · M3.. fast path. Failed proof = 'bad' (full path forever, census recipeBad + reason).
 const HOST_SEM = /^camera|^time$|^deltaTime$/; // host-supplied uniforms (buildPackage: semantic, key null - never in the package's live set): their per-build update nodes are benign to keep from the template
 const lnOf = (sc) => (sc ? lightsCache.get(sc)?.node?.uuid ?? '' : '');
-function recipeKeyOf(material, pre, opts) {
+function recipeKeyOf(material, pre, opts, pw) { // pw.sig in the key: same recipe + different pre-walk structure (e.g. other texture format/colorSpace) = its own recipe entry (own template), never a mismatch
   const o = opts.object, recv = o ? o.receiveShadow : opts.receiveShadow, cast = o ? o.castShadow : opts.castShadow; // buildPackage: a real object carries its own shadow flags, a stand-in the source's
   let ls = ''; if (opts.scene) { try { ls = observeLights(opts.scene).all.map((l) => l.uuid).join(','); } catch { ls = '?'; } } // baked light set (LightsNode) - NOT in preParts (live light types only)
-  return hashParts([material.userData.gaiaTslRecipe, `${recv ? 1 : 0}${cast ? 1 : 0}${opts.coreShadow === false ? 0 : 1}`, ls, ...pre]);
+  return hashParts([material.userData.gaiaTslRecipe, `${recv ? 1 : 0}${cast ? 1 : 0}${opts.coreShadow === false ? 0 : 1}`, ls, pw.sig, ...pre]);
 }
 // pre-setup walk of the material's own enumerable Node props (sorted keys). Same per-node signature as builderWalk (class/type/update types/texture format+colorSpace/primitive props incl. CONST values, slot values excluded) + back-refs by first-visit index.
 function preWalk(THREE, material) {
@@ -485,7 +485,7 @@ C.preMs += nowMs() - t0; let tb0 = 0, tGE = 0;
 let rk = null, rec = null, pw = null;
 if (C.recipe && pre && typeof material.userData?.gaiaTslRecipe === 'string' && material.userData.gaiaTslRecipe) {
   const tr = nowMs();
-  try { rk = recipeKeyOf(material, pre, opts); rec = C.recipes.get(rk) ?? null; if (!rec || rec.state !== 'bad') pw = preWalk(THREE, material); } catch (e) { rk = null; pw = null; why('recipeError', String(e?.message ?? e)); }
+  try { pw = preWalk(THREE, material); rk = recipeKeyOf(material, pre, opts, pw); rec = C.recipes.get(rk) ?? null; } catch (e) { rk = null; rec = null; pw = null; why('recipeError', String(e?.message ?? e)); }
   if (pw && rec?.state === 'ok') { const fr = recipeFast(C, rk, rec, pw, material, opts, mode); if (fr) { C.recipeMs += nowMs() - tr; return fr; } }
   C.recipeMs += nowMs() - tr; if (rk) C.recipeMiss++;
 } // nt-exportcost phase timing: tb0 = buildPackage start, tGE = gate exit
@@ -522,7 +522,8 @@ C.misses++;
 if (!w) return pkg;
 if (C.keySamples) { const h = strHash(pkg.vertex + pkg.fragment); if (C.bound > 0 && C.keySamples.size >= C.bound && !C.keySamples.has(h)) C.keySamples.delete(C.keySamples.keys().next().value); const e = C.keySamples.get(h) ?? { n: 0, s: [] }; C.keySamples.set(h, e); e.n++; if (e.s.length < 8) e.s.push({ name: material.name || material.type, parts: w.parts }); } // diagnostic (?wgpuTslKeyDump=1): per-WGSL-hash key parts, for diffing over-split terms
 if (decision === 'prove') { const tpl = hit; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
-for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { if (C.bound > 0 && SHARED_OK.size >= C.bound) SHARED_OK.delete(SHARED_OK.values().next().value); SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
+for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { if (C.bound > 0 && SHARED_OK.size >= C.bound) SHARED_OK.delete(SHARED_OK.values().next().value); SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } }
+if (rec?.state === 'learn' && pw && rec.key === w.key && !tpl.noRebind && !tpl.unproven?.size && !tpl.unprovenBuf?.size) learnRecipe(C, rec, tpl, w, pw, material, opts); /* nt-tslrecipe: the prove build already has template + walk + pre-walk -> proof here saves one full build per recipe */ return pkg; }
 if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } if (C.bound > 0 && C.wgslOf.size >= C.bound && !C.wgslOf.has(w.key)) C.wgslOf.delete(C.wgslOf.keys().next().value); C.wgslOf.set(w.key, k); }
 if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg, kh: keyId(w.key) }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } if (C.lean) slimTemplate(t, !!bad); retainTemplate(C, w.key, t); if (rk && pw && !t.noRebind && !(rec && rec.state !== 'learn' && C.map.has(rec.key))) registerRecipe(C, rk, pw, w.key, opts); /* nt-tslrecipe: this build created the template -> its pre-walk is the recipe's reference (M0) */ }
 { const tt = C.map.get(w.key); if (tt?.kh && !tt.noRebind) Object.defineProperty(pkg, 'kh', { value: tt.kh }); }

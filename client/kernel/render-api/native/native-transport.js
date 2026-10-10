@@ -67,7 +67,8 @@ export async function wsSend({ ws = globalThis.__GAIA_NATIVE__?.ws, host = '127.
   send.socket = sock;
   return send;
 }
-export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = send.maxInflight ?? 1, onReport, onError }) {
+/** coalesceBelowBytes (page-memory.js coalesceKB): pieces at or above it are never copied into a coalesced message; onAck(ackedBytes) runs after every acked message (release hooks). */
+export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = send.maxInflight ?? 1, coalesceBelowBytes = 1 << 20, onReport, onError, onAck }) {
   const queue = [];                 // Uint8Array pieces, stream order
   let queued = 0;
   const flight = [];                // messages sent, report not back yet (oldest first)
@@ -83,8 +84,10 @@ export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = 
         queue[0] = queue[0].subarray(cap);
       } else {
         let n = 0, take = 0;
-        while (take < queue.length && n + queue[take].byteLength <= cap) n += queue[take++].byteLength;
-        if (take === 1) msg = queue.shift();
+        // only SMALL pieces are batched (one copy of <= cap bytes made of < coalesceBelow pieces); a big piece is sent as-is -> never a 16 MB concat copy of multi-MB creates (nt-pagemem)
+        while (take < queue.length && queue[take].byteLength < coalesceBelowBytes && n + queue[take].byteLength <= cap) n += queue[take++].byteLength;
+        if (take === 0) { msg = queue.shift(); n = msg.byteLength; }
+        else if (take === 1) msg = queue.shift();
         else {
           msg = new Uint8Array(n);
           let o = 0;
@@ -101,6 +104,7 @@ export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = 
         st.lastMBps = f.n / 1048576 / Math.max(ms, 1e-3) * 1e3; // per-message round trip (understates when pipelined: includes waiting behind the previous apply)
         st.ackedBytes += f.n;
         flight.splice(flight.indexOf(f), 1);
+        if (onAck) { try { onAck(st.ackedBytes); } catch (e) { onError(e); } }
         pump();
       });
     }
@@ -109,6 +113,8 @@ export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = 
   return {
     stats: st,
     get queuedBytes() { return queued; },
+    /** serialized by the page but not yet acked by the host: queued + in flight. The writer-side backpressure signal (scene-adapter encodeCap). */
+    get pendingBytes() { let n = queued; for (const f of flight) n += f.n; return n; },
     get inflightCount() { return flight.length; },
     get inflightAgeMs() { return flight.length ? performance.now() - flight[0].t0 : 0; },
     push(chunk) { queue.push(chunk); queued += chunk.byteLength; st.maxQueued = Math.max(st.maxQueued, queued); pump(); },

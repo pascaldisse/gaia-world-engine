@@ -261,14 +261,15 @@ const part = { geo: g, geoKey: `${start}:${count}`, start, count, mat: mk, flags
 if (o.isInstancedMesh) {
 // native instance blocks carry matrix + colour only; a TSL material reading per-INSTANCE custom attributes takes the expanded path (rows per instance)
 const hasInstAttrs = (me) => { const pkg = me?.conv?.kind === 'wgsl' && !me.fellBack ? me.conv.package : null; return !!pkg?.attributes?.some((a) => a.instanced); };
-if (nativeInst() && !hasInstAttrs(me)) { part.pk = {}; const pkx = packInst(o, part.pk, isPremult(m)); part.node = backend.createInstanced(gp.id, me.id, instanceMats(o), o.count, { ...flags, matrix: Array.from(o.matrixWorld.elements), ...(pkx.colors ? { colors: pkx.colors, colorStride: 4 } : {}) }); if (pkx.uvs) { if (backend.setInstanceUvs) { backend.setInstanceUvs(part.node, pkx.uvs); part.hasUv = true; } else stats.unsupported.add('instanceUv:no-backend-setInstanceUvs'); } part.instV = o.instanceMatrix.version; part.instC = instVers(o); part.instCount = o.count; }
+if (nativeInst() && !hasInstAttrs(me)) { part.pk = {}; const pkx = packInst(o, part.pk, isPremult(m)); part.node = backend.createInstanced(gp.id, me.id, instanceMats(o, part.pk), o.count, { ...flags, dynamic: o.instanceMatrix.usage === 35048 /* THREE.DynamicDrawUsage -> core dynamic block path */, matrix: Array.from(o.matrixWorld.elements), ...(pkx.colors ? { colors: pkx.colors, colorStride: 4 } : {}) }); if (pkx.uvs) { if (backend.setInstanceUvs) { backend.setInstanceUvs(part.node, pkx.uvs); part.hasUv = true; } else stats.unsupported.add('instanceUv:no-backend-setInstanceUvs'); } part.instV = o.instanceMatrix.version; part.instC = instVers(o); part.instCount = o.count; }
 else { stats.degraded.add(nativeInst() ? 'instanced-custom-attrs:expanded-per-instance' : 'createInstanced-missing:expanded-per-instance'); part.expanded = []; for (let i = 0; i < o.count; i++) part.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...flags, instAttrs: instAttrRow(me, i) })); part.instV = o.instanceMatrix.version; part.instCount = o.count; part.instSig = instAttrSig(me); }
 } else part.node = backend.createInstance(gp.id, me.id, Array.from(o.matrixWorld.elements), flags);
 rec.parts.push(part); stats.created++;
 }
 return rec.parts.length > 0;
 }
-const instanceMats = (o) => o.instanceMatrix.array.subarray(0, o.count * 16);
+// nt-dyninst: live-range view [0,count*16) cached per (array,count) in `st` (the part's pk scratch) -> no per-frame view allocation while the count is steady
+const instanceMats = (o, st) => { const a = o.instanceMatrix.array, n = o.count * 16; if (!st) return a.subarray(0, n); if (st.mArr !== a || st.mats?.length !== n) { st.mArr = a; st.mats = a.subarray(0, n); } return st.mats; };
 // ---- r19-pcol per-instance render attributes of an InstancedMesh (all ride the ONE native block; conventions, generic, no game names):
 //   instanceColor (setColorAt)           rgb itemSize 3 = colour multiply; itemSize 4 = rgba (alpha = per-instance opacity)
 //   geometry attribute 'instanceOpacity' itemSize 1 InstancedBufferAttribute = per-instance opacity, MULTIPLIED with instanceColor.a
@@ -292,7 +293,11 @@ function packInst(o, st, premult) {
     const ranges = []; let full = need;
     if (!full && ic && ic.version !== st.vIc) full = !instRanges(ic, n, ranges);
     if (!full && op && op.version !== st.vOp) full = !instRanges(op, n, ranges);
-    if (full) { st.col = new Float32Array(n * 4); ranges.length = 0; ranges.push(0, n); }
+    if (full) { // nt-dyninst: grow-only scratch (capacity doubling); `st.col` = live-range [0,n*4) view only (the wire sends exactly the view, nothing beyond count)
+  if (!st.buf || st.buf.length < n * 4) st.buf = new Float32Array(Math.max(n * 4, (st.buf?.length ?? 0) * 2, 64));
+  if (!st.col || st.col.length !== n * 4 || st.col.buffer !== st.buf.buffer) st.col = st.buf.subarray(0, n * 4);
+  ranges.length = 0; ranges.push(0, n);
+}
     const col = st.col, ia = ic?.array, is = ic?.itemSize ?? 0, oa = op?.array, os = op?.itemSize ?? 1;
     for (let r = 0; r < ranges.length; r += 2) for (let i = ranges[r]; i < ranges[r + 1]; i++) {
       let a = (is >= 4 ? ia[i * is + 3] : 1) * (oa ? oa[i * os] : 1);
@@ -302,7 +307,7 @@ function packInst(o, st, premult) {
     ic?.clearUpdateRanges?.(); op?.clearUpdateRanges?.();
     st.premult = premult; st.hasIc = !!ic; st.hasOp = !!op; st.vIc = ic?.version; st.vOp = op?.version; colors = col;
   }
-  if (uv && uv.itemSize === 4 && uv.array instanceof Float32Array) { uvs = uv.array.subarray(0, n * 4); uv.clearUpdateRanges?.(); }
+  if (uv && uv.itemSize === 4 && uv.array instanceof Float32Array) { if (st.uvArr !== uv.array || st.uvs?.length !== n * 4) { st.uvArr = uv.array; st.uvs = uv.array.subarray(0, n * 4); } uvs = st.uvs; uv.clearUpdateRanges?.(); }
   return { colors, colorStride: 4, uvs };
 }
 const instColors = (o, st, premult) => { const p = packInst(o, st, premult); return p.colors ? { colors: p.colors, colorStride: 4 } : {}; };
@@ -673,7 +678,7 @@ if (flagsChanged) u = Object.assign(u ?? {}, f);
 if (swapped) { const mk2 = matKey(o.material, o), me = ensureMaterial(mk2, o); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = mk2; (u ??= {}).material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
 const ic = instVers(o);
-if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const pk = packInst(o, p.pk ??= {}, isPremult(p.mat)); backend.updateInstances(p.node, instanceMats(o), o.count, o.matrixWorld.elements, pk.colors ?? null, pk.colorStride); if ((pk.uvs || p.hasUv) && backend.setInstanceUvs) { backend.setInstanceUvs(p.node, pk.uvs ?? null); p.hasUv = !!pk.uvs; } p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
+if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const pk = packInst(o, p.pk ??= {}, isPremult(p.mat)); backend.updateInstances(p.node, instanceMats(o, p.pk), o.count, o.matrixWorld.elements, pk.colors ?? null, pk.colorStride); if ((pk.uvs || p.hasUv) && backend.setInstanceUvs) { backend.setInstanceUvs(p.node, pk.uvs ?? null); p.hasUv = !!pk.uvs; } p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
 }
 if (u) { backend.updateNode(p.node, u); upd('node'); }
 // refresh material conversion (property edits) — cheap, once per material per frame (epoch-gated inside)

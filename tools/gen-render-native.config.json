@@ -28,11 +28,13 @@
     "autoExposureGrid": "f32",
 "giComputeStats": "f32",
     "compressedStats": "u32",
+    "dynBlockStats": "u32",
     "passStats": "u32"
   },
   "queryDefaults": {
     "compressedStats": [0, 0, 0, 0, 0, 0],
     "passStats": [],
+    "dynBlockStats": [0, 0, 0, 0, 0, 0, 0, 0],
     "threeSkipped": 0,
     "drawnInstanceCount": 0,
     "instanceCount": 0,

@@ -289,7 +289,8 @@ maps: [ids.array ?? 0, ids.normalMap ?? 0, ids.roughnessMap ?? 0, ids.metalnessM
       if (n.kind === 'instanced') gpu.setInstanceBlockFlags(n.rid, n.castShadow !== false, true); else gpu.setInstanceStatic(n.rid, true);
     }
   }
-  const f32eq = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
+  const EMPTY_F32 = new Float32Array(0);
+const f32eq = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return false; return true; };
 
   const need = (map, id, what) => { const v = map.get(id); if (!v) throw new Error(`render-api(wgpu): unknown ${what} ${id}`); return v; };
   const asMat = (m) => { if (!isMat4(m)) throw new Error('render-api(wgpu): mat4 must be 16 finite numbers'); return m; };
@@ -332,16 +333,21 @@ applyShadowFlags(node); applyGroups(node); relinkGroupChildren(node);
   function relinkGroupChildren(parentNode) { for (const n of nodes.values()) if (n.groups?.parent === parentNode.id) applyGroups(n); }
   // native block upload: create / update / remove per visibility; `flagsDirty` re-applies shadow flags (material change = recreate).
 function pushBlock(node, flagsDirty = false, moved = false) {
-  if (!node.visible || node.count === 0) { if (node.rid) { gpu.removeInstanceBlock(node.rid); node.rid = 0; } return; }
-  const colors = node.colors ?? new Float32Array(0), stride = node.colors ? node.stride : 0;
+  if (!node.visible) { if (node.rid) { gpu.removeInstanceBlock(node.rid); node.rid = 0; } return; }
+  const colors = node.colors ?? EMPTY_F32, stride = node.colors ? node.stride : 0;
   if (node.rid && (node.ridMat !== node.material || node.ridMesh !== node.mesh)) { gpu.removeInstanceBlock(node.rid); node.rid = 0; }
+  // nt-dyninst: a block dropping to count 0 KEEPS its core block (update with count 0). remove + re-create per particle burst dirtied the whole world instance list twice and dropped the dynamic GPU buffers.
+  if (node.count === 0 && !node.rid) return;
   if (!node.rid) {
     node.rid = gpu.createInstanceBlock(node.mesh, node.material, node.mats, colors, stride, node.count, node.world);
-    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true; initAuto(node); if (node.uvs) { node.uvsPushed = false; pushUvs(node); }
-} else { if (moved && markMoved(node)) flagsDirty = true; gpu.updateInstanceBlock(node.rid, node.mats, colors, stride, node.count, node.world); }
+    node.ridMat = node.material; node.ridMesh = node.mesh; flagsDirty = true; node.dynPushed = 0; initAuto(node); if (node.uvs) { node.uvsPushed = false; pushUvs(node); }
+  } else { if (moved && markMoved(node)) flagsDirty = true; gpu.updateInstanceBlock(node.rid, node.mats, colors, stride, node.count, node.world); }
   if (flagsDirty) {
     gpu.setInstanceBlockFlags(node.rid, node.castShadow !== false, staticNow(node));
     if (gpu.setInstanceBlockShadowOnly) gpu.setInstanceBlockShadowOnly(node.rid, !!node.shadowOnly);
+    // explicit dynamic hint (three DynamicDrawUsage); 0 = auto (core promotes after N consecutive updated frames)
+    const dm = node.dynamic ? 1 : 0;
+    if (gpu.setInstanceBlockDynamic && (node.dynPushed ?? 0) !== dm) { gpu.setInstanceBlockDynamic(node.rid, dm); node.dynPushed = dm; }
   }
 }
 function pushUvs(node) { // r19-pcol: uv windows live in the core block; (re)sent after block (re)creation and whenever setInstanceUvs ran (the adapter calls it only on a version change)
@@ -536,7 +542,7 @@ createNode(mat4, parent = 0) {
     // mats = count×16 local mat4s (three instanceMatrix.array), flags.matrix = node matrixWorld (premultiplied in the core), flags.colors = count×stride rgb(a) (three instanceColor.array; stride 3|4).
     createInstanced(mesh, material, mats, count, flags = {}) {
       const node = { id: next++, kind: 'instanced', parent: 0, children: new Set(), mesh, material, rid: 0, mats, count, world: Float32Array.from(flags.matrix ?? IDENTITY_MAT4),
-        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, staticHint: !!flags.staticHint, ridMat: 0, ridMesh: 0 };
+        colors: flags.colors ?? null, stride: flags.colorStride ?? 3, dynamic: !!flags.dynamic, dynPushed: 0, visible: flags.visible !== false, castShadow: flags.castShadow, shadowOnly: !!flags.shadowOnly, static: flags.static, staticHint: !!flags.staticHint, ridMat: 0, ridMesh: 0 };
       nodes.set(node.id, node); if (flags.renderOrder) setMatOrder(material, flags.renderOrder); /* r17-fx: InstancedMesh renderOrder -> core per-material order (was dropped: only createInstance forwarded it) */ pushBlock(node); return node.id;
     },
     // r19-pcol: per-instance uv window for an instanced block: Float32Array count*4 (offsetU, offsetV, scaleU, scaleV) or null (= identity). Pushed to the core only when it changed (identity buffer / same array+length = no call).
@@ -546,7 +552,7 @@ createNode(mat4, parent = 0) {
     },
     updateInstances(id, mats, count, matrixWorld, colors = null, colorStride = 3) {
       const node = need(nodes, id, 'node');
-      node.mats = mats; node.count = count; if (matrixWorld) node.world = Float32Array.from(matrixWorld); node.colors = colors; node.stride = colorStride;
+      node.mats = mats; node.count = count; if (matrixWorld) { if (node.world?.length === 16) node.world.set(matrixWorld); else node.world = Float32Array.from(matrixWorld); } node.colors = colors; node.stride = colorStride; /* world: reused 16-float array (the wire copies on encode) */
 pushBlock(node, false, true);
     },
     updateNode(id, patch = {}) {

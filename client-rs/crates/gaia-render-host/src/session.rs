@@ -68,7 +68,7 @@ pub fn shadow_options_from_json(o: &Value, mut b: ShadowOptions) -> ShadowOption
 }
 
 /// `create(canvas, options)` options (all optional): renderHeight, pipeShare, pipeSort, exposure, hdrScene, toneMapping,
-/// lightIntensityScale, ambient[3], clearColor[4], shadows{..}. `output_format` = the (sRGB view) format of the target.
+/// lightIntensityScale, ambient[3], clearColor[4], dynamicBlockFrames / dynamicBlockIdleFrames / dynamicBlockMinCapacity (instance-block dynamic path), shadows{..}. `output_format` = the (sRGB view) format of the target.
 pub fn render_options_from_json(o: &Value, output_format: wgpu::TextureFormat) -> RenderOptions {
     let mut opts = RenderOptions { output_format, ..RenderOptions::default() };
     if let Some(v) = jf(o, "renderHeight") { opts.render_height = v as u32; }
@@ -80,6 +80,9 @@ pub fn render_options_from_json(o: &Value, output_format: wgpu::TextureFormat) -
     if let Some(v) = jf(o, "lightIntensityScale") { opts.light_intensity_scale = v; }
     if let Some(v) = jvec(o, "ambient", 3) { opts.ambient = [v[0], v[1], v[2]]; }
     if let Some(v) = jvec(o, "clearColor", 4) { opts.clear_color = [v[0] as f64, v[1] as f64, v[2] as f64, v[3] as f64]; }
+    if let Some(v) = jf(o, "dynamicBlockFrames") { opts.dynamic_block_frames = v as u32; }
+    if let Some(v) = jf(o, "dynamicBlockIdleFrames") { opts.dynamic_block_idle_frames = v as u32; }
+    if let Some(v) = jf(o, "dynamicBlockMinCapacity") { opts.dynamic_block_min_capacity = v as u32; }
     if let Some(sh) = o.get("shadows") { opts.shadows = shadow_options_from_json(sh, opts.shadows.clone()); }
     opts
 }
@@ -110,6 +113,11 @@ impl Session {
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
         let (w, h) = (self.output.0.max(1), self.output.1.max(1));
         self.core.render(&self.device, &self.queue, encoder, target, UpscaleSize { width: w, height: h });
+    }
+    /// Queue-mode upscalers (MetalFX): `RenderCore::render_frame` into `output` (size = the session's output size). Submits.
+    pub fn render_queue(&mut self, output: &wgpu::Texture) -> Result<(), String> {
+        let (w, h) = (self.output.0.max(1), self.output.1.max(1));
+        self.core.render_frame(&self.device, &self.queue, output, UpscaleSize { width: w, height: h }).map_err(|e| format!("render_frame: {e}"))
     }
     fn write_material(&mut self, id: u32, base_color: &[f32], metallic: f32, roughness: f32, tex: u32, alpha_cutoff: f32, emissive: &[f32]) -> CmdResult {
         // emissive: 3 floats, or 4 with [3] = 1 -> emissive x base texture (three emissiveMap === map)
@@ -334,6 +342,10 @@ impl Commands for Session {
         self.core.set_instance_block_flags(id, cast_shadow, is_static);
         Ok(())
     }
+    fn set_instance_block_dynamic(&mut self, id: u32, mode: u32) -> CmdResult {
+        self.core.set_instance_block_dynamic(id, mode);
+        Ok(())
+    }
     fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) -> CmdResult {
         self.core.set_instance_block_shadow_only(id, only);
         Ok(())
@@ -494,6 +506,9 @@ impl Commands for Session {
     // ---- queries ----
     fn compressed_stats(&mut self) -> Value {
         json!(self.core.bc_stats.to_vec())
+    }
+    fn dyn_block_stats(&mut self) -> Value {
+        json!(self.core.dyn_block_stats_vec())
     }
     fn three_skipped(&mut self) -> Value {
         json!(self.core.three_skipped)

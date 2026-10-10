@@ -7,8 +7,9 @@
 //!                            Only when a frame was committed (host.frame_pending) or the surface needs a repaint.
 //!   upscaler=metalfx-spatial: core is switched to MetalFxSpatial (Queue mode: it commits its OWN command buffer, so
 //!                            `Host::render` -- Encoder-mode only, would panic) -> core.render_frame(output_tex) -> copy
-//!                            output_tex -> surface -> present, EVERY vsync (Host exposes no "frame consumed" reset for
-//!                            this path; same cadence as render-window). A Host::render_queue() would let it idle (ask nt-ipc).
+//!                            output_tex -> surface -> present. `Host::render_queue(output_tex)` consumes the commit like
+//!                            `Host::render`, so it renders/presents only on `host.frame_pending()` or a repaint (resize, lost
+//!                            drawable); a lost drawable alone only re-copies the still-valid `output_tex`.
 //!   Present on a Fifo surface = display vsync = the frame pacing.
 use crate::{config::{GameConfig, UpscalerKind}, shared::Shared};
 use gaia_render_host::Host;
@@ -34,6 +35,8 @@ pub struct Presenter {
     session_ready: bool,
     /// surface needs a repaint although no new frame was committed (resize, lost drawable)
     dirty: bool,
+    /// Spatial only: `output` holds a rendered frame of the current session (false after a resize / session change -> re-render on the next repaint even without a new commit; true = a lost drawable only re-copies)
+    output_valid: bool,
     pub adapter_name: String,
 }
 
@@ -109,6 +112,7 @@ impl Presenter {
             output: None,
             session_ready: false,
             dirty: true,
+            output_valid: false,
             adapter_name,
         };
         p.rebuild_output()?;
@@ -135,6 +139,7 @@ impl Presenter {
 
     fn rebuild_output(&mut self) -> Result<(), String> {
         self.output = None;
+        self.output_valid = false;
         if self.kind == UpscalerKind::MetalFxSpatial {
             let view_format = self.config.format;
             let storage = view_format.remove_srgb_suffix();
@@ -192,6 +197,7 @@ impl Presenter {
             return Err("metalfx-spatial is macOS-only".into());
         }
         self.session_ready = true;
+        self.output_valid = false; // new session: the old frame in `output` is not its frame
         Ok(())
     }
 
@@ -241,11 +247,18 @@ impl Presenter {
                 self.queue.present(frame);
             }
             UpscalerKind::MetalFxSpatial => {
+                let pending = host.frame_pending();
+                if !(pending || self.dirty) {
+                    return Ok(FrameOutcome::Idle("no committed frame")); // idle: no re-render, no MetalFX pass, no present
+                }
                 let output = self.output.clone().ok_or("spatial output texture missing")?; // Arc clone: acquire() needs &mut self
-                let size = gaia_render::UpscaleSize { width: self.config.width, height: self.config.height };
-                let session = host.session_mut().ok_or("session vanished")?;
-                // renders + submits the forward pass, then MetalFX commits its own command buffer into `output`
-                session.core.render_frame(&self.device, &self.queue, &output, size).map_err(|e| format!("render_frame: {e}"))?;
+                if pending || !self.output_valid {
+                    // renders + submits the forward pass, then MetalFX commits its own command buffer into `output`; consumes the commit
+                    if !host.render_queue(&output).map_err(|e| format!("Host::render_queue: {e}"))? {
+                        return Err("Host::render_queue returned false although the session exists".into());
+                    }
+                    self.output_valid = true;
+                }
                 let Some(frame) = self.acquire()? else {
                     self.dirty = true;
                     return Ok(FrameOutcome::Idle("no drawable (occluded/timeout/reconfigure)"));

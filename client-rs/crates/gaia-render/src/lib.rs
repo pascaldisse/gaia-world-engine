@@ -22,6 +22,8 @@ use std::collections::HashMap;
 pub use groups::{GroupMask, InstanceGroups};
 pub use scene::{CameraData, SceneData};
 pub use shadow::{ShadowOptions, ShadowStats};
+mod dynblocks;
+pub use dynblocks::{DynBlockStats, DYN_AUTO, DYN_FORCE_DYNAMIC, DYN_FORCE_STATIC};
 mod post;
 pub use post::{BloomParams, GtaoParams, Post};
 use wgpu::util::DeviceExt;
@@ -78,6 +80,12 @@ pub struct RenderOptions {
     pub hdr_scene: bool,
     /// three tone-mapping constant used by the post resolve (0 None, 1 Linear, 2 Reinhard, 3 Cineon, 4 ACESFilmic, 6 AgX, 7 Neutral). Only with `hdr_scene`.
     pub tone_mapping: u32,
+    /// lane nt-dyninst: an instance block updated this many CONSECUTIVE rendered frames moves to the dynamic path (persistent GPU buffers, `queue.write_buffer` of [0,count), never part of the world re-sort). 0 = no auto-promotion (explicit `set_instance_block_dynamic` only).
+    pub dynamic_block_frames: u32,
+    /// A dynamic block that was auto-promoted and gets no update for this many rendered frames returns to the static list. 0 = never.
+    pub dynamic_block_idle_frames: u32,
+    /// Minimum instance capacity of a dynamic block's persistent buffers (then doubling).
+    pub dynamic_block_min_capacity: u32,
 }
 
 impl Default for RenderOptions {
@@ -103,6 +111,9 @@ impl Default for RenderOptions {
             fit_height_bias: 0.5,
             shadows: ShadowOptions::default(),
             groups_cull_shadows: true,
+            dynamic_block_frames: 3,
+            dynamic_block_idle_frames: 120,
+            dynamic_block_min_capacity: 64,
         }
     }
 }
@@ -595,7 +606,14 @@ struct GpuMesh {
     attrs: HashMap<String, (wgpu::Buffer, u32)>,
 }
 
+/// (texture-state epoch, base, lightmap, array, normal, roughness, metalness, emissive, ao): what a built-in material's bind group was built from.
+type MatKey = (u64, [Option<u32>; 8]);
 struct GpuMaterial {
+    /// nt-dyninst: persistent uniform buffer (COPY_DST) of a built-in material + the values last written / the texture-binding key the bind group was built for. A property-only `create_material` (same textures) rewrites the buffer in place (no buffer/bind-group alloc per update).
+    uniform: Option<wgpu::Buffer>,
+    last_u: Option<MaterialUniform>,
+    key: MatKey,
+    pending_u: Option<MaterialUniform>,
     /// None = external shader material (no built-in desc to rebuild from).
     desc: Option<MaterialDesc>,
     bind: wgpu::BindGroup,
@@ -655,6 +673,15 @@ struct InstanceBlock {
     is_static: bool,
     cast_shadow: bool,
     shadow_only: bool,
+    /// lane nt-dyninst: dynamic-path state (see dynblocks.rs)
+    dynm: dynblocks::DynState,
+}
+/// One draw batch: a contiguous range of the sorted world instance buffer, or (dyn_block = Some) `0..count` of a dynamic block's own buffers.
+struct Batch {
+    mesh: u32,
+    material: u32,
+    range: std::ops::Range<u32>,
+    dyn_block: Option<u32>,
 }
 pub struct RenderCore {
     opts: RenderOptions,
@@ -693,7 +720,20 @@ pub struct RenderCore {
     instance_buffer: Option<wgpu::Buffer>,
     /// CPU copy of the sorted instance transforms (transparent sort).
     instance_transforms: Vec<[f32; 16]>,
-    batches: Vec<(u32, u32, std::ops::Range<u32>)>,
+    batches: Vec<Batch>,
+    /// lane nt-dyninst: `batches` / `casters` prefix owned by the last world rebuild; dynamic blocks append after it every frame.
+    static_batch_len: usize,
+    static_caster_len: usize,
+    dyn_casters_dirty: bool,
+    dyn_order: Vec<u32>,
+    dyn_scratch: Vec<[f32; 4]>,
+    dyn_stats: DynBlockStats,
+    /// rendered frames so far (promotion streaks / idle demotion)
+    frame_no: u64,
+    /// bumped whenever a texture is (re)created/removed (material bind-group staleness key)
+    tex_epoch: u64,
+    /// built-in materials whose uniform buffer awaits `queue.write_buffer` (flushed in encode_forward)
+    material_dirty: Vec<u32>,
     instances_dirty: bool,
     /// material id -> (lightmap texture id, overlay fac)
     material_lightmaps: HashMap<u32, (u32, f32)>,
@@ -933,6 +973,15 @@ impl RenderCore {
             instance_uvs: None,
             instance_buffer: None,
             batches: Vec::new(),
+            static_batch_len: 0,
+            static_caster_len: 0,
+            dyn_casters_dirty: false,
+            dyn_order: Vec::new(),
+            dyn_scratch: Vec::new(),
+            dyn_stats: DynBlockStats::default(),
+            frame_no: 0,
+            tex_epoch: 0,
+            material_dirty: Vec::new(),
             instances_dirty: true,
             last_draw_calls: 0,
             last_pass_stats: [0; 12],
@@ -1282,6 +1331,7 @@ impl RenderCore {
         Ok(())
     }
     fn rebind_users_of(&mut self, device: &wgpu::Device, id: u32) {
+        self.tex_epoch += 1; // a texture (re)uploaded under `id`: every cached material bind group is suspect
         let ids: Vec<u32> = self.materials.iter().filter(|(k, m)| {
             m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id))
                 || self.material_lightmaps.get(k).is_some_and(|l| l.0 == id)
@@ -1296,6 +1346,7 @@ impl RenderCore {
         let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
         let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("texture array"), size: wgpu::Extent3d { width, height, depth_or_array_layers: layers }, mip_level_count: levels, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
         let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        self.tex_epoch += 1;
         self.array_textures.insert(id, ArrayTex { texture, view, width, height, layers, levels, srgb });
         for l in 0..layers { let o = (l * width * height * 4) as usize; self.update_texture_layer(device, queue, id, l, &rgba[o..o + (width * height * 4) as usize])?; }
         self.rebind_users_of(device, id);
@@ -1324,6 +1375,7 @@ impl RenderCore {
             queue.submit(Some(enc.finish()));
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
+        self.tex_epoch += 1;
         self.cube_textures.insert(id, CubeTex { texture, view, size, levels, srgb });
         Ok(())
     }
@@ -1349,6 +1401,7 @@ impl RenderCore {
         self.static_gen += 1;
     }
     pub fn remove_texture(&mut self, id: u32) {
+        self.tex_epoch += 1;
         self.textures.remove(&id);
         self.array_textures.remove(&id);
         self.cube_textures.remove(&id);
@@ -1385,10 +1438,30 @@ impl RenderCore {
             maps0: [arr.is_some() as u32 as f32, if mm.normal_scale == 0.0 { 1.0 } else { mm.normal_scale }, tv(mm.normal).is_some() as u32 as f32, tv(mm.roughness).is_some() as u32 as f32],
             maps1: [tv(mm.metalness).is_some() as u32 as f32, tv(mm.emissive).is_some() as u32 as f32, tv(mm.ao).is_some() as u32 as f32, mm.side as f32],
         };
+        let key: MatKey = (self.tex_epoch, [desc.base_color_texture, self.material_lightmaps.get(&id).map(|l| l.0), mm.array, mm.normal, mm.roughness, mm.metalness, mm.emissive, mm.ao]);
+        let cull_back = self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back);
+        if let Some(m) = self.materials.get_mut(&id) {
+            if m.pipeline.is_none() && m.uniform.is_some() && m.key == key {
+                // same textures -> same bind group; only the uniform values changed. The depth-only caster passes read base alpha / cutoff / flags / maps / side: bump the static shadow cache only if those moved.
+                let shadow_relevant = m.last_u.as_ref().is_none_or(|o| o.base_color[3] != u.base_color[3] || o.params[2] != u.params[2] || o.params[3] != u.params[3] || o.flags != u.flags || o.maps0 != u.maps0 || o.maps1 != u.maps1) || m.shadow_cull_back != cull_back;
+                let first = m.pending_u.is_none();
+                m.desc = Some(desc);
+                m.shadow_cull_back = cull_back;
+                m.last_u = Some(u);
+                m.pending_u = Some(u);
+                if first {
+                    self.material_dirty.push(id);
+                }
+                if shadow_relevant {
+                    self.static_gen += 1;
+                }
+                return;
+            }
+        }
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
             contents: bytemuck::bytes_of(&u),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material bind"),
@@ -1422,7 +1495,11 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
-                shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
+                uniform: Some(buf),
+                last_u: Some(u),
+                key,
+                pending_u: None,
+                shadow_cull_back: cull_back,
                 desc: Some(desc),
                 bind,
                 pipeline: None,
@@ -1543,6 +1620,10 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
+                uniform: None,
+                last_u: None,
+                key: (0, [None; 8]),
+                pending_u: None,
                 shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
                 desc: None,
                 bind,
@@ -1794,57 +1875,71 @@ impl RenderCore {
         }
     }
     pub fn create_instance_block(&mut self, id: u32, mesh: u32, material: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
-        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), uvs: Vec::new(), is_static: false, cast_shadow: true, shadow_only: false };
+        let mut b = InstanceBlock { mesh, material, transforms: Vec::new(), colors: Vec::new(), uvs: Vec::new(), is_static: false, cast_shadow: true, shadow_only: false, dynm: Default::default() };
         Self::fill_block(&mut b, mats, colors, color_stride, count, &world);
-        self.blocks.insert(id, b);
-        self.instances_dirty = true;
-    }
-    pub fn update_instance_block(&mut self, id: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
-        if let Some(b) = self.blocks.get_mut(&id) {
-            Self::fill_block(b, mats, colors, color_stride, count, &world);
-            self.instances_dirty = true;
-            if b.is_static {
-                self.static_gen += 1;
+        if let Some(old) = self.blocks.insert(id, b) {
+            if old.dynm.active {
+                self.dyn_casters_dirty = true;
             }
         }
+        self.instances_dirty = true;
+    }
+    /// Replace a block's transforms/colours. Static block: dirties the world list. Dynamic block (explicit flag or `RenderOptions.dynamic_block_frames` consecutive updates): only its own
+    /// persistent buffers are rewritten ([0,count)) at the next render — the world list is not touched.
+    pub fn update_instance_block(&mut self, id: u32, mats: &[f32], colors: &[f32], color_stride: usize, count: usize, world: [f32; 16]) {
+        let Some(b) = self.blocks.get_mut(&id) else { return };
+        Self::fill_block(b, mats, colors, color_stride, count, &world);
+        if b.is_static {
+            self.static_gen += 1;
+        }
+        self.block_touch(id, dynblocks::Touch::Data);
     }
     /// r19-pcol: per-instance uv window (4 floats/instance: offsetU, offsetV, scaleU, scaleV; empty slice = identity). Does not touch transforms/colours.
     pub fn set_instance_block_uvs(&mut self, id: u32, uvs: &[f32]) {
-        if let Some(b) = self.blocks.get_mut(&id) {
-            b.uvs.clear();
-            b.uvs.extend(uvs.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]));
-            self.instances_dirty = true;
-            if b.is_static {
-                self.static_gen += 1;
-            }
+        let Some(b) = self.blocks.get_mut(&id) else { return };
+        b.uvs.clear();
+        b.uvs.extend(uvs.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]));
+        if b.is_static {
+            self.static_gen += 1;
         }
+        self.block_touch(id, dynblocks::Touch::Uv);
     }
     pub fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) {
-        if let Some(b) = self.blocks.get_mut(&id) {
-            // r18-perf: the static shadow layer only holds static casters -> a flag change on a block that was and stays dynamic cannot change it (was: unconditional bump = cache invalidated every frame)
-            let touches_static = (b.is_static || is_static) && (b.is_static != is_static || b.cast_shadow != cast_shadow);
-            b.cast_shadow = cast_shadow;
-            b.is_static = is_static;
-            self.instances_dirty = true;
-            if touches_static {
-                self.static_gen += 1;
-            }
+        let Some(b) = self.blocks.get_mut(&id) else { return };
+        // r18-perf: the static shadow layer only holds static casters -> a flag change on a block that was and stays dynamic cannot change it (was: unconditional bump = cache invalidated every frame)
+        let touches_static = (b.is_static || is_static) && (b.is_static != is_static || b.cast_shadow != cast_shadow);
+        let changed = b.cast_shadow != cast_shadow || b.is_static != is_static;
+        b.cast_shadow = cast_shadow;
+        b.is_static = is_static;
+        if touches_static {
+            self.static_gen += 1;
+        }
+        // an unchanged re-assertion (the adapter re-sends the flag set) changes nothing in the world list / casters: no dirty
+        if changed {
+            self.block_touch(id, dynblocks::Touch::Flags);
         }
     }
     /// Block counterpart of `set_instance_shadow_only`: members are never drawn in the main passes, still cast.
     pub fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) {
-        if let Some(b) = self.blocks.get_mut(&id) {
-            let changed = b.shadow_only != only;
-            b.shadow_only = only;
-            self.instances_dirty = true;
-            if changed && b.is_static {
-                self.static_gen += 1; // r18-perf: only a STATIC block's flag change alters the cached static layer
-            }
+        let Some(b) = self.blocks.get_mut(&id) else { return };
+        let changed = b.shadow_only != only;
+        b.shadow_only = only;
+        if changed && b.is_static {
+            self.static_gen += 1; // r18-perf: only a STATIC block's flag change alters the cached static layer
+        }
+        if changed {
+            self.block_touch(id, dynblocks::Touch::Flags);
         }
     }
     pub fn remove_instance_block(&mut self, id: u32) {
-        if self.blocks.remove(&id).is_some_and(|b| b.is_static) {
-            self.static_gen += 1;
+        if let Some(b) = self.blocks.remove(&id) {
+            if b.is_static {
+                self.static_gen += 1;
+            }
+            if b.dynm.active {
+                self.dyn_casters_dirty = true; // dynamic blocks are not in the world list
+                return;
+            }
         }
         self.instances_dirty = true;
     }
@@ -2071,13 +2166,13 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         self.targets.as_ref().map(|t| t.internal)
     }
 
-    fn rebuild_instances(&mut self, device: &wgpu::Device) {
+    fn rebuild_instances(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], uv: [f32; 4], is_static: bool, cast_shadow: bool, shadow_only: bool }
         let mut all: Vec<Ent> = Vec::with_capacity(self.instances.len());
         for (id, i) in self.instances.iter() {
             all.push(Ent { id: Some(*id), mesh: i.mesh, material: i.material, transform: i.transform, color: [1.0; 4], uv: [0.0, 0.0, 1.0, 1.0], is_static: i.is_static, cast_shadow: i.cast_shadow, shadow_only: i.shadow_only });
         }
-        for b in self.blocks.values() {
+        for b in self.blocks.values().filter(|b| !b.dynm.active) {
             for (k, t) in b.transforms.iter().enumerate() {
                 all.push(Ent { id: None, mesh: b.mesh, material: b.material, transform: *t, color: b.colors.get(k).copied().unwrap_or([1.0; 4]), uv: b.uvs.get(k).copied().unwrap_or([0.0, 0.0, 1.0, 1.0]), is_static: b.is_static, cast_shadow: b.cast_shadow, shadow_only: b.shadow_only });
             }
@@ -2104,20 +2199,14 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
             uvw.push(inst.uv);
             let n = n as u32;
             match self.batches.last_mut() {
-                Some((m, mat, r)) if *m == inst.mesh && *mat == inst.material => r.end = n + 1,
-                _ => self.batches.push((inst.mesh, inst.material, n..n + 1)),
+                Some(bt) if bt.dyn_block.is_none() && bt.mesh == inst.mesh && bt.material == inst.material => bt.range.end = n + 1,
+                _ => self.batches.push(Batch { mesh: inst.mesh, material: inst.material, range: n..n + 1, dyn_block: None }),
             }
         }
-        self.instance_colors = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance colours"),
-            contents: nonempty(bytemuck::cast_slice(&cols)),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
-        self.instance_uvs = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance uv windows"),
-            contents: nonempty(bytemuck::cast_slice(&uvw)),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
+        // persistent capacity-doubling buffers + queue.write_buffer: a world rebuild (moving instance) no longer allocates GPU buffers
+        let mut allocs = 0u64;
+        allocs += upload_persistent(device, queue, &mut self.instance_colors, "instance colours", bytemuck::cast_slice(&cols)) as u64;
+        allocs += upload_persistent(device, queue, &mut self.instance_uvs, "instance uv windows", bytemuck::cast_slice(&uvw)) as u64;
         self.instance_transforms = data.clone();
         // world-space AABBs for shadow caster culling (same order as `data`)
         let mut bounds: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
@@ -2148,11 +2237,12 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
             .filter(|c| max_diag <= 0.0 || c.lo.distance(c.hi) <= max_diag)
             .collect();
         self.casters = casters;
-        self.instance_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance transforms"),
-            contents: nonempty(bytemuck::cast_slice(&data)),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
+        allocs += upload_persistent(device, queue, &mut self.instance_buffer, "instance transforms", bytemuck::cast_slice(&data)) as u64;
+        self.dyn_stats.world_buffer_allocs += allocs;
+        self.static_batch_len = self.batches.len();
+        self.static_caster_len = self.casters.len();
+        self.dyn_casters_dirty = true; // dynamic casters re-appended after the fresh static prefix
+        self.dyn_stats.rebuilds += 1;
         self.instances_dirty = false;
     }
     fn ensure_targets(&mut self, device: &wgpu::Device, output: UpscaleSize) {
@@ -2221,38 +2311,67 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
 
     /// Draw sorted builtin batches `(k, batch)`; `k >= opaque_count` = blended pass (variant / blend pipeline). Bind groups 0/2 + vertex slots 1/4 must already be set.
     fn draw_builtin(&self, pass: &mut wgpu::RenderPass<'_>, list: &[(usize, usize)], opaque_count: usize, stats: &mut [u32; 12], draws: &mut u32, last_pipe: &mut *const wgpu::RenderPipeline) {
+        // vertex slots 1/4/5 hold the WORLD instance buffers on entry (caller binds them); dynamic batches swap in their own buffers and swap back
+        let mut cur_src: Option<u32> = None;
         for &(k, b) in list.iter() {
-let (mesh, material, range) = &self.batches[b];
-                    let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
-                        continue; // dangling ids: counted by caller via instance_count vs drawn
-                    };
-                    let builtin = match self.material_flags.get(material) {
-                        Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
-                            let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
-                            let dw = f.depth_write.unwrap_or(kind.is_none());
-                            &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
-                        }
-                        _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
-                    };
-                    let pipe = mat.pipeline.as_ref().unwrap_or(builtin);
-                    if !std::ptr::eq(pipe, *last_pipe) {
-                        stats[1] += 1;
-                        *last_pipe = pipe;
+            let Batch { mesh, material, range, dyn_block } = &self.batches[b];
+            let (Some(m), Some(mat)) = (self.meshes.get(mesh), self.materials.get(material)) else {
+                continue; // dangling ids: counted by caller via instance_count vs drawn
+            };
+            if *dyn_block != cur_src {
+                match dyn_block {
+                    Some(id) => {
+                        let Some(g) = self.blocks.get(id).and_then(|bl| bl.dynm.gpu.as_ref()) else { continue };
+                        pass.set_vertex_buffer(1, g.transforms.slice(..));
+                        pass.set_vertex_buffer(4, g.colors.slice(..));
+                        pass.set_vertex_buffer(5, g.uvs.slice(..));
                     }
-                    if range.end - range.start > 1 {
-                        stats[2] += 1;
-                    } else {
-                        stats[3] += 1;
-                    }
-                    stats[4] += range.end - range.start;
-                    pass.set_pipeline(pipe);
-                    pass.set_bind_group(1, &mat.bind, &[]);
-                    pass.set_vertex_buffer(0, m.vertices.slice(..));
-                pass.set_vertex_buffer(2, m.uv1.slice(..));
-                pass.set_vertex_buffer(3, self.mesh_colors.get(&mesh).unwrap_or(&self.white_colors).slice(..));
-                    pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..m.index_count, 0, range.clone());
-                    *draws += 1;
+                    None => self.bind_world_instances(pass),
+                }
+                cur_src = *dyn_block;
+            }
+            let builtin = match self.material_flags.get(material) {
+                Some(f) if f.blend.is_some() || f.depth_write.is_some() || f.no_color_write || f.no_depth_test => {
+                    let kind = if k >= opaque_count { Some(f.blend.unwrap_or(BlendKind::Alpha)) } else { None };
+                    let dw = f.depth_write.unwrap_or(kind.is_none());
+                    &self.variant_pipelines[&PipelineKey::of(f, kind, dw)]
+                }
+                _ => if k >= opaque_count { &self.blend_pipeline } else { &self.pipeline },
+            };
+            let pipe = mat.pipeline.as_ref().unwrap_or(builtin);
+            if !std::ptr::eq(pipe, *last_pipe) {
+                stats[1] += 1;
+                *last_pipe = pipe;
+            }
+            if range.end - range.start > 1 {
+                stats[2] += 1;
+            } else {
+                stats[3] += 1;
+            }
+            stats[4] += range.end - range.start;
+            pass.set_pipeline(pipe);
+            pass.set_bind_group(1, &mat.bind, &[]);
+            pass.set_vertex_buffer(0, m.vertices.slice(..));
+            pass.set_vertex_buffer(2, m.uv1.slice(..));
+            pass.set_vertex_buffer(3, self.mesh_colors.get(mesh).unwrap_or(&self.white_colors).slice(..));
+            pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..m.index_count, 0, range.clone());
+            *draws += 1;
+        }
+        if cur_src.is_some() {
+            self.bind_world_instances(pass);
+        }
+    }
+    /// Vertex slots 1/4/5 = the sorted WORLD instance buffers (transforms / colours / uv windows).
+    fn bind_world_instances(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(ib) = &self.instance_buffer {
+            pass.set_vertex_buffer(1, ib.slice(..));
+            if let Some(ic) = &self.instance_colors {
+                pass.set_vertex_buffer(4, ic.slice(..));
+            }
+            if let Some(iu) = &self.instance_uvs {
+                pass.set_vertex_buffer(5, iu.slice(..));
+            }
         }
     }
     /// lane nt-gi: native probe-GI update for this frame (before any pass that samples the atlases). A failure is kept in `gi_error` (`gi_compute_error`) and GI stays on the last good batch.
@@ -2287,9 +2406,18 @@ let (mesh, material, range) = &self.batches[b];
             let ones: Vec<f32> = vec![1.0; (need / 4) as usize];
             self.white_colors = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("white vertex colours"), contents: bytemuck::cast_slice(&ones), usage: wgpu::BufferUsages::VERTEX });
         }
-        if self.instances_dirty {
-            self.rebuild_instances(device);
+        for id in std::mem::take(&mut self.material_dirty) {
+            if let Some(m) = self.materials.get_mut(&id) {
+                if let (Some(u), Some(b)) = (m.pending_u.take(), &m.uniform) {
+                    queue.write_buffer(b, 0, bytemuck::bytes_of(&u));
+                }
+            }
         }
+        self.dyn_demote_idle();
+        if self.instances_dirty {
+            self.rebuild_instances(device, queue);
+        }
+        self.sync_dynamic_blocks(device, queue);
         self.refresh_skinned_casters();
         let t = self.targets.as_ref().expect("targets");
         let aspect = t.internal.width as f32 / t.internal.height as f32;
@@ -2392,14 +2520,14 @@ v
                 // opaque + MASK (alpha test in shader) first; BLEND batches after, far→near.
                 let eye3 = eye;
                 let mut order: Vec<usize> = (0..self.batches.len())
-                    .filter(|&b| !self.blend_materials.contains(&self.batches[b].1))
+                    .filter(|&b| !self.blend_materials.contains(&self.batches[b].material))
                     .collect();
                 let mut blended: Vec<(f32, usize)> = (0..self.batches.len())
-                    .filter(|&b| self.blend_materials.contains(&self.batches[b].1))
+                    .filter(|&b| self.blend_materials.contains(&self.batches[b].material))
                     .map(|b| {
-                        let (mesh, _, range) = &self.batches[b];
+                        let Batch { mesh, range, dyn_block, .. } = &self.batches[b];
                         let c = self.meshes.get(mesh).map(|m| Vec3::from_array(m.center)).unwrap_or(Vec3::ZERO);
-                        let t = Mat4::from_cols_array(&self.instance_transforms[range.start as usize]);
+                        let t = Mat4::from_cols_array(&match dyn_block { Some(id) => self.blocks.get(id).and_then(|bl| bl.transforms.first().copied()).unwrap_or(Mat4::IDENTITY.to_cols_array()), None => self.instance_transforms[range.start as usize] });
                         (t.transform_point3(c).distance_squared(eye3), b)
                     })
                     .collect();
@@ -2408,7 +2536,7 @@ v
                 order.extend(blended.into_iter().map(|(_, b)| b));
                 // render_order groups (stable: keeps opaque-before-blend + far→near inside a group)
                 let mut order: Vec<(usize, usize)> = order.into_iter().enumerate().map(|(k, b)| (k, b)).collect();
-                let ro = |b: usize| self.material_flags.get(&self.batches[b].1).map_or(0, |f| f.render_order);
+                let ro = |b: usize| self.material_flags.get(&self.batches[b].material).map_or(0, |f| f.render_order);
                 order.sort_by_key(|&(_, b)| ro(b));
                 // r17-fx: three draws ALL opaque first, then ALL transparent. The builtin path used to draw its blended batches before the TSL (three_material) pass,
                 // whose opaque geometry (depth-writing, drawn later) then overwrote every additive/alpha builtin batch behind it (torch flames, DS: 653 of 878 draws are TSL).
@@ -2607,6 +2735,19 @@ p.encode(queue, encoder, &t.color_view, self.frame.ambient[3]);
     }
 }
 
+/// Fill a persistent VERTEX buffer slot with `bytes` (queue.write_buffer); (re)create it only when it is too small (power-of-two capacity). Returns true if a buffer was created.
+fn upload_persistent(device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut Option<wgpu::Buffer>, label: &'static str, bytes: &[u8]) -> bool {
+    let need = (bytes.len() as u64).max(16);
+    let grow = slot.as_ref().is_none_or(|b| b.size() < need);
+    if grow {
+        let cap = need.next_power_of_two();
+        *slot = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: cap, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
+    }
+    if !bytes.is_empty() {
+        queue.write_buffer(slot.as_ref().expect("slot"), 0, bytes);
+    }
+    grow
+}
 fn nonempty(bytes: &[u8]) -> &[u8] {
     if bytes.is_empty() { &[0u8; 16] } else { bytes }
 }

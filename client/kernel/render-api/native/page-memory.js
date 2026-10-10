@@ -17,9 +17,16 @@ export const PAGE_MEM_DEFAULTS = Object.freeze({
   retainPixels: false,    // ?nativeRetainPixels=1  material-map keeps CPU RGBA / mip-chain copies after the host has them (browser behaviour). Native default: do not
   scratchKeepPx: 1 << 20, // ?nativeScratchKeepPx   material-map decode canvas bigger than this many pixels is shrunk to 1x1 after each read (frees the CPU backing store)
   releaseSources: false,  // ?nativeReleaseSrc=1    after the host acked the upload, DROP game-owned CPU sources (geometry arrays, compressed mip data, ImageBitmap) of EVERY texture/geometry; default off: per-object opt-in via userData.nativeRelease (see NATIVE.md)
+// ---- nt-frameleak: retention guards (default = FIXED behaviour; native only, see leakGuards below)
+weakRegistries: true,   // ?nativeWeakRegs=0  light-registry + gi-attach hold lights/materials WEAKLY (WeakRef + WeakSet) instead of strong grow-only Set/Map: a removed light/material (+ its parent chain, geometry, textures) can be collected
+memTrackSweepAt: 2048,  // ?nativeMemTrackSweep  mem-account sweeps dead WeakRefs out of trackBuffer/trackTexture sets once a set exceeds this many entries (0 = only the periodic probe prunes: with --page-mem-ms 0 the sets grew forever)
+idleCoalesce: true,     // ?nativeIdleCoalesce=0  transport.idle() shares ONE promise/waiter while the pipe is busy (a per-frame renderTimed() under load pushed one waiter per call, released only when the pipe fully drained)
+errorLogMax: 64,        // ?nativeErrorLogMax     host-report / IPC errors console.error'd at most this many times (then counted only: every console.error is also a gaia_page_log invoke + string per call; 0 = unlimited)
+statsMapMax: 256,       // ?nativeStatsMapMax     scene-adapter stats.exportWhy.keys (one entry per distinct exported WGSL hash) is capped at this many entries (0 = unlimited)
+tslTemplateMax: 64,     // ?nativeTslTemplateMax  tsl-export structCache.maxTemplates (browser 128): each template pins a node graph + package -> live material, mesh, geometry, textures. &wgpuTslCacheMax still wins
 });
-export const PAGE_MEM_PARAMS = Object.freeze({ inflight: 'nativeInflight', chunkMB: 'nativeChunkMB', flushMB: 'nativeFlushMB', initialMB: 'nativeInitialMB', busyMB: 'nativeBusyMB', busyMs: 'nativeBusyMs', watchMs: 'nativeWatchMs', writerShrinkMB: 'nativeWriterShrinkMB', coalesceKB: 'nativeCoalesceKB', encodeCapMB: 'nativeEncodeCapMB', retainPixels: 'nativeRetainPixels', scratchKeepPx: 'nativeScratchKeepPx', releaseSources: 'nativeReleaseSrc' });
-const BOOL = new Set(['retainPixels', 'releaseSources']);
+export const PAGE_MEM_PARAMS = Object.freeze({ inflight: 'nativeInflight', chunkMB: 'nativeChunkMB', flushMB: 'nativeFlushMB', initialMB: 'nativeInitialMB', busyMB: 'nativeBusyMB', busyMs: 'nativeBusyMs', watchMs: 'nativeWatchMs', writerShrinkMB: 'nativeWriterShrinkMB', coalesceKB: 'nativeCoalesceKB', encodeCapMB: 'nativeEncodeCapMB', retainPixels: 'nativeRetainPixels', scratchKeepPx: 'nativeScratchKeepPx', releaseSources: 'nativeReleaseSrc', weakRegistries: 'nativeWeakRegs', memTrackSweepAt: 'nativeMemTrackSweep', idleCoalesce: 'nativeIdleCoalesce', errorLogMax: 'nativeErrorLogMax', statsMapMax: 'nativeStatsMapMax', tslTemplateMax: 'nativeTslTemplateMax' });
+const BOOL = new Set(['retainPixels', 'releaseSources', 'weakRegistries', 'idleCoalesce']);
 /** params = URLSearchParams | null, overrides = plain object (wins over params). Returns { ...defaults, ...params, ...overrides } with bytes helpers. */
 export function pageMemConfig(params = null, overrides = {}) {
   const c = { ...PAGE_MEM_DEFAULTS };
@@ -31,3 +38,7 @@ export function pageMemConfig(params = null, overrides = {}) {
   c.writerShrinkBytes = c.writerShrinkMB * MiB; c.coalesceBytes = c.coalesceKB * KiB; c.encodeCapBytes = c.encodeCapMB * MiB;
   return c;
 }
+// nt-frameleak: runtime switches read by modules that have no config plumbing (light-registry, gi-attach, mem-account, transport, scene-adapter). ALL OFF until configureLeakGuards() ran
+// (wgpu-present.js calls it for renderBackend=native only) -> the browser path keeps its old behaviour.
+export const leakGuards = { on: false, weakRegistries: false, memTrackSweepAt: 0, idleCoalesce: false, errorLogMax: 0, statsMapMax: 0 };
+export function configureLeakGuards(pm) { for (const k of ['weakRegistries', 'memTrackSweepAt', 'idleCoalesce', 'errorLogMax', 'statsMapMax']) if (pm[k] !== undefined) leakGuards[k] = pm[k]; leakGuards.on = true; return leakGuards; }

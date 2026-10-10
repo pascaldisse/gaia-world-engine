@@ -1,5 +1,7 @@
 // render-api/wgpu-present.js — run the WHOLE live scene through the wasm wgpu renderer (engine seam, ?renderBackend=wgpu).
 // three still builds/animates the scene graph (game code unchanged); this replaces only the draw: scene-adapter.sync → wgpu backend → overlay canvas.
+// ?renderBackend=native: same pipeline, but the draw goes to the NATIVE Rust/wgpu Metal renderer over Tauri IPC (native/gaia-render-native.js; wasm + overlay canvas unused).
+//   native params: &nativeTransport=invoke|protocol (default invoke) &nativeCommand=gaia_render_apply &nativeScheme=gaiarender &nativeChunkMB=16 (max IPC message) &nativeFlushMB=4 (stream bulk uploads mid-frame) &nativeInitialMB=1
 // Params: ?renderBackend=wgpu &wgpuPkg=<url of render_wasm.js (default /pkg/render_wasm.js)> &wgpuHeight=<internal render height> &wgpuShadows=0|1 &wgpuTsl=0|1 (r14: DEFAULT ON — NodeMaterials with custom nodes are translated to WGSL; =0 = PBR fallback for those) &wgpuStats=1 &wgpuGi=0|1 (probe GI atlases, default on when gi open mode is live) &wgpuGiEvery=30
 import { installGpuMirror } from './gpu-mirror.js';
 import { createWgpuBackend } from './wgpu-backend.js';
@@ -11,16 +13,18 @@ import { threeGpuOff } from './native-mode.js';
 import { createPostBridge } from './post-bridge.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
+  const native = params.get('renderBackend') === 'native';
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
-  const wasm = await import(/* @vite-ignore */ pkg);
-  // native mode (threeGpu=0): three has NO device, so nothing can be written into it and there is nothing to mirror. Pages must then live in DataArrayTexture.image.data (docs/NATIVE.md §three-gpu).
-  const noThreeGpu = threeGpuOff(); // throws if native flag without renderBackend=wgpu
+  const wasm = native ? (await import('./native/gaia-render-native.js')).nativeModule(params) : await import(/* @vite-ignore */ pkg);
+  // three has NO device in native mode (renderBackend=native, or wgpu + threeGpu=0): nothing can be written into it, so there is nothing to mirror.
+  // Pages must then live in DataArrayTexture.image.data (docs/NATIVE.md §three-gpu).
+  const noThreeGpu = threeGpuOff(params);
   if (!noThreeGpu) installGpuMirror(renderer); // array pages the game writes straight into three's device stay readable for the wgpu core
   const host = renderer.domElement;
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:1';
   host.style.visibility = 'hidden'; // three draws nothing in this mode
-  host.parentNode.insertBefore(canvas, host.nextSibling);
+  if (!native) host.parentNode.insertBefore(canvas, host.nextSibling); // native: the Metal layer is the display; the webview stays transparent UI on top
   const size = () => { canvas.width = Math.max(1, Math.round(innerWidth)); canvas.height = Math.max(1, Math.round(innerHeight)); };
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));

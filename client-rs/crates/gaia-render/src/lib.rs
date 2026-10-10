@@ -13,6 +13,7 @@ pub mod skin;
 mod gi;
 mod gi_compute;
 pub use gi_compute::GI_FRAME_LEN;
+// GI_STORAGE_IRR_ID / GI_STORAGE_DEPTH_ID (below) are a wire contract with client/kernel/render-api/gi-native.js GI_STORAGE
 pub mod background;
 pub use gi::{GI_MAX_CASCADES, GI_PARAM_CASCADE, GI_PARAM_HEADER, GI_TEX_WIDTH};
 
@@ -673,6 +674,7 @@ pub struct RenderCore {
     /// lane nt-gi: native probe-GI update (gi_compute.rs). None = the host feeds atlases through `set_gi_probes` (browser/three readback).
     gi_compute: Option<gi_compute::GiCompute>,
     gi_error: Option<String>,
+    gi_errors: u32,
     /// r6-scene: scene.background Texture/CubeTexture pass (colour backgrounds = clear colour).
     background: background::Background,
     /// r10 post chain (Some iff `opts.hdr_scene`)
@@ -916,6 +918,7 @@ impl RenderCore {
             gi: gi_probes,
             gi_compute: None,
             gi_error: None,
+            gi_errors: 0,
             background: background::Background::new(device, queue, scene_format, hdr_scene),
             post: hdr_scene.then(|| post::Post::new(device, queue, INTERNAL_FORMAT, tone_mapping0)),
             scene_format,
@@ -1936,11 +1939,12 @@ impl RenderCore {
             self.three.invalidate_bind_groups();
         }
     }
-    /// lane nt-gi: last native GI failure (voxel/step/encode), taken (cleared) on read.
-    pub fn gi_compute_error(&mut self) -> Option<String> { self.gi_error.take() }
-    /// lane nt-gi: [steps, dispatched probes, voxel range writes, fresh probes, irradiance rows, depth rows] (zeros when no native compute).
-    pub fn gi_compute_stats(&self) -> [f64; 6] {
-        self.gi_compute.as_ref().map_or([0.0; 6], |g| [g.steps as f64, g.dispatched_probes as f64, g.voxel_writes as f64, g.fresh_probes as f64, g.irr_rows as f64, g.depth_rows as f64])
+    /// lane nt-gi: last native GI failure raised at render time (encode / forward params). Op-time failures (init/voxels/step) come back as the command's Err.
+    pub fn gi_compute_last_error(&self) -> Option<&str> { self.gi_error.as_deref() }
+    /// lane nt-gi: [steps, dispatched probes, voxel range writes, fresh probes, irradiance rows, depth rows, render-time errors] (zeros when no native compute).
+    pub fn gi_compute_stats(&self) -> [f64; 7] {
+        let e = self.gi_errors as f64;
+        self.gi_compute.as_ref().map_or([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, e], |g| [g.steps as f64, g.dispatched_probes as f64, g.voxel_writes as f64, g.fresh_probes as f64, g.irr_rows as f64, g.depth_rows as f64, e])
     }
 
     /// three `scene.background` Color. MEASURED (r6 S4, r180 WebGPURenderer + ReinhardToneMapping): three TONE-MAPS the background colour like any
@@ -2252,13 +2256,19 @@ let (mesh, material, range) = &self.batches[b];
         }
     }
     /// lane nt-gi: native probe-GI update for this frame (before any pass that samples the atlases). A failure is kept in `gi_error` (`gi_compute_error`) and GI stays on the last good batch.
+    fn gi_fail(&mut self, msg: String) {
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("[gaia-render] gi compute: {msg}");
+        self.gi_errors += 1;
+        self.gi_error = Some(msg);
+    }
     fn encode_gi_compute(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
         let Some(g) = self.gi_compute.as_mut() else { return };
         let (irr, depth) = self.gi.textures();
         match g.encode(queue, encoder, irr, depth) {
-            Ok(Some(params)) => { if let Err(e) = self.gi.write_params(queue, &params) { self.gi_error = Some(format!("forward params: {e}")); } }
+            Ok(Some(params)) => { if let Err(e) = self.gi.write_params(queue, &params) { self.gi_fail(format!("forward params: {e}")); } }
             Ok(None) => {}
-            Err(e) => self.gi_error = Some(e),
+            Err(e) => self.gi_fail(e),
         }
     }
     fn encode_forward(

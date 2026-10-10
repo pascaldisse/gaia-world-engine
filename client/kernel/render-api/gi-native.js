@@ -7,6 +7,8 @@
 //   const giNative = createGiNative({ backend });  environment.gi.attachNative(giNative);
 // Frame layout (f32, mirrors gaia-render gi_compute.rs GF_*; length checked by the core): see GI_FRAME.
 export const GI_FRAME = Object.freeze({ LEN: 44, BASE_BRICK: 0, BOUNCE: 3, SUN_DIR: 4, SUN_INTENSITY: 7, SUN_COLOR: 8, AMBIENT_REPLACE: 11, ZENITH: 12, HORIZON: 16, GROUND: 20, STARTS: 24, COUNTS: 28, BASE_CELLS: 32, MAX_CASCADES: 4 });
+// Reserved storage ids of the native atlas buffers = gaia-render GI_STORAGE_IRR_ID / GI_STORAGE_DEPTH_ID (u32::MAX-1 / u32::MAX): a wire contract (ids are JS-minted from 1, never collide).
+export const GI_STORAGE = Object.freeze({ irradiance: 0xFFFFFFFE, depth: 0xFFFFFFFF });
 const v3 = (v) => (Array.isArray(v) ? v : [v.x, v.y, v.z]);
 /** pure: pack one frame's GI state. sun/sky entries are {x,y,z}|[x,y,z] (three Vector3 uniform values), baseCells = [[x,y,z]..] per cascade. */
 export function packGiFrame({ baseBrick, bounceScale, sunDirection, sunColor, sunIntensity, ambientReplace, zenith, horizon, ground, starts, counts, baseCells }) {
@@ -23,7 +25,7 @@ export function packGiFrame({ baseBrick, bounceScale, sunDirection, sunColor, su
 /** sink for GIOpen. backend = wgpu backend (wgpu-backend.js) exposing giComputeInit/Voxels/Step/Destroy/Stats/Error. */
 export function createGiNative({ backend } = {}) {
   for (const m of ['giComputeInit', 'giComputeVoxels', 'giComputeStep', 'giComputeDestroy']) if (typeof backend?.[m] !== 'function') throw new Error(`createGiNative: backend has no ${m} (needs a gaia-render build with native GI compute)`);
-  const st = { inits: 0, voxelWrites: 0, voxelWords: 0, steps: 0, freshProbes: 0, lastError: null, core: null };
+  const st = { inits: 0, voxelWrites: 0, voxelWords: 0, steps: 0, freshProbes: 0, core: null, renderErrors: 0 };
   let live = false;
   return {
     stats: st,
@@ -32,8 +34,8 @@ export function createGiNative({ backend } = {}) {
     init(cfg, words) { backend.giComputeInit(JSON.stringify(cfg)); live = true; st.inits++; if (words?.length) this.voxels(0, words); },
     voxels(start, words) { backend.giComputeVoxels(start, words); st.voxelWrites++; st.voxelWords += words.length; },
     step(frame, fresh) { backend.giComputeStep(frame, fresh); st.steps++; st.freshProbes += fresh.length; },
-    /** drain the core's last failure + counters into stats (cheap; call from the presenter once per frame) */
-    poll() { const e = backend.giComputeError?.(); if (e) st.lastError = String(e); st.core = backend.giComputeStats?.() ?? null; return st; },
+    /** core counters [steps, probes, voxelWrites, fresh, irrRows, depthRows, renderErrors] (native: value of the last frame report). Op-time failures surface as the command's error (native: gpu.errors / onError). */
+    poll() { st.core = backend.giComputeStats?.() ?? null; st.renderErrors = st.core?.[6] ?? 0; return st; },
     destroy() { if (live) { backend.giComputeDestroy(); live = false; } },
   };
 }

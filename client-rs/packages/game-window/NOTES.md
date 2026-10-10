@@ -1,0 +1,35 @@
+# game-window — NOTES (lane nt-host, 2026-10-10)
+Native macOS host for the DS1/JS game. EVERYTHING below is UNVERIFIED AT RUNTIME: lane law = never launch the app (16 GB Mac). Verified = `cargo build -p game-window` (debug, CARGO_TARGET_DIR=.lanes/target-native) green + `--dry-run`/refusal paths of the binary + launcher dry path.
+## shape (after merging lane/nt-ipc @f602070c; stub host DELETED)
+- window `game-window` (opaque; wgpu Metal surface = its content-view CAMetalLayer) + child webview `game` (transparent, full window, ABOVE the surface; follows Resized) = the vite page. HUD/menus/input stay HTML.
+- page → host: nt-ipc's `GaiaRenderNative` does `invoke('gaia_render_apply', bytes)` (raw body) → `async fn gaia_render_apply` (worker pool, NOT the main thread) → `Mutex<Host>.apply(bytes)` → JSON report returned verbatim as `ipc::Response`. JS keeps one message in flight (order). Too-early message (before setup ends) = Err, not panic.
+- render thread `gaia-render`: lock Host → (first time per session after hello) `core.set_render_height(--render-height)` + upscaler → draw → present (Fifo = vsync pacing; `--fps-cap` extra; `--idle-sleep-ms` when nothing to draw).
+  - `--upscaler bilinear`: `host.render(enc, surface_view)` only when `frame_pending()` or the surface needs a repaint (resize/lost drawable) → idle GPU on a static scene.
+  - `--upscaler metalfx-spatial` (default): `Host::render` is Encoder-mode only (core.render PANICS for Queue-mode scalers), so game-window does `host.session_mut().core.set_upscaler(MetalFxSpatial)` + `core.render_frame(device, queue, output_tex, window size)` → copy → surface, EVERY vsync (Host has no "frame consumed" reset for this path). Ask nt-ipc for `Host::render_queue(&output_tex)->bool` to idle it. Output tex = UNORM storage + sRGB view (MetalFX takes no sRGB).
+  - internal size = the core's (`renderHeight` × output aspect), reported in `info().internal`. Host config is authoritative: URL gets `?renderBackend=native&wgpuHeight=<--render-height>` forced (game-window/config.rs `force_params`; `--dry-run 1` prints the final URL — verified), and `set_render_height` is applied at session start.
+- `device.on_uncaptured_error` installed (wgpu's default PANICS): `[wgpu] UNCAPTURED ERROR #n` to stderr (first 100), counted in `info().gpu_errors`, last text in `info().last_gpu_error`.
+- device request = `gaia_render_host::device_descriptor(&adapter)` (OPTIONAL_FEATURES + real buffer limits).
+- files: config.rs (flag>env>default table) · page.rs (init script) · shared.rs (Info + counters) · gpu.rs (Presenter) · pointer.rs (macOS SPI) · main.rs.
+## page ↔ host contract
+`window.__GAIA_NATIVE__` (frozen, init script): `info()→Promise<Info>` (adapter/stage/upscaler/output/internal/session/frames_presented/fps/cpu_ms/apply_messages/apply_bytes/gpu_errors/last_gpu_error/pointer_lock/page_gpu) · `renderHeight/upscaler/pageGpu/version`. Render stream = nt-ipc's transport (default command name `gaia_render_apply` = ours; ACL: build.rs app manifest + `capabilities/local.json` + RUNTIME remote capability `game-remote` scoped to the game URL's origin).
+## FINDING: pointer lock in WKWebView (source-read from WebKit main, not run)
+WebKit macOS HAS the Pointer Lock API (Safari ≥ 10.1, `PointerLockEnabled` default true) but `UIDelegate::UIClient::requestPointerLock` DENIES unless the WKUIDelegate implements private `_webViewDidRequestPointerLock:completionHandler:`. wry 0.55's `WryWebViewUIDelegate` doesn't → stock Tauri = `requestPointerLock()` always denied. Also needs view visible+focused, a mouse device, a user gesture. Once allowed WebKit locks natively (`platformLockPointer`).
+Fix (default `--pointer-lock spi`): `pointer.rs` adds that selector to wry's delegate class at runtime (answers YES) and re-sets the delegate (WebKit caches `respondsToSelector:` at `setDelegate`). Private SPI (stable since 10.14.4); runtime outcome shown in `info().pointer_lock` + stderr `[pointer]`. If it does not take: mouse-look needs a native NSEvent-delta channel (not built).
+## what the page needs from `navigator.gpu` TODAY (grep client/)
+1. `kernel/renderer.js:70-71` `new THREE.WebGPURenderer(); await renderer.init()` → requestAdapter+requestDevice. three 0.180 `WebGPURenderer.Nodes.js` + `Renderer.init` catch: no/failed WebGPU → `getFallback()` = WebGL2 backend (so `--page-gpu hidden`, the default, boots; the page prints "WebGPU is not available, running under WebGL2"). UNVERIFIED in WKWebView.
+2. `render-api/gpu-mirror.js:11` shadows `renderer.backend.device.queue.writeTexture` (array pages the game writes into three's device) → no-op without a WebGPU device (`installGpuMirror` returns false): array-texture pixels then never reach the core → nt-gi/nt-ipc must feed them another way.
+3. `render-api/gi-bridge.js` ← `renderer.getArrayBufferAsync(atlas)` of three's GI compute (`kernel/gi/gi-controller.js` `renderer.compute`, StorageInstancedBufferAttribute) → needs a WebGPU device. `kernel/fluid.js:555` already checks `backend.isWebGPUBackend` (fluid stays OFF on WebGL2). tsl-export reads three's node graph (no device).
+4. `render-api/wgpu-backend.js:130` throws if `!navigator.gpu` — nt-ipc patched it to skip when `GaiaRender.native` (native path needs no page WebGPU). wasm `GaiaRender.create(canvas)` = the in-browser path the native Host replaces.
+⇒ `--page-gpu visible` = transitional switch (WebGPU left to the page, for three's GI compute until lane nt-gi moves it); `hidden` = no WebGPU device in WKWebView at all. Note WKWebView on macOS 26 exposes WebGPU by default, so "hidden" is an explicit mask (`delete Navigator.prototype.gpu` + `getContext('webgpu')→null`), not an accident.
+## stubbed / not done
+- NO stub: `Host` is the real gaia-render-host. Everything is still UNVERIFIED AT RUNTIME (compile-only).
+- metalfx-temporal REFUSED at config load (needs depth/motion/jitter; Host/Session expose none).
+- GPU timing not wired (Session.has_timestamps exists; `core.encode_timing_readback` not hooked); only CPU ms + fps.
+- JS-side `renderGpuTimed/skinGpuMs` resolve null by nt-ipc design.
+- audio / gamepad / file access: whatever WKWebView gives; untouched.
+## risks
+- Transparent webview over CAMetalLayer = same mechanism as render-window (its overlay panel), never exercised fullscreen-size. Page background forced transparent by an injected `!important` style.
+- Opaque-over-Metal: any element with a background paints over the game (expected for HUD; a full-screen element hides the scene).
+- `Presenter` is `unsafe impl Send` (Metal objects) — created on the main thread, used by one thread.
+- Surface/webview ATS: URL must be http(s) on 127.0.0.1/localhost (IP literals are ATS-exempt; not tested).
+- App commands + remote origin: ACL path read from tauri-2.11.5 source (`webview/mod.rs` on_message), not exercised.

@@ -1,6 +1,6 @@
 import { GAIA_PORT } from './kernel/port.js';
 import { createRenderer } from './kernel/renderer.js';
-import { threeGpuOff } from './kernel/render-api/native-mode.js';
+import { threeGpuOff, nativeBackend, installGpuContextGuard } from './kernel/render-api/native-mode.js';
 import { createStaticBatcher } from './kernel/static-batch.js';
 import { WorldStore } from './kernel/world.js';
 import { View } from './kernel/view.js';
@@ -43,6 +43,7 @@ const overlay = document.getElementById('overlay');
 const crosshairEl = document.getElementById('crosshair');
 const hintEl = document.getElementById('hint');
 
+if (nativeBackend()) installGpuContextGuard(); // renderBackend=native: the page creates NO GPU context (no WebGPU, no WebGL2 fallback) — before anything can ask for one
 const noThreeGpu = threeGpuOff(); // native app: three holds NO GPU state (render-api/native-mode.js)
 const { renderer, scene, camera, hemi, sun, post, pixels } = await createRenderer({ gpu: !noThreeGpu });
 const store = new WorldStore();
@@ -914,7 +915,7 @@ function captureShot() {
 }
 
 // ?renderBackend=wgpu: draw through the wasm wgpu renderer (render-api/wgpu-present.js); three keeps owning the scene graph.
-const wgpuPresent = new URLSearchParams(location.search).get('renderBackend') === 'wgpu'
+const wgpuPresent = ['wgpu', 'native'].includes(new URLSearchParams(location.search).get('renderBackend'))
   ? await (await import('./kernel/render-api/wgpu-present.js')).createWgpuPresenter({ renderer, scene, camera, THREE, getGi: () => environment.gi, getPost: () => post, getAutoExposure: () => environment.lighting?.lightingPost?.autoExposure ?? null })
   : null;
 if (wgpuPresent) window.__wgpu = wgpuPresent;
@@ -972,4 +973,5 @@ const frameTick = () => {
   if (pendingSnapshot) captureSnapshot();
 };
 // three's own loop would init() its renderer (= request a GPU device); native mode drives frames with plain rAF
-if (noThreeGpu) { const raf = () => { requestAnimationFrame(raf); frameTick(); }; // next frame first, like three's Animation (a throw must not stop the loop) requestAnimationFrame(raf); } else renderer.setAnimationLoop(frameTick);
+// (next frame is requested BEFORE the tick, like three's Animation: a throw must not stop the loop)
+if (noThreeGpu) { const raf = () => { requestAnimationFrame(raf); frameTick(); }; requestAnimationFrame(raf); } else renderer.setAnimationLoop(frameTick);

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gaia-native-info"
+description = "Enables the gaia_native_info command without any pre-configured scope."
+commands.allow = ["gaia_native_info"]
+
+[[permission]]
+identifier = "deny-gaia-native-info"
+description = "Denies the gaia_native_info command without any pre-configured scope."
+commands.deny = ["gaia_native_info"]

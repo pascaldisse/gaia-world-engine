@@ -10,6 +10,7 @@
 // pushed down as world mat4s. Capabilities are the honest subset gaia-render has TODAY (see NOTES in crates/gaia-render).
 import { RENDER_API_VERSION, validateMeshArrays, isMat4, IDENTITY_MAT4, normalizeGroups, bitsToWords } from './interface.js';
 import { textureData, arrayTextureData, cubeTextureData } from './material-map.js';
+import { GI_STORAGE } from './gi-native.js';
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 // '#rrggbb' | 0xrrggbb are authoring (sRGB) colors → linear (three ColorManagement); [r,g,b] arrays are taken as linear.
@@ -127,7 +128,7 @@ function debugOutPkg(pkg) {
 export async function createWgpuBackend({ canvas, wasm, wasmUrl, renderHeight = 720, options = {}, depth = 'gl', staticInstances = 'none', staticAfterFrames = 60 } = {}) {
   if (!canvas) throw new Error('createWgpuBackend requires { canvas }');
   if (!wasm?.GaiaRender) throw new Error('createWgpuBackend requires { wasm } = the render_wasm.js module');
-  if (!navigator.gpu) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)');
+  if (!navigator.gpu && !wasm.GaiaRender.native) throw new Error('createWgpuBackend: WebGPU unavailable (navigator.gpu missing)'); // native: GaiaRenderNative (Tauri IPC → Metal) needs no webview WebGPU
   await (wasmUrl ? wasm.default(wasmUrl) : wasm.default());
   // r11-pipe: ?wgpuPipeShare=0 turns off content-keyed three-material pipeline sharing + pipeline-sorted opaque draws (default on); options.pipeShare wins.
   const pipeShare = options.pipeShare ?? !(typeof location !== 'undefined' && new URLSearchParams(location.search).get('wgpuPipeShare') === '0');
@@ -190,8 +191,7 @@ const bytesOf = (a) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
 const verOf = (attr) => attr.userData?.gpuMirrorVersion ?? attr.version;
 // lane nt-gi: a probe-GI atlas attribute tagged userData.nativeStorage ('irradiance'|'depth') is NOT three data: its authoritative copy is the gaia-render GI compute's buffer
 // (reserved storage ids, RenderCore::gi_storage_ids). Bound by id, never uploaded, never destroyed by this refcount (native handle).
-let giIds = null;
-function nativeStorageId(name) { giIds ??= Array.from(gpu.giStorageIds()); const i = { irradiance: 0, depth: 1 }[name]; if (i === undefined) throw new Error(`unknown nativeStorage '${name}'`); return giIds[i]; }
+function nativeStorageId(name) { const id = GI_STORAGE[name]; if (id === undefined) throw new Error(`unknown nativeStorage '${name}'`); return id; }
 function acquireStorage(attr) {
 const ns = attr.userData?.nativeStorage;
 if (ns) { const c0 = storByAttr.get(attr); if (c0) { c0.refs++; storStats.hits++; return c0; } const h0 = { id: nativeStorageId(ns), refs: 1, version: verOf(attr), attr, native: true }; storByAttr.set(attr, h0); storStats.creates++; storStats.native = (storStats.native ?? 0) + 1; return h0; }
@@ -628,13 +628,12 @@ return;
     setGiProbes(irradiance, depth, params) { gpu.setGiProbes(irradiance, depth, params); },
     clearGiProbes() { gpu.clearGiProbes(); },
         // lane nt-gi: NATIVE probe GI (gaia-render computes the atlases; the page ships voxel bricks + per-frame params, no readback). See gi-native.js.
-        giComputeInit(cfgJson) { giIds = null; gpu.giComputeInit(cfgJson); },
+        giComputeInit(cfgJson) { gpu.giComputeInit(cfgJson); },
         giComputeVoxels(start, words) { gpu.giComputeVoxels(start, words); },
         giComputeStep(frame, fresh) { gpu.giComputeStep(frame, fresh); },
         giComputeDestroy() { gpu.giComputeDestroy(); },
         giComputeStats() { return gpu.giComputeStats(); },
-        giComputeError() { return gpu.giComputeError() ?? null; },
-    // r6-scene: scene.background Texture/CubeTexture. {kind:'cube'|'equirect'|'screen', width, height, rgba (Uint8Array; cube = 6 faces), srgb, intensity}
+        // r6-scene: scene.background Texture/CubeTexture. {kind:'cube'|'equirect'|'screen', width, height, rgba (Uint8Array; cube = 6 faces), srgb, intensity}
     setBackgroundTexture({ kind, width, height, rgba, srgb = true, intensity = 1 }) {
       if (kind === 'cube') gpu.setBackgroundCube(width, rgba, srgb, intensity); else gpu.setBackgroundTexture(width, height, rgba, srgb, kind === 'equirect', intensity);
     },

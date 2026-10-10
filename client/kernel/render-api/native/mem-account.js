@@ -32,7 +32,7 @@ const drawableDims = (im) => { const w = im.width ?? im.videoWidth ?? im.display
 function newAcc() {
   return { seen: new Set(),            // ArrayBuffers already counted (all categories share it: a buffer is counted once)
     texObjs: new Set(), imgObjs: new Set(), geos: new Set(), mats: new Set(),
-    texData: 0, texDataN: 0, texMip: 0, texDecoded: 0, texDecodedN: 0, texN: 0, texNoImage: 0,
+    texData: 0, texDataN: 0, texMip: 0, texDecoded: 0, texDecodedN: 0, texReleasedN: 0, texN: 0, texNoImage: 0,
     geoBytes: 0, geoViewBytes: 0, geoAttrN: 0, geoN: 0, instBytes: 0, skinBytes: 0, meshN: 0, nodeN: 0 };
 }
 function addBuf(acc, a, field) { // returns bytes newly attributed
@@ -43,6 +43,7 @@ function addImage(acc, im, mip) {
   if (!im || typeof im !== 'object') return;
   if (Array.isArray(im)) { for (const x of im) addImage(acc, x, mip); return; }
   if (acc.imgObjs.has(im)) return; acc.imgObjs.add(im);
+  if (im.gaiaReleased) { acc.texReleasedN++; return; } // nt-imgdecode: size-only stub left after the host acked the upload (material-map releaseTextureImage) — no decoded backing behind it
   if (im.data && ArrayBuffer.isView(im.data)) { if (addBuf(acc, im.data, mip ? 'texMip' : 'texData')) acc.texDataN++; return; } // DataTexture / ImageData / array textures: real CPU bytes
   if (isBuf(im)) { if (addBuf(acc, im, 'texData')) acc.texDataN++; return; }
   const px = drawableDims(im); // ImageBitmap / HTMLImageElement / canvas / VideoFrame: ESTIMATE (decoded backing)
@@ -99,7 +100,7 @@ function sceneProbe() {
   const texBytes = acc.texData + acc.texMip + acc.texDecoded;
   const out = {
     tex_n: acc.texN, tex_sent_n: sentTex, tex_noimg: acc.texNoImage,
-    texBytes, tex_dataBytes: acc.texData, tex_dataN: acc.texDataN, tex_mipBytes: acc.texMip, tex_decodedEstBytes: acc.texDecoded, tex_decodedN: acc.texDecodedN,
+    texBytes, tex_dataBytes: acc.texData, tex_dataN: acc.texDataN, tex_mipBytes: acc.texMip, tex_decodedEstBytes: acc.texDecoded, tex_decodedN: acc.texDecodedN, tex_releasedN: acc.texReleasedN,
     geo_n: acc.geoN, geo_attrN: acc.geoAttrN, geoBytes: acc.geoBytes, geo_viewBytes: acc.geoViewBytes, instBytes: acc.instBytes, skinBytes: acc.skinBytes,
     nodes: acc.nodeN, meshes: acc.meshN,
   };

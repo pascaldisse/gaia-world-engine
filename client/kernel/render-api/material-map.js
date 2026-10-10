@@ -88,14 +88,50 @@ function compressedData(t) {
     release: !releaseFlag(t) ? null : () => { if (desc.released) return; desc.released = true; bytes = null; levels.length = 0; for (const m of mm) m.data = EMPTY_U8; releasedTex.add(t); mapConfig.released++; } };
   return desc;
 }
-const isImageSource = (im) => (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) || (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement);
+const isBitmap = (im) => typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap;
+const isImageSource = (im) => isBitmap(im) || (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement);
+const isCanvasLike = (im) => (typeof HTMLCanvasElement !== 'undefined' && im instanceof HTMLCanvasElement) || (typeof OffscreenCanvas !== 'undefined' && im instanceof OffscreenCanvas);
+// ---- nt-imgdecode (docs/NATIVE.md §image-decode): release decode artifacts once the host owns the pixels -----------------------------------------------------------------
+// srcInfo: decoded image object (ImageBitmap / HTMLImageElement / the released stub) -> { w, h, keys: Map<srgb, hostKey>, released }. The FIRST desc built for an image defines its host key;
+// texture clones that share the image (GLTFLoader clones one Source per sampler/use) reuse that key -> ONE GPU texture, and after release a clone can still bind it (backend texByKey hit).
+const srcInfo = new WeakMap();
+const infoOf = (im, w, h) => { let i = srcInfo.get(im); if (!i) srcInfo.set(im, (i = { w, h, keys: new Map(), released: false })); return i; };
+const shareKeys = (im) => mapConfig.releaseDecoded && (isBitmap(im) || srcInfo.get(im)?.released === true);
+const hostKey = (t, im, srgb) => { if (shareKeys(im)) { const k = srcInfo.get(im)?.keys.get(srgb); if (k) return k; } return `${t.uuid}:${t.version}`; };
+/** free ONE decoded image (the caller swaps texture.image for the returned stub): ImageBitmap.close() · HTMLImageElement detached (WebKit drops the CachedImage client + frame cache now) · canvas shrunk to 1x1 (explicit userData.nativeRelease only). */
+function dropImage(im, canvasOk = false) {
+  const w = im.width ?? im.videoWidth ?? im.displayWidth ?? 0, h = im.height ?? im.videoHeight ?? im.displayHeight ?? 0;
+  const info = srcInfo.get(im) ?? { w, h, keys: new Map(), released: false };
+  const stub = { width: info.w || w, height: info.h || h, gaiaReleased: true }; // tiny: size stays readable (UV maths, textureSize, TSL), no pixels
+  info.released = true; srcInfo.set(im, info); srcInfo.set(stub, info);
+  try {
+    if (isBitmap(im)) im.close();
+    else if (typeof HTMLImageElement !== 'undefined' && im instanceof HTMLImageElement) { if (mapConfig.detachImages) im.removeAttribute('src'); }
+    else if (canvasOk && isCanvasLike(im)) { im.width = 1; im.height = 1; } // game-owned canvas: ONLY with an explicit userData.nativeRelease (it may be redrawn)
+  } catch { /* already closed / detached */ }
+  mapConfig.releasedDecoded++;
+  return stub;
+}
+/** replace t.source.data (image or image[6]) by size stubs and free the originals. Returns the new image (or null when t.image is not ours to drop). */
+export function releaseTextureImage(t) {
+  const im = t?.image; if (!im || im.gaiaReleased) return null;
+  let out; const canvasOk = !!t.userData?.nativeRelease;
+  if (Array.isArray(im)) out = im.map((f) => (f && typeof f === 'object' && !f.gaiaReleased && (isImageSource(f) || (canvasOk && isCanvasLike(f))) ? dropImage(f, canvasOk) : f));
+  else if (isImageSource(im) || (canvasOk && isCanvasLike(im))) out = dropImage(im, canvasOk);
+  else return null;
+  try { t.source.data = out; } catch { try { t.image = out; } catch { return null; } }
+  releasedTex.add(t);
+  return out;
+}
 /** cheap pre-flight (NO pixel read, no descriptor): { key, bytes } a texture would cost on the wire if its key is not yet on the host. Used by the adapter's encode budget. */
 export function textureEstimate(t) {
   if (!t) return null;
   if (t.isCompressedTexture) { let n = 0; for (const m of t.mipmaps ?? []) n += m?.data?.byteLength ?? 0; return { key: `${t.uuid}:${t.version}`, bytes: n }; }
   const im = t.image; if (!im) return releasedTex.has(t) ? { key: `${t.uuid}:${t.version}`, bytes: 0 } : null;
+  const srgb = t.colorSpace === 'srgb', info = srcInfo.get(im), key = hostKey(t, im, srgb);
+  if (info?.released || im.gaiaReleased) return { key, bytes: 0 }; // only the host copy is left: a cache hit (or loud 'released' refusal), never a wire cost
   const w = im.width ?? im.videoWidth ?? im.displayWidth ?? 0, h = im.height ?? im.videoHeight ?? im.displayHeight ?? 0;
-  return { key: `${t.uuid}:${t.version}`, bytes: w * h * 4 };
+  return { key, bytes: w * h * 4 };
 }
 function textureData(t) {
   memTex(t);
@@ -106,13 +142,29 @@ function textureData(t) {
   if (!im) return null;
   const c = rc;
   if (c && c.version === t.version && c.image === im) return c.desc;
+  const srgb = t.colorSpace === 'srgb';
+  const info0 = srcInfo.get(im);
+  if (info0?.released || im.gaiaReleased) { // a sibling texture (shared Source) already uploaded + released this image: only a host-side key lookup is possible
+    const desc = { width: info0?.w ?? im.width, height: info0?.h ?? im.height, srgb, key: info0?.keys.get(srgb) ?? `${t.uuid}:${t.version}`, bytes: 0, released: true, data: null, release: null };
+    if (info0?.keys.get(srgb)) mapConfig.sharedKeys++;
+    texCache.set(t, { version: t.version, image: im, desc }); releasedTex.add(t);
+    return desc;
+  }
   const w = im.width ?? im.videoWidth ?? im.displayWidth, h = im.height ?? im.videoHeight ?? im.displayHeight;
   const readable = isBytes(im.data) || drawable(im) || typeof im.getContext === 'function' || (typeof ImageData !== 'undefined' && im instanceof ImageData);
   if (!readable || !(w > 0 && h > 0)) return undefined; // present but not CPU-readable here
-  let px; // lazy; memoised only while mapConfig.retainPixels (browser). Native: every read is a transient (the host owns the pixels once uploaded)
-  const desc = { width: w, height: h, srgb: t.colorSpace === 'srgb', key: `${t.uuid}:${t.version}`, bytes: w * h * 4, released: false,
-    get data() { if (desc.released) return null; if (!mapConfig.retainPixels) return readPixels(im, w, h, false); return px ??= readPixels(im, w, h); },
-    release: !releaseFlag(t) || !(isImageSource(im)) ? null : () => { if (desc.released) return; desc.released = true; px = null; if (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) im.close(); try { t.source.data = null; } catch { /* three Source setter */ } releasedTex.add(t); mapConfig.released++; } };
+  const key = hostKey(t, im, srgb);
+  if (mapConfig.releaseDecoded && isImageSource(im)) { const info = infoOf(im, w, h); if (!info.keys.has(srgb)) info.keys.set(srgb, key); else if (key !== `${t.uuid}:${t.version}`) mapConfig.sharedKeys++; }
+  let px, src = im; // px lazy, memoised only while mapConfig.retainPixels (browser). Native: every read is a transient (the host owns the pixels once uploaded). src = null after release (closure must not pin the image)
+  // release: userData.nativeRelease (explicit; canvases only with an explicit true) else the global knobs for ImageBitmap/HTMLImageElement: releaseDecoded (native default) | releaseSources
+  const flag = t.userData?.nativeRelease !== undefined ? (t.userData.nativeRelease && (isImageSource(im) || isCanvasLike(im))) : isImageSource(im) && (mapConfig.releaseDecoded || mapConfig.releaseSources);
+  const desc = { width: w, height: h, srgb, key, bytes: w * h * 4, released: false,
+    get data() { if (desc.released || !src) return null; if (!mapConfig.retainPixels) return readPixels(src, w, h, false); return px ??= readPixels(src, w, h); },
+    release: !flag ? null : () => {
+      if (desc.released) return; desc.released = true; px = null; src = null;
+      if (t.source?.data === im) { const stub = releaseTextureImage(t); if (stub) texCache.set(t, { version: t.version, image: stub, desc }); } else dropImage(im, !!t.userData?.nativeRelease); // image swapped meanwhile: only the old one is ours
+      releasedTex.add(t); mapConfig.released++;
+    } };
   texCache.set(t, { version: t.version, image: im, desc });
   return desc;
 }
@@ -140,7 +192,10 @@ export function cubeTextureData(t) {
   const c = cubeCache.get(t); if (c && c.version === t.version && c.image === t.image) return c.desc;
   let r; try { r = readCube(t); } catch (e) { return { cube: true, refused: String(e?.message ?? e) }; }
   if (r.hdrClamped) return { cube: true, refused: 'HDR/float CubeTexture (RGBA8 upload only; clamping would be a silent downgrade)' };
-  const desc = { cube: true, size: r.size, srgb: r.srgb, key: `${t.uuid}:cube:${t.version}`, version: t.version, data: r.faces };
+  // nt-imgdecode: after the host acked the 6 faces drop the RGBA copy (6*size^2*4) and the decoded face images (stubs keep the size); cubeCache then answers with this desc (key hit) and never re-reads
+  const flag = t.userData?.nativeRelease !== undefined ? !!t.userData.nativeRelease : mapConfig.releaseDecoded || mapConfig.releaseSources;
+  const desc = { cube: true, size: r.size, srgb: r.srgb, key: `${t.uuid}:cube:${t.version}`, version: t.version, data: r.faces, released: false,
+    release: !flag ? null : () => { if (desc.released) return; desc.released = true; desc.data = null; const im = releaseTextureImage(t); if (im) cubeCache.set(t, { version: t.version, image: im, desc }); mapConfig.released++; } };
   cubeCache.set(t, { version: t.version, image: t.image, desc });
   return desc;
 }

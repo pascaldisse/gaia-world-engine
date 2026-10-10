@@ -50,7 +50,7 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
     if ((cfg.watchMs ?? 2000) > 0) { let last = 0; setInterval(() => { const s = transport.stats, qb = transport.queuedBytes; if (qb || s.messages !== last) console.info(`[GaiaRenderNative] msgs=${s.messages} sentMB=${(s.bytes / MiB).toFixed(1)} queuedMB=${(qb / MiB).toFixed(1)} maxQueuedMB=${(s.maxQueued / MiB).toFixed(1)} lastMs=${s.lastMs.toFixed(0)} maxMs=${s.maxMs.toFixed(0)} inflightAgeMs=${transport.inflightAgeMs.toFixed(0)}`); last = s.messages; }, cfg.watchMs ?? 2000); }
     const w = new Writer({ initialBytes: (cfg.initialMB ?? 1) * MiB, flushBytes: (cfg.flushMB ?? 4) * MiB, onFlush: (c) => transport.push(c) });
     const rt = {
-      w,
+      w, busyMB: cfg.busyMB, busyMs: cfg.busyMs,
       alloc: (kind) => { const n = (counters.get(kind) ?? 0) + 1; counters.set(kind, n); return n; },
       q: (name) => {
         const spec = QUERIES[name];
@@ -71,12 +71,15 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
 
   constructor(rt, transport, shared) {
     super(rt);
-    this._t = transport; this._s = shared;
+    this._t = transport; this._s = shared; this._busyBytes = (rt.busyMB ?? 8) * 1048576; this._busyMs = rt.busyMs ?? 250;
   }
   /** errors reported by the host since creation (max 256). */
   get errors() { return this._s.errors; }
   set onError(fn) { this._s.onError = fn; }
   /** { messages, bytes, maxQueued, lastMs, maxMs, queuedBytes, frames } — IPC diagnostics (wgpuStats). */
+  /** backpressure: true while the pipe still holds more than `busyMB` (?nativeBusyMB, default 8) queued or a frame commit is un-acked.
+   *  The presenter skips adapter.sync+render while busy (sync is a diff -> the next frame carries the latest state; nothing is dropped). */
+  busy() { const t = this._t; return t.queuedBytes > this._busyBytes || t.inflightAgeMs > this._busyMs; }
   ipcStats() { return { ...this._t.stats, queuedBytes: this._t.queuedBytes, frames: this._s.frames, written: this._rt.w.sent }; }
 
   _commit() { const w = this._rt.w; w.begin(OP_FRAME_COMMIT); w.end(); w.flush(); }
@@ -94,7 +97,7 @@ export function nativeModule(params = new URLSearchParams()) {
     transport: params.get('nativeTransport') ?? 'invoke',
     command: params.get('nativeCommand') ?? undefined,
     scheme: params.get('nativeScheme') ?? undefined,
-    chunkMB: num('nativeChunkMB'), watchMs: num('nativeWatchMs'), flushMB: num('nativeFlushMB'), initialMB: num('nativeInitialMB'),
+    chunkMB: num('nativeChunkMB'), watchMs: num('nativeWatchMs'), busyMB: num('nativeBusyMB'), busyMs: num('nativeBusyMs'), flushMB: num('nativeFlushMB'), initialMB: num('nativeInitialMB'),
   };
   return { default: async () => {}, GaiaRender: { native: true, create: (canvas, options) => GaiaRenderNative.create(canvas, options, cfg) } };
 }

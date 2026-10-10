@@ -51,6 +51,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
     backend, adapter, canvas, stats: st, giBridge, giNative, noThreeGpu, postBridge, tslCache: structCache,
     // one frame: world matrices → adapter diff/push → core render. Replaces renderer.render(scene, camera) / post.render().
     frame() {
+      if (backend.gpu?.busy?.()) { st.busySkips = (st.busySkips ?? 0) + 1; return; } // native transport backpressure (GaiaRenderNative.busy): never queue frames faster than the host applies them
       const a = performance.now();
       camera.updateMatrixWorld?.();
       adapter.sync(scene, camera);

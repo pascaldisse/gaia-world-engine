@@ -40,7 +40,15 @@ async fn gaia_render_apply(
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("gaia_render_apply: raw body expected (Uint8Array), got JSON".into());
     };
-    let report = host.lock().map_err(|_| "Host mutex poisoned".to_string())?.apply(bytes);
+    let t0 = std::time::Instant::now();
+    let mut guard = host.lock().map_err(|_| "Host mutex poisoned".to_string())?;
+    let waited = t0.elapsed();
+    let report = guard.apply(bytes);
+    drop(guard);
+    let n = shared.apply_messages.load(Ordering::Relaxed);
+    if n < 8 || waited.as_millis() > 50 || t0.elapsed().as_millis() > 100 {
+        eprintln!("[apply] #{n} {} B lock_wait={:?} total={:?} report={}", bytes.len(), waited, t0.elapsed(), String::from_utf8_lossy(&report[..report.len().min(300)]));
+    }
     shared.apply_messages.fetch_add(1, Ordering::Relaxed);
     shared.apply_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
     Ok(tauri::ipc::Response::new(report))

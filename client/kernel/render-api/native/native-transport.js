@@ -29,7 +29,7 @@ export function customProtocolSend({ scheme = 'gaiarender', path = 'apply', url 
 
 export function createTransport({ send, maxChunkBytes = 16 << 20, onReport, onError }) {
   const queue = [];                 // Uint8Array pieces, stream order
-  let queued = 0, inflight = null;
+  let queued = 0, inflight = null, inflightT0 = 0;
   const waiters = [];
   const st = { messages: 0, bytes: 0, maxQueued: 0, lastMs: 0, maxMs: 0 };
   const pump = () => {
@@ -52,7 +52,7 @@ export function createTransport({ send, maxChunkBytes = 16 << 20, onReport, onEr
       }
     }
     queued -= msg.byteLength;
-    const t0 = performance.now();
+    const t0 = performance.now(); inflightT0 = t0;
     st.messages++; st.bytes += msg.byteLength;
     inflight = send(msg).then((r) => { try { onReport(r); } catch (e) { onError(e); } }, onError).finally(() => {
       st.lastMs = performance.now() - t0; st.maxMs = Math.max(st.maxMs, st.lastMs);
@@ -63,6 +63,7 @@ export function createTransport({ send, maxChunkBytes = 16 << 20, onReport, onEr
   return {
     stats: st,
     get queuedBytes() { return queued; },
+    get inflightAgeMs() { return inflight ? performance.now() - inflightT0 : 0; },
     push(chunk) { queue.push(chunk); queued += chunk.byteLength; st.maxQueued = Math.max(st.maxQueued, queued); pump(); },
     /** resolves when everything pushed so far has been applied by the host. */
     idle() { return new Promise((res) => { if (!inflight && !queue.length) res(); else waiters.push(res); }); },

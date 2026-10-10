@@ -46,6 +46,8 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
     };
     const send = cfg.send ?? (cfg.transport === 'protocol' ? customProtocolSend({ scheme: cfg.scheme }) : tauriInvokeSend({ command: cfg.command }));
     const transport = createTransport({ send, maxChunkBytes: (cfg.chunkMB ?? 16) * MiB, onReport, onError: (e) => console.error('[GaiaRenderNative] IPC send failed', e) });
+    // transport watch (?nativeWatchMs, default 2000, 0 = off): logs queued bytes + in-flight age so a stalled pipe is visible in the host's page log
+    if ((cfg.watchMs ?? 2000) > 0) { let last = 0; setInterval(() => { const s = transport.stats, qb = transport.queuedBytes; if (qb || s.messages !== last) console.info(`[GaiaRenderNative] msgs=${s.messages} sentMB=${(s.bytes / MiB).toFixed(1)} queuedMB=${(qb / MiB).toFixed(1)} maxQueuedMB=${(s.maxQueued / MiB).toFixed(1)} lastMs=${s.lastMs.toFixed(0)} maxMs=${s.maxMs.toFixed(0)} inflightAgeMs=${transport.inflightAgeMs.toFixed(0)}`); last = s.messages; }, cfg.watchMs ?? 2000); }
     const w = new Writer({ initialBytes: (cfg.initialMB ?? 1) * MiB, flushBytes: (cfg.flushMB ?? 4) * MiB, onFlush: (c) => transport.push(c) });
     const rt = {
       w,
@@ -92,7 +94,7 @@ export function nativeModule(params = new URLSearchParams()) {
     transport: params.get('nativeTransport') ?? 'invoke',
     command: params.get('nativeCommand') ?? undefined,
     scheme: params.get('nativeScheme') ?? undefined,
-    chunkMB: num('nativeChunkMB'), flushMB: num('nativeFlushMB'), initialMB: num('nativeInitialMB'),
+    chunkMB: num('nativeChunkMB'), watchMs: num('nativeWatchMs'), flushMB: num('nativeFlushMB'), initialMB: num('nativeInitialMB'),
   };
   return { default: async () => {}, GaiaRender: { native: true, create: (canvas, options) => GaiaRenderNative.create(canvas, options, cfg) } };
 }

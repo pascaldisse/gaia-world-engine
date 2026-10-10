@@ -12,13 +12,16 @@ import { createGiNative } from './gi-native.js';
 import { threeGpuOff } from './native-mode.js';
 import { createPostBridge } from './post-bridge.js';
 import { configureMaterialMap } from './material-map.js';
-import { pageMemConfig } from './native/page-memory.js';
+import { pageMemConfig, configureLeakGuards } from './native/page-memory.js';
+import { registerLine as memLine } from './native/mem-account.js';
+import { lightRegistryCensus } from './light-registry.js';
+import { tslCensus } from './tsl-export.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
   const native = params.get('renderBackend') === 'native';
   // nt-pagemem: native page-memory policy (defaults + &native* params: native/page-memory.js, docs/NATIVE.md §page-memory). null in the browser = old behaviour everywhere.
   const pm = native ? pageMemConfig(params) : null;
-  if (pm) configureMaterialMap(pm);
+  if (pm) { configureMaterialMap(pm); configureLeakGuards(pm); } // nt-frameleak: retention guards (native/page-memory.js leakGuards)
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = native ? (await import('./native/gaia-render-native.js')).nativeModule(params) : await import(/* @vite-ignore */ pkg);
   // three has NO device in native mode (renderBackend=native, or wgpu + threeGpu=0): nothing can be written into it, so there is nothing to mirror.
@@ -34,6 +37,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' }, hdrScene: params.get('wgpuPost') === '0' ? 0 : 1 } });
+  if (pm?.tslTemplateMax > 0) structCache.maxTemplates = pm.tslTemplateMax; // nt-frameleak: native default 64 (browser 128): each template pins node graph + package -> material/mesh/textures; &wgpuTslCacheMax below still wins
   { const mt = Number(params.get('wgpuTslCacheMax')); if (Number.isFinite(mt) && mt > 0) structCache.maxTemplates = mt; } // r10-7 template retention bound
   if (params.get('wgpuTslKeyDump') === '1') structCache.keySamples = new Map();
   if (params.get('wgpuTslWalkCheck') === '1') structCache.walkCheck = true;
@@ -51,6 +55,8 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)
   const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure, autoExposure: params.get('wgpuAE') !== '0', gtao: params.get('wgpuGtao') !== '0' });
   addEventListener('resize', size);
+  // nt-frameleak: ONE extra [page:mem] line per tick (|census) with the size of every long-lived container on the native path. Diff two ticks: whatever grows with `frames` is the leak. Keys: ad_ scene-adapter, be_ wgpu-backend, tx_ transport/acks/writer, tsl_ TSL template cache, lr_ light registry, gi_ GI attachment.
+  if (native) memLine('census', () => { const o = { frames: st.frames, busySkips: st.busySkips ?? 0 }; const add = (p, c) => { if (c) for (const k in c) if (typeof c[k] === 'number') o[p + k] = c[k]; }; add('ad_', adapter.census?.()); o.ad_updated = adapter.stats.updated; add('be_', backend.census?.()); add('tx_', backend.gpu?.census?.()); add('tsl_', tslCensus()); add('lr_', lightRegistryCensus(scene)); o.gi_att = getGi?.()?._attachment?.attachedCount; return o; });
   const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {
     backend, adapter, canvas, stats: st, giBridge, giNative, noThreeGpu, postBridge, tslCache: structCache,

@@ -67,12 +67,13 @@ export async function wsSend({ ws = globalThis.__GAIA_NATIVE__?.ws, host = '127.
   send.socket = sock;
   return send;
 }
-/** coalesceBelowBytes (page-memory.js coalesceKB): pieces at or above it are never copied into a coalesced message; onAck(ackedBytes) runs after every acked message (release hooks). */
-export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = send.maxInflight ?? 1, coalesceBelowBytes = 1 << 20, onReport, onError, onAck }) {
+/** idleCoalesce (page-memory.js): idle() callers share one promise. coalesceBelowBytes (page-memory.js coalesceKB): pieces at or above it are never copied into a coalesced message; onAck(ackedBytes) runs after every acked message (release hooks). */
+export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = send.maxInflight ?? 1, coalesceBelowBytes = 1 << 20, idleCoalesce = false, onReport, onError, onAck }) {
   const queue = [];                 // Uint8Array pieces, stream order
   let queued = 0;
   const flight = [];                // messages sent, report not back yet (oldest first)
   const waiters = [];
+let idleP = null;                     // nt-frameleak: shared idle() promise (idleCoalesce)
   const st = { messages: 0, bytes: 0, ackedBytes: 0, maxQueued: 0, lastMs: 0, maxMs: 0, lastMBps: 0, maxInflight };
   const pump = () => {
     while (flight.length < maxInflight && queue.length) {
@@ -119,6 +120,13 @@ export function createTransport({ send, maxChunkBytes = 16 << 20, maxInflight = 
     get inflightAgeMs() { return flight.length ? performance.now() - flight[0].t0 : 0; },
     push(chunk) { queue.push(chunk); queued += chunk.byteLength; st.maxQueued = Math.max(st.maxQueued, queued); pump(); },
     /** resolves when everything pushed so far has been applied by the host. */
-    idle() { return new Promise((res) => { if (!flight.length && !queue.length) res(); else waiters.push(res); }); },
+    idle() {
+if (!flight.length && !queue.length) return Promise.resolve();
+// nt-frameleak (page-memory.js idleCoalesce): a per-frame renderTimed() on a pipe that never fully drains pushed one waiter + promise per call, released only at a full drain -> ONE shared promise while busy
+if (!idleCoalesce) return new Promise((res) => waiters.push(res));
+return (idleP ??= new Promise((res) => waiters.push(() => { idleP = null; res(); })));
+},
+/** nt-frameleak census: pieces queued / messages in flight / idle waiters (all must stay bounded). */
+census() { return { queue: queue.length, flight: flight.length, waiters: waiters.length }; },
   };
 }

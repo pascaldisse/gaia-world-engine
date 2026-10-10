@@ -34,11 +34,19 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
     const counters = new Map();
     const q = Object.create(null);
     let pendingGrid = null;
-    const self = { errors: [], onError: null, frames: 0 };
+    const pm = pageMemConfig(null, cfg);
+    const self = { errors: [], onError: null, frames: 0, errorCount: 0, errorLogged: 0 };
+    // nt-frameleak (page-memory.js errorLogMax): every console.error is ALSO a gaia_page_log invoke + formatted string; a host op failing every frame = 60 invokes/s forever. After errorLogMax lines: counted only (gpu.errorCount), one notice.
+    const logErr = (...a) => {
+      self.errorCount++;
+      const max = pm.errorLogMax;
+      if (max > 0 && self.errorLogged >= max) { if (self.errorLogged === max) { self.errorLogged++; console.error(`[GaiaRenderNative] more than ${max} errors: further ones are counted only (gpu.errorCount; ?nativeErrorLogMax=0 logs all)`); } return; }
+      self.errorLogged++; console.error(...a);
+    };
     const onReport = (rep) => {
       if (rep.errors?.length) for (const e of rep.errors) {
         if (self.errors.length < 256) self.errors.push(e);
-        if (self.onError) self.onError(e); else console.error(`[GaiaRenderNative] ${e.op}${e.id ? `#${e.id}` : ''}: ${e.msg}`);
+        if (self.onError) self.onError(e); else logErr(`[GaiaRenderNative] ${e.op}${e.id ? `#${e.id}` : ''}: ${e.msg}`);
       }
       if (rep.q) {
         Object.assign(q, rep.q);
@@ -49,11 +57,10 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
     const kind = cfg.transport ?? 'ws';
     if (!cfg.send && !['ws', 'invoke', 'protocol'].includes(kind)) throw new Error(`GaiaRenderNative: unknown ?nativeTransport=${kind} (ws|invoke|protocol)`);
     // ws = localhost WebSocket to the host's ipc_ws server (default; invoke measured ~16 MB/s in WKWebView). Rejects loudly when unavailable.
-    const pm = pageMemConfig(null, cfg);
     const send = cfg.send ?? (kind === 'ws' ? await wsSend({ inflight: pm.inflight }) : kind === 'protocol' ? customProtocolSend({ scheme: cfg.scheme }) : tauriInvokeSend({ command: cfg.command }));
     const acks = []; // afterAck() hooks: { mark: stream offset, fn }, FIFO (marks ascend)
     const runAcks = (acked) => { while (acks.length && acks[0].mark <= acked) acks.shift().fn(); };
-    const transport = createTransport({ send, maxInflight: send.maxInflight, maxChunkBytes: pm.chunkBytes, coalesceBelowBytes: pm.coalesceBytes, onReport, onAck: runAcks, onError: (e) => console.error('[GaiaRenderNative] IPC send failed', e) });
+    const transport = createTransport({ send, maxInflight: send.maxInflight, maxChunkBytes: pm.chunkBytes, coalesceBelowBytes: pm.coalesceBytes, onReport, onAck: runAcks, idleCoalesce: pm.idleCoalesce, onError: (e) => logErr('[GaiaRenderNative] IPC send failed', e) });
     // transport watch (?nativeWatchMs, default 2000, 0 = off): logs queued bytes + in-flight age so a stalled pipe is visible in the host's page log
     if (pm.watchMs > 0) {
       // ackMBps = host-acknowledged bytes / wall time over the watch interval (true throughput); lastMBps = one message's round trip (understates when pipelined)
@@ -93,6 +100,10 @@ memAttach({ transport, writer: w, send }); // [page:mem] probes + timer (--page-
   }
   /** errors reported by the host since creation (max 256). */
   get errors() { return this._s.errors; }
+  /** total host/IPC errors seen (logged or suppressed; nt-frameleak errorLogMax). */
+  get errorCount() { return this._s.errorCount; }
+  /** nt-frameleak census: containers that must stay bounded (transport queue/flight/waiters, pending ack hooks, kept errors, writer capacity). */
+  census() { return { ...this._t.census(), acks: this._rt.acks.length, errs: this._s.errors.length, errN: this._s.errorCount, wrCap: this._rt.w.buf.byteLength }; }
   set onError(fn) { this._s.onError = fn; }
   /** { messages, bytes, maxQueued, lastMs, maxMs, queuedBytes, frames } — IPC diagnostics (wgpuStats). */
   /** backpressure: true while the pipe still holds more than `busyMB` (?nativeBusyMB, default 8) queued or a frame commit is un-acked.

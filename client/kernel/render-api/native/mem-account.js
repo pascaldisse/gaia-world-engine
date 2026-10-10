@@ -4,6 +4,7 @@
 //                               trackBuffer(cat, ArrayBuffer|view)  weak (WeakRef) — live bytes per category, deduped by ArrayBuffer identity
 //                               trackTexture(texture)               weak — textures the render-api sent to the host (material-map textureData choke point)
 // DOM-free at import (headless imports ok). Nothing runs until attachNative()/startMemLog().
+import { leakGuards } from './page-memory.js'; // nt-frameleak
 export const MEM_PARAMS = {
   // single place for tunables (the interval itself is host-owned: --page-mem-ms -> __GAIA_NATIVE__.pageMemMs)
   decodedBytesPerPixel: 4,   // ImageBitmap/HTMLImageElement/canvas: decoded backing estimate = w*h*this (WebKit gives no real size)
@@ -20,13 +21,25 @@ const isBuf = (b) => b instanceof ArrayBuffer || (typeof SharedArrayBuffer !== '
 const bufOf = (a) => (isBuf(a) ? a : ArrayBuffer.isView(a) ? a.buffer : null);
 export function register(name, fn) { probes.set(name, fn); }
 export function unregister(name) { probes.delete(name); }
+// nt-frameleak: EXTRA lines printed after the main one every tick (own 1800-char budget: the main line is already near the cap). registerLine(name, fn) fn() -> flat {key: number|string}.
+const lines = new Map();
+export function registerLine(name, fn) { lines.set(name, fn); }
+export function unregisterLine(name) { lines.delete(name); }
 /** weak: the buffer is counted only while the page still references it. Safe to call per allocation (one WeakRef). */
+// nt-frameleak (page-memory.js memTrackSweepAt): the sets only shed dead WeakRefs inside the periodic probe -> with --page-mem-ms 0 (timer never starts) they grew by one WeakRef per tracked buffer/texture forever.
+// Sweep dead refs inline once a set passes the threshold; the next threshold doubles over the survivors (amortised O(1) per add).
+const sweepAt = new Map();
+function sweepSet(key, set) {
+  const lim = leakGuards.memTrackSweepAt; if (!(lim > 0) || set.size < (sweepAt.get(key) ?? lim)) return;
+  for (const r of set) if (!r.deref()) set.delete(r);
+  sweepAt.set(key, Math.max(lim, set.size * 2));
+}
 export function trackBuffer(cat, a) {
   const b = bufOf(a); if (!b) return;
   let s = bufs.get(cat); if (!s) bufs.set(cat, (s = new Set()));
-  s.add(new WeakRef(b));
+  s.add(new WeakRef(b)); sweepSet(cat, s);
 }
-export function trackTexture(t) { if (t && !texSeen.has(t)) { texSeen.add(t); texRefs.add(new WeakRef(t)); } }
+export function trackTexture(t) { if (t && !texSeen.has(t)) { texSeen.add(t); texRefs.add(new WeakRef(t)); sweepSet('\0tex', texRefs); } }
 // ---- scene walk (once per tick) -------------------------------------------------------------------------------------------------------------------
 const drawableDims = (im) => { const w = im.width ?? im.videoWidth ?? im.displayWidth ?? 0, h = im.height ?? im.videoHeight ?? im.displayHeight ?? 0; return w > 0 && h > 0 ? w * h : 0; };
 function newAcc() {
@@ -146,7 +159,7 @@ function invokeLog(text) {
 /** Start the periodic line. ms defaults to the host's --page-mem-ms (window.__GAIA_NATIVE__.pageMemMs); 0/absent = off. Idempotent. */
 export function startMemLog(ms = globalThis.__GAIA_NATIVE__?.pageMemMs) {
   if (timer || !(ms > 0)) return false;
-  timer = setInterval(() => invokeLog(snapshot().line), ms);
+  timer = setInterval(() => { const t = performance.now(); invokeLog(snapshot(t).line); for (const [n, fn] of lines) { try { invokeLog(`up=${(t / 1000).toFixed(1)}s |${n}${fmt(fn())}`.slice(0, MEM_PARAMS.maxLineChars)); } catch (e) { invokeLog(`up=${(t / 1000).toFixed(1)}s |${n} ERR=${String(e?.message ?? e).slice(0, 80)}`); } } }, ms);
   return true;
 }
 export function stopMemLog() { if (timer) { clearInterval(timer); timer = null; } }

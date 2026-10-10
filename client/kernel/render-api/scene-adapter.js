@@ -18,7 +18,7 @@ const now = () => (typeof performance !== 'undefined' ? performance.now() : Date
 // nt-pagemem (native only; both need backend.pendingBytes / backend.afterUpload, which only the native backend has — browser/wasm behaviour is unchanged):
 //   encodeCapBytes  = writer-side backpressure: no NEW big create (mesh / material textures) is encoded while backend.pendingBytes() (serialized, not host-acked) exceeds this; 0 = off. Default set by page-memory.js encodeCapMB.
 //   releaseSources  = global default for geometry.userData.nativeRelease (drop normal/uv arrays after the host acked the mesh; 'all' also position+index). See docs/NATIVE.md §page-memory.
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0, exportProbe = null, exportDedupe = false } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0, exportProbe = null, exportDedupe = false, exportNearFirst = false } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -43,6 +43,7 @@ const defer = stats.defer = { objects: 0, rebuilds: 0, geometry: 0, materials: 0
 // ---- nt-tslbudget: per-sync TSL export BUDGET (exportBudgetMs>0, native default 8; 0 = unlimited = old behaviour). One TSL export (WGSLNodeBuilder build / rebind + texture reads + createShaderMaterial) is 10-100+ ms; a cell load exported 170 in ONE sync (10 s page stall).
 // Once this sync spent >= exportBudgetMs on exports (and did >= 1: progress guaranteed) every further NEW export is DEFERRED to a later sync, exactly like the encodeCap path: a not-yet-exported material's mesh is simply not created/sent yet (nothing half-built, retried next sync); an already-exported material whose sig changed keeps drawing its OLD package until its re-export fits (sig unchanged => retried).
 let expMs = 0, expN = 0, pendNow = new Set(), pendObjs = 0, pendLast = 0, pendObjsLast = 0;
+let pendObjNow = [], pendObjLast = []; // nt-tslrecipe exportNearFirst: objects whose first export was deferred by the budget (this sync / last sync)
 // ---- nt-exportcost (docs/NATIVE.md §export-cost): per-sync phase timings of the TSL exports, published in the census. params = materialToParams (incl. exportNodeMaterial) · create = createMat (createShaderMaterial: wire encode + texture reads) · tex = pixel-read ms inside this sync (material-map textureReads; a subset of create) · pbr* = NON-TSL materialToParams passes
 // tsl* phase split (pre/setup/key/look/rebind/gen/build) comes from the exporter via exportProbe (tsl-export.js). ad_exports counts EVERY materialToParams pass (PBR + TSL), see census().
 const sy = { params: 0, create: 0, tex0: 0, pbrN: 0, pbrMs: 0, tslN: 0 }, syLast = { params: 0, create: 0, tex: 0, pbrN: 0, pbrMs: 0, tslN: 0, tsl: null }, syTot = { params: 0, create: 0, tex: 0, pbrMs: 0, tslN: 0, pbrN: 0 };
@@ -64,7 +65,7 @@ function dedupeCensus() { // nt-exportcost: how many three materials vs distinct
 function exportCostCensus() { // all numbers (the page:mem census line takes numeric keys only)
   const t = syLast.tsl, o = { expParamsMs: r1(syLast.params), expCreateMs: r1(syLast.create), expTexMs: r1(syLast.tex), expPbrN: syLast.pbrN, expPbrMs: r1(syLast.pbrMs), expTslN: syLast.tslN,
     expTotParamsMs: Math.round(syTot.params), expTotCreateMs: Math.round(syTot.create), expTotTexMs: Math.round(syTot.tex), expTotPbrMs: Math.round(syTot.pbrMs), expTotTsl: syTot.tslN, expTotPbr: syTot.pbrN };
-  if (t) { o.expPreMs = r1(t.preMs); o.expSetupMs = r1(t.setupMs); o.expKeyMs = r1(t.keyMs); o.expLookMs = r1(t.lookMs); o.expRebindMs = r1(t.rebindMs); o.expBuildMs = r1(t.genMs + t.buildMs); o.expHit = t.hits; o.expMiss = t.miss; }
+  if (t) { o.expPreMs = r1(t.preMs); o.expSetupMs = r1(t.setupMs); o.expKeyMs = r1(t.keyMs); o.expLookMs = r1(t.lookMs); o.expRebindMs = r1(t.rebindMs); o.expBuildMs = r1(t.genMs + t.buildMs); o.expRecipeMs = r1(t.recipeMs ?? 0); o.expHit = t.hits; o.expMiss = t.miss; }
   else { o.expPreMs = o.expSetupMs = o.expKeyMs = o.expLookMs = o.expRebindMs = o.expBuildMs = 0; }
   for (const k in pbrWhy) o['why_' + k] = pbrWhy[k];
   return o;
@@ -80,7 +81,21 @@ const wantsNewExport = (m) => !!exportNodeMaterial && !!m?.isNodeMaterial && !ma
 // true = DEFER (budget spent and m needs a first export): recorded in the pending queue census
 function deferNew(m) { if (!overBudget() || !wantsNewExport(m)) return false; stats.exportDeferred++; defer.exports++; pendNow.add(m); pendObjs++; return true; }
 // object-level: any of o's materials needs a first export while the budget is spent -> the whole object waits (no partial rec)
-function exportDefers(o) { if (!overBudget()) return false; const mm = Array.isArray(o.material) ? o.material : [o.material]; let d = false; for (const m of mm) if (m) { const k = matKey(m, o); if (wantsNewExport(k)) { pendNow.add(k); d = true; } } if (d) { stats.exportDeferred++; defer.exports++; pendObjs++; } return d; }
+function exportDefers(o) { if (!overBudget()) return false; const mm = Array.isArray(o.material) ? o.material : [o.material]; let d = false; for (const m of mm) if (m) { const k = matKey(m, o); if (wantsNewExport(k)) { pendNow.add(k); d = true; } } if (d) { stats.exportDeferred++; defer.exports++; pendObjs++; if (exportNearFirst) pendObjNow.push(o); } return d; }
+// nt-tslrecipe exportNearFirst: before the tree walk, retry LAST sync's deferred objects nearest-to-camera first (each export that fits the budget goes to what the player sees first; the tree walk would drain in scene order = pop-in at random distance). Visited non-recursively; the main walk then finds their recs (updateMesh).
+function nearFirstPass() {
+  const cm = frameCamera?.matrixWorld?.elements; if (!cm || pendObjLast.length < 2) return;
+  const cx = cm[12], cy = cm[13], cz = cm[14], list = [];
+  for (const o of pendObjLast) {
+    if (recs.has(o)) continue; let inScene = false, tv = true; for (let a = o.parent; a; a = a.parent) { if (a.visible === false) tv = false; if (a === frameScene) { inScene = true; break; } } if (!inScene) continue;
+    const e = o.matrixWorld.elements, bs = o.geometry?.boundingSphere; let x = e[12], y = e[13], z = e[14], r = 0;
+    if (bs && !o.isSkinnedMesh) { const c = bs.center; x = e[0] * c.x + e[4] * c.y + e[8] * c.z + e[12]; y = e[1] * c.x + e[5] * c.y + e[9] * c.z + e[13]; z = e[2] * c.x + e[6] * c.y + e[10] * c.z + e[14]; r = bs.radius * Math.sqrt(Math.max(e[0] * e[0] + e[1] * e[1] + e[2] * e[2], e[4] * e[4] + e[5] * e[5] + e[6] * e[6], e[8] * e[8] + e[9] * e[9] + e[10] * e[10])); }
+    list.push({ d: Math.hypot(x - cx, y - cy, z - cz) - r, o, tv });
+  }
+  list.sort((a, b) => a.d - b.d); const tmp = new Set(); stats.nearFirstPasses = (stats.nearFirstPasses ?? 0) + 1;
+  for (const it of list) { if (overBudget()) break; visit(it.o, it.tv, tmp, true); }
+}
+
 const gated = () => encodeCapBytes > 0 && typeof backend.pendingBytes === 'function';
 function admit(bytes, kind) {
   if (bytes <= 0 || !gated() || backend.pendingBytes() <= encodeCapBytes) return true;
@@ -772,7 +787,7 @@ function syncBatched(o, vis) {
   if (fb !== r.fbits) { for (const gr of r.groups.values()) if (gr.node) backend.updateNode(gr.node, fl); r.fbits = fb; upd('batchedFlags'); }
 }
 function destroyBatched(r) { for (const gr of r.groups.values()) { if (gr.node) backend.removeNode(gr.node); backend.destroyMesh(gr.mesh); } r.groups.clear(); r.me.users.delete(r); stats.removed++; }
-function visit(o, parentVis, seen) {
+function visit(o, parentVis, seen, noKids = false) {
 const treeVis = parentVis && o.visible !== false; // children inherit this; layers are per OBJECT (three Renderer.js: object.layers.test(camera.layers), no inheritance)
 // r10: three draws (main pass AND shadow pass — ShadowNode adopts camera.layers.mask when the shadow camera sits on layer 0 only) only objects whose layers intersect the camera's. Honour it, else layer-gated helpers (depth-only proxies) draw in the main view.
 const vis = treeVis && (!frameCamera?.layers || !o.layers || o.layers.test(frameCamera.layers) || ((o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) && isShadowOnly(o)));
@@ -785,7 +800,7 @@ else if (o.isPoints) stats.unsupported.add('Points:no-createInstanced')
 else if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh || o.isSkinnedMesh) {
 if (o.isBatchedMesh) { if (backend.createInstanced && backend.updateInstances) { seen.add(o); syncBatched(o, vis); } else stats.unsupported.add('BatchedMesh:no-createInstanced'); }
 else {
-if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (const c of o.children) visit(c, treeVis, seen); return; }
+if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); if (!noKids) for (const c of o.children) visit(c, treeVis, seen); return; }
 if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // backend lacks createSkin/updateSkin/createSkinnedMesh
 seen.add(o);
 let rec = recs.get(o);
@@ -796,7 +811,7 @@ if (!rec) {
 else updateMesh(o, rec, vis);
 }
 }
-for (const c of o.children) visit(c, treeVis, seen);
+if (!noKids) for (const c of o.children) visit(c, treeVis, seen);
 }
 // background: Color -> setBackground (linear, as three's clear colour); Texture/CubeTexture/other -> loud unsupported, clear colour kept. Never throws.
 function syncEnvironment(scene) {
@@ -897,7 +912,7 @@ sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
 bumpLightEpoch(); /* nt-exportcost: scene-light scans are memoised per sync */ { const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
-expMs = 0; expN = 0; pendNow = new Set(); pendObjs = 0; // nt-tslbudget
+expMs = 0; expN = 0; pendNow = new Set(); pendObjs = 0; pendObjNow = []; // nt-tslbudget
 sy.params = sy.create = sy.pbrN = sy.pbrMs = sy.tslN = 0; sy.tex0 = textureReads.ms; exportProbe?.begin(); // nt-exportcost
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) { scene.updateMatrixWorld(true); camera?.updateMatrixWorld?.(); /* r18: sprites billboard against THIS frame's camera */ }
@@ -905,6 +920,7 @@ const t1 = now();
 const seen = new Set();
 amb.sky.fill(0); amb.ground.fill(0); amb.n = 0;
 seen_dirs = [];
+if (exportNearFirst && exportBudgetMs > 0 && exportNodeMaterial) nearFirstPass(); // nt-tslrecipe
 visit(scene, true, seen);
 if (backend.setExtraDirs) syncDirs();
 syncEnvironment(scene);
@@ -917,7 +933,7 @@ for (const [o, r] of pointRecs) if (!seen.has(o)) { destroyPoints(r); pointRecs.
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
 const t3 = now();
-pendLast = pendNow.size; pendObjsLast = pendObjs; stats.exportMsLast = expMs; stats.exportNLast = expN; // nt-tslbudget: queue left over after this sync
+pendLast = pendNow.size; pendObjsLast = pendObjs; pendObjLast = pendObjNow; stats.exportMsLast = expMs; stats.exportNLast = expN; // nt-tslbudget: queue left over after this sync
 { // nt-exportcost: close the sync's phase window (published by census(): ad_exp*Ms = LAST sync, ad_expTot* = cumulative)
   const tex = textureReads.ms - sy.tex0; syLast.params = sy.params; syLast.create = sy.create; syLast.tex = tex; syLast.pbrN = sy.pbrN; syLast.pbrMs = sy.pbrMs; syLast.tslN = sy.tslN; syLast.tsl = sy.tslN ? exportProbe?.delta() ?? null : null;
   syTot.params += sy.params; syTot.create += sy.create; syTot.tex += tex; syTot.pbrMs += sy.pbrMs; syTot.pbrN += sy.pbrN; syTot.tslN += sy.tslN; }

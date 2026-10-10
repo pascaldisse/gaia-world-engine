@@ -1,6 +1,6 @@
 // render-api/material-map.js — three Material → render-api material description. NO three import (duck-typed).
 import { arrayMirror } from './gpu-mirror.js';
-import { readCube } from './env-image.js';
+import { readCube, envConfig } from './env-image.js';
 import { lightRegistry } from './light-registry.js';
 import { trackBuffer as memBuf, trackTexture as memTex } from './native/mem-account.js'; // §page-mem-log
 //   MeshStandard/Physical/Basic/Lambert/Phong-ish → { kind:'pbr', params, textures, sig }  (createMaterial)
@@ -17,11 +17,20 @@ const nodeCache = new WeakMap(); // NodeMaterial → { version, package }
 const texCache = new WeakMap();   // Texture → { version, image, desc }
 const pixelCache = new WeakMap(); // immutable image (ImageBitmap/HTMLImageElement/ImageData) → Uint8Array rgba
 export const textureReads = { count: 0, ms: 0 }; // instrumentation: how many CPU pixel reads happened (proof: idle frame = 0)
-let scratch = null;
+let scratch = null, scratchTimer = null;
+// nt-imgdecode: the shared decode canvas (willReadFrequently = CPU backing, w*h*4 in WebKit malloc) is shrunk to 1x1 scratchIdleMs after the last read, whatever its size
+function scratchIdle() {
+  if (!(mapConfig.scratchIdleMs > 0) || typeof setTimeout === 'undefined') return;
+  if (scratchTimer) clearTimeout(scratchTimer);
+  scratchTimer = setTimeout(() => { scratchTimer = null; if (scratch && (scratch.width > 1 || scratch.height > 1)) { scratch.width = 1; scratch.height = 1; } }, mapConfig.scratchIdleMs);
+  scratchTimer?.unref?.();
+}
 // nt-pagemem (docs/NATIVE.md §page-memory): native mode = the host owns the pixels after upload, so the page must not keep a CPU copy. Defaults = browser behaviour (unchanged);
 // wgpu-present.js calls configureMaterialMap(pageMemConfig(params)) when renderBackend=native (defaults + URL params: native/page-memory.js).
-export const mapConfig = { retainPixels: true, scratchKeepPx: 1 << 20, releaseSources: false, released: 0 };
-export function configureMaterialMap(o = {}) { for (const k of ['retainPixels', 'scratchKeepPx', 'releaseSources']) if (o[k] !== undefined) mapConfig[k] = o[k]; return mapConfig; }
+export const mapConfig = { retainPixels: true, scratchKeepPx: 1 << 20, releaseSources: false, released: 0,
+  // nt-imgdecode (docs/NATIVE.md §image-decode): browser defaults = old behaviour; native/page-memory.js turns them on
+  releaseDecoded: false, detachImages: false, scratchIdleMs: 0, shrinkEnvCanvas: false, releasedDecoded: 0, sharedKeys: 0 };
+export function configureMaterialMap(o = {}) { for (const k of ['retainPixels', 'scratchKeepPx', 'releaseSources', 'releaseDecoded', 'detachImages', 'scratchIdleMs', 'shrinkEnvCanvas']) if (o[k] !== undefined) mapConfig[k] = o[k]; envConfig.shrinkCanvas = !!mapConfig.shrinkEnvCanvas; return mapConfig; }
 const EMPTY_U8 = new Uint8Array(0);
 const releasedTex = new WeakSet(); // textures whose CPU source was dropped after upload (materialSig must still see 'has image')
 const releaseFlag = (t) => (t.userData?.nativeRelease !== undefined ? !!t.userData.nativeRelease : mapConfig.releaseSources);
@@ -48,6 +57,7 @@ function readPixels(im, w, h, keep = true) {
     out = new Uint8Array(c.getImageData(0, 0, w, h).data.buffer);
     if (immutable && keep) pixelCache.set(im, out);
     if (!keep && w * h > mapConfig.scratchKeepPx) { scratch.width = 1; scratch.height = 1; } // frees the CPU backing store of a big decode canvas (re-grown on demand)
+    else scratchIdle();
   }
   if (out) { memBuf('pixelRead', out); textureReads.count++; textureReads.ms += (typeof performance !== 'undefined' ? performance.now() : 0) - t0; }
   return out;

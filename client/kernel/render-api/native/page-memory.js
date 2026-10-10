@@ -17,9 +17,16 @@ export const PAGE_MEM_DEFAULTS = Object.freeze({
   retainPixels: false,    // ?nativeRetainPixels=1  material-map keeps CPU RGBA / mip-chain copies after the host has them (browser behaviour). Native default: do not
   scratchKeepPx: 1 << 20, // ?nativeScratchKeepPx   material-map decode canvas bigger than this many pixels is shrunk to 1x1 after each read (frees the CPU backing store)
   releaseSources: false,  // ?nativeReleaseSrc=1    after the host acked the upload, DROP game-owned CPU sources (geometry arrays, compressed mip data, ImageBitmap) of EVERY texture/geometry; default off: per-object opt-in via userData.nativeRelease (see NATIVE.md)
+  // ---- nt-imgdecode (docs/NATIVE.md §image-decode): WebKit-malloc decode artifacts (ImageBitmap / HTMLImageElement frame cache / canvas backing / blob+Cache refs)
+  releaseDecoded: true,   // ?nativeReleaseDecoded=0  after the host acked an ImageBitmap/HTMLImageElement/cube-face texture: ImageBitmap.close(), Image detached, texture.image -> {width,height} stub (size kept), cube RGBA dropped. Clones sharing the Source reuse the host texture. =0 keeps the decoded image forever (old behaviour)
+  detachImages: true,     // ?nativeDetachImg=0       with releaseDecoded: HTMLImageElement.removeAttribute('src') so WebKit drops its CachedImage client (decoded frame cache) now, not at GC
+  threeCache: false,      // ?nativeThreeCache=1      keep THREE.Cache as the game left it. Default: native mode forces Cache.enabled=false + Cache.clear() (FileLoader would pin every GLB/ArrayBuffer, ImageLoader every Image, ImageBitmapLoader every ImageBitmap/promise)
+  scratchIdleMs: 500,     // ?nativeScratchIdleMs     material-map shared decode canvas is shrunk to 1x1 this long after the last texture read, whatever its size (0 = off; scratchKeepPx still shrinks big ones at once)
+  shrinkEnvCanvas: true,  // ?nativeEnvShrink=0      env-image (scene.background / environment / cube faces) decode canvases are shrunk to 1x1 right after getImageData (they were left to GC)
 });
-export const PAGE_MEM_PARAMS = Object.freeze({ inflight: 'nativeInflight', chunkMB: 'nativeChunkMB', flushMB: 'nativeFlushMB', initialMB: 'nativeInitialMB', busyMB: 'nativeBusyMB', busyMs: 'nativeBusyMs', watchMs: 'nativeWatchMs', writerShrinkMB: 'nativeWriterShrinkMB', coalesceKB: 'nativeCoalesceKB', encodeCapMB: 'nativeEncodeCapMB', retainPixels: 'nativeRetainPixels', scratchKeepPx: 'nativeScratchKeepPx', releaseSources: 'nativeReleaseSrc' });
-const BOOL = new Set(['retainPixels', 'releaseSources']);
+export const PAGE_MEM_PARAMS = Object.freeze({ inflight: 'nativeInflight', chunkMB: 'nativeChunkMB', flushMB: 'nativeFlushMB', initialMB: 'nativeInitialMB', busyMB: 'nativeBusyMB', busyMs: 'nativeBusyMs', watchMs: 'nativeWatchMs', writerShrinkMB: 'nativeWriterShrinkMB', coalesceKB: 'nativeCoalesceKB', encodeCapMB: 'nativeEncodeCapMB', retainPixels: 'nativeRetainPixels', scratchKeepPx: 'nativeScratchKeepPx', releaseSources: 'nativeReleaseSrc',
+  releaseDecoded: 'nativeReleaseDecoded', detachImages: 'nativeDetachImg', threeCache: 'nativeThreeCache', scratchIdleMs: 'nativeScratchIdleMs', shrinkEnvCanvas: 'nativeEnvShrink' });
+const BOOL = new Set(['retainPixels', 'releaseSources', 'releaseDecoded', 'detachImages', 'threeCache', 'shrinkEnvCanvas']);
 /** params = URLSearchParams | null, overrides = plain object (wins over params). Returns { ...defaults, ...params, ...overrides } with bytes helpers. */
 export function pageMemConfig(params = null, overrides = {}) {
   const c = { ...PAGE_MEM_DEFAULTS };

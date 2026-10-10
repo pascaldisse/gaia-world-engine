@@ -19,6 +19,10 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // nt-pagemem: native page-memory policy (defaults + &native* params: native/page-memory.js, docs/NATIVE.md §page-memory). null in the browser = old behaviour everywhere.
   const pm = native ? pageMemConfig(params) : null;
   if (pm) configureMaterialMap(pm);
+  // nt-imgdecode (docs/NATIVE.md §image-decode): three never uploads in native mode, so THREE.Cache (FileLoader ArrayBuffers, ImageLoader Images, ImageBitmapLoader bitmaps) would pin every asset for the page's life. Off + cleared (&nativeThreeCache=1 keeps the game's setting).
+  const st0 = { cacheDisabled: 0, cacheCleared: 0 };
+  const dropThreeCache = () => { const C = THREE?.Cache; if (!pm || pm.threeCache || !C) return; if (C.enabled) { C.enabled = false; st0.cacheDisabled++; } if (C.files && Object.keys(C.files).length) { C.clear(); st0.cacheCleared++; } };
+  dropThreeCache();
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = native ? (await import('./native/gaia-render-native.js')).nativeModule(params) : await import(/* @vite-ignore */ pkg);
   // three has NO device in native mode (renderBackend=native, or wgpu + threeGpu=0): nothing can be written into it, so there is nothing to mirror.
@@ -51,12 +55,13 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)
   const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure, autoExposure: params.get('wgpuAE') !== '0', gtao: params.get('wgpuGtao') !== '0' });
   addEventListener('resize', size);
-  const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
+  const st = Object.assign(st0, { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 });
   return {
     backend, adapter, canvas, stats: st, giBridge, giNative, noThreeGpu, postBridge, tslCache: structCache,
     // one frame: world matrices → adapter diff/push → core render. Replaces renderer.render(scene, camera) / post.render().
     frame() {
       if (backend.gpu?.busy?.()) { st.busySkips = (st.busySkips ?? 0) + 1; return; } // native transport backpressure (GaiaRenderNative.busy): never queue frames faster than the host applies them
+      dropThreeCache(); // the game may re-enable Cache after boot
       const a = performance.now();
       camera.updateMatrixWorld?.();
       adapter.sync(scene, camera);

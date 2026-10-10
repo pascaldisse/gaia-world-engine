@@ -11,6 +11,7 @@ import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX
 import { IDENTITY_MAT4 } from './interface.js';
 import { observeLights } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
+import { leakGuards } from './native/page-memory.js'; // nt-frameleak
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -256,7 +257,8 @@ sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, 
 { const dt = now() - tmp; sub.materialToParams += dt; // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
  const x = stats.exportWhy ??= { newMat: 0, versionBump: 0, sigChange: 0, ms: { newMat: 0, versionBump: 0, sigChange: 0 }, keys: new Map(), log: [] };
  const why = !e ? 'newMat' : (conv.kind === 'wgsl' && e.conv?.kind === 'wgsl' ? 'versionBump' : 'sigChange'); x[why]++; x.ms[why] += dt;
- if (conv.package) { const k = conv.package.vertex.length + ':' + conv.package.fragment.length + ':' + hashStr(conv.package.vertex + conv.package.fragment); const r = x.keys.get(k) ?? { n: 0, ms: 0, name: m.name || m.type }; r.n++; r.ms += dt; x.keys.set(k, r); }
+ // nt-frameleak statsMapMax (page-memory.js): x.keys = one entry per distinct exported WGSL hash; sources that never repeat (per-export ids) grew it forever, + a vertex+fragment concat/hash per export. Capped.
+ if (conv.package && !(leakGuards.statsMapMax > 0 && x.keys.size >= leakGuards.statsMapMax)) { const k = conv.package.vertex.length + ':' + conv.package.fragment.length + ':' + hashStr(conv.package.vertex + conv.package.fragment); const r = x.keys.get(k) ?? { n: 0, ms: 0, name: m.name || m.type }; r.n++; r.ms += dt; x.keys.set(k, r); }
  if (x.log.length < 40) x.log.push({ why, ms: +dt.toFixed(1), name: m.name || m.type, ver: m.version }); }
 if (conv.tslRefused) tslRefuse(m, conv.tslRefused.stage, conv.tslRefused.reason);
 if (conv.unsupported) for (const u of conv.unsupported) stats.unsupported.add(u); // r13-bc: refused/unreadable textures (material-map), recorded not silent
@@ -765,6 +767,8 @@ function destroyExpanded(p) { for (const n of p.expanded) backend.removeNode(n);
 return {
 stats,
 // r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
+/** nt-frameleak census: every adapter-owned container (all must track the LIVE scene, not grow with frames). */
+census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length }; },
 matPkg(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e?.conv?.package ?? null; },
 matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().

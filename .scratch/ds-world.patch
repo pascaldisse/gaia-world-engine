@@ -1,0 +1,44 @@
+--- a/client/ds-world/ffx-runtime.mjs	2026-10-10 14:03:24
++++ b/client/ds-world/ffx-runtime.mjs	2026-10-10 14:03:39
+@@ -11,6 +11,7 @@
+   sizeScale: K(1, 'PORT m per FXR size unit (torch f0000530 sizes 0.01..? unit unresolved; decoder doc §units sets the truth, 1 = take JSON as metres)'),
+   maxParticles: K(6000, 'PORT live particle cap (all effects); spawns beyond are dropped + counted'),
+   batchCapacity: K(2048, 'PORT instances per (texture,blend) InstancedMesh; writes beyond are dropped + counted'),
++  dynamicUpload: K(false, 'PORT lane nt-gpuleak: false (default) = StaticDrawUsage buffers re-uploaded ONLY while the batch has particles (or just emptied). true = old: DynamicDrawUsage on instanceMatrix/instanceColor/instanceOpacity/instanceUv -> three r180 Attributes.update re-writeBuffer()s the WHOLE cap-sized array (2048 x 64 B matrix + 12 B colour = 152 KB per batch) on EVERY render-object use, even with needsUpdate unset (~9 MB/s per batch @60 fps)'),
+   range: K(60, 'PORT m from camera: looping effects beyond this are paused (no sim, no draw)'),
+   maxDt: K(0.05, 'PORT s: sim step clamp (tab stall)'),
+   maxLights: K(4, 'PORT pooled PointLights for emitter.pointLight (0 = none)'),
+@@ -142,8 +143,8 @@
+   function batchFor(tex, blend) {
+     const key = `${texFile(tex)}|${blend}`; let b = batches.get(key); if (b) return b;
+     const cap = k.batchCapacity, geo = new THREE.PlaneGeometry(1, 1);
+-    geo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(new Float32Array(cap).fill(1), 1).setUsage(THREE.DynamicDrawUsage));
+-    geo.setAttribute('instanceUv', new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4).setUsage(THREE.DynamicDrawUsage));
++    geo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(new Float32Array(cap).fill(1), 1)); if (k.dynamicUpload) geo.attributes.instanceOpacity.setUsage(THREE.DynamicDrawUsage);
++    geo.setAttribute('instanceUv', new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4)); if (k.dynamicUpload) geo.attributes.instanceUv.setUsage(THREE.DynamicDrawUsage);
+     const mat = new THREE.MeshBasicMaterial({ transparent: true, blending: THREE[BLEND[blend] ?? 'AdditiveBlending'], depthWrite: false, side: THREE.DoubleSide, fog: false });
+     if (k.shaderPatch) mat.onBeforeCompile = (s) => {
+       s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nattribute float instanceOpacity;\nattribute vec4 instanceUv;\nvarying float vFfxOp;').replace('#include <uv_vertex>', '#include <uv_vertex>\n#ifdef USE_MAP\nvMapUv = vMapUv * instanceUv.zw + instanceUv.xy;\n#endif\nvFfxOp = instanceOpacity;');
+@@ -151,8 +152,8 @@
+     };
+     mat.customProgramCacheKey = () => 'ds-ffx-inst';
+     const mesh = new THREE.InstancedMesh(geo, mat, cap); mesh.name = `ffx:${key}`; mesh.frustumCulled = false; mesh.renderOrder = k.renderOrder; mesh.count = 0;
+-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.setColorAt(0, colr.setRGB(1, 1, 1)); mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+-    b = { key, mesh, geo, mat, n: 0, cap, ready: false }; batches.set(key, b); group.add(mesh); stats.batches = batches.size;
++    mesh.setColorAt(0, colr.setRGB(1, 1, 1)); if (k.dynamicUpload) { mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.instanceColor.setUsage(THREE.DynamicDrawUsage); }
++    b = { key, mesh, geo, mat, n: 0, prevN: 0, cap, ready: false }; batches.set(key, b); group.add(mesh); stats.batches = batches.size;
+     loadTex(tex).then((t) => { if (t) { mat.map = t; mat.needsUpdate = true; b.ready = true; } else stats.missing.add(texFile(tex)); });
+     return b;
+   }
+@@ -307,8 +308,9 @@
+       if (!anyLive) inst.state = 'dead';
+     }
+     for (const b of batches.values()) {
+-      b.mesh.count = b.n; b.mesh.instanceMatrix.needsUpdate = true; if (b.mesh.instanceColor) b.mesh.instanceColor.needsUpdate = true;
+-      b.geo.attributes.instanceOpacity.needsUpdate = true; b.geo.attributes.instanceUv.needsUpdate = true; b.mesh.visible = b.n > 0;
++      const dirty = k.dynamicUpload || b.n > 0 || b.prevN > 0; b.prevN = b.n; // lane nt-gpuleak: idle batch (n == 0 before and after) bumps no version -> no upload
++      b.mesh.count = b.n; if (dirty) { b.mesh.instanceMatrix.needsUpdate = true; if (b.mesh.instanceColor) b.mesh.instanceColor.needsUpdate = true;
++      b.geo.attributes.instanceOpacity.needsUpdate = true; b.geo.attributes.instanceUv.needsUpdate = true; } b.mesh.visible = b.n > 0;
+     }
+   }
+   const swayRotate = (p, ampDeg, r) => { // rotate velocity by U(-amp,amp) deg about a random perpendicular axis (axis law INF)

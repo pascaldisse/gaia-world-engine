@@ -18,6 +18,7 @@ export const AE_DEFAULTS = {
   centerWeight: 0.6,  // 0 = uniform metering, 1 = strong centre (gaussian falloff) — ASSUMED
   lowPct: 0.1,        // weighted percentile clip: ignore darkest 10% of the metered mass (black voids) — ASSUMED
   highPct: 0.9,       // ignore brightest 10% (sun disc / sky / emissive) — ASSUMED
+  readbackReuse: true, // lane nt-gpuleak: three r180 readRenderTargetPixelsAsync (WebGPUTextureUtils.copyTextureToBuffer) createBuffer()s a NEW MAP_READ GPUBuffer per call and never unmap()s/destroy()s it -> one leaked mapped buffer per meter readback (1-3 frame cadence = 20-60/s) until Blink GC finalizes the wrappers (JS heap barely grows -> GC rarely runs). true = ONE persistent 256 B staging buffer reused (serialized by `inflight`); false = three's own method (old behaviour)
 };
 export const resolveAE = (c = {}) => {
   const r = { ...AE_DEFAULTS, ...(c ?? {}) };
@@ -190,9 +191,26 @@ export class AutoExposureRig {
     this.frames = 0;      // meter runs
     this.lagFrames = 0;   // frames between issuing a readback and its arrival (last)
     this._issuedAt = 0;
+    this._stg = null;      // persistent MAP_READ staging GPUBuffer (cfg.readbackReuse)
+    this.stagingCreated = 0;
+  }
+  // lane nt-gpuleak: 1x1 RGBA32F texel -> Float32Array(4) through ONE reused staging buffer (three's readRenderTargetPixelsAsync leaks a mapped buffer per call). Loud throw if three internals moved.
+  async _readReuse() {
+    const be = this.renderer.backend, device = be?.device, tex = be?.get?.(this.meter.final.renderTarget.texture), gpuTex = tex?.texture;
+    if (!device || !gpuTex) throw new Error('AE readbackReuse: renderer.backend.device / texture data missing (three internals moved)');
+    const fmt = tex.textureDescriptorGPU?.format;
+    if (fmt !== 'rgba32float') throw new Error(`AE readbackReuse: meter texture format ${fmt} != rgba32float`);
+    if (!this._stg) { this._stg = device.createBuffer({ label: 'ae_readback_reuse', size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }); this.stagingCreated++; }
+    const enc = device.createCommandEncoder({ label: 'ae_readback_reuse' });
+    enc.copyTextureToBuffer({ texture: gpuTex, origin: { x: 0, y: 0, z: 0 } }, { buffer: this._stg, bytesPerRow: 256 }, { width: 1, height: 1 });
+    device.queue.submit([enc.finish()]);
+    await this._stg.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(this._stg.getMappedRange(0, 16).slice(0));
+    this._stg.unmap();
+    return out;
   }
   get expMul() { return this.ae.expMul; }
-  get state() { return { ...this.ae.state, inflight: this.inflight, errors: this.errors, lag: this.lagFrames, frames: this.frames, cfg: this.cfg }; }
+  get state() { return { ...this.ae.state, inflight: this.inflight, errors: this.errors, lag: this.lagFrames, frames: this.frames, staging: this.stagingCreated, cfg: this.cfg }; }
   configure(cfg) { this.cfg = resolveAE(cfg); this.ae.configure(this.cfg); this.meter.setCfg(this.cfg); }
   // after the post render: reduce + (if none pending) kick an async 1×1 readback. Never awaited => no stall.
   afterRender() {
@@ -202,7 +220,7 @@ export class AutoExposureRig {
       this.frames++;
       if (!this.inflight) {
         this.inflight = true; this._issuedAt = this.frames;
-        const p = this.renderer.readRenderTargetPixelsAsync(this.meter.final.renderTarget, 0, 0, 1, 1);
+        const p = this.cfg.readbackReuse !== false ? this._readReuse() : this.renderer.readRenderTargetPixelsAsync(this.meter.final.renderTarget, 0, 0, 1, 1);
         Promise.resolve(p).then((buf) => {
           this.inflight = false; this.lagFrames = this.frames - this._issuedAt;
           this.ae.ingest(Number(buf[0]));
@@ -211,5 +229,5 @@ export class AutoExposureRig {
     } catch (e) { this.errors++; this.lastError = String(e?.message ?? e); }
   }
   update(dt) { return this.ae.update(dt); }
-  dispose() { this.meter.dispose(); }
+  dispose() { this.meter.dispose(); this._stg?.destroy?.(); this._stg = null; }
 }

@@ -65,6 +65,7 @@ pub struct GameConfig {
     pub pointer_lock_spi: bool,
     pub page_log: String,
     pub page_log_max: u32,
+    pub page_heartbeat_ms: u32,
     pub devtools: bool,
     pub idle_sleep: std::time::Duration,
     pub dry_run: bool,
@@ -152,6 +153,7 @@ impl GameConfig {
         let page_log = get("page-log");
         if !matches!(page_log.as_str(), "off" | "error" | "warn" | "all") { return Err(format!("--page-log must be off|error|warn|all, got {page_log:?}")); }
         let page_log_max = num("page-log-max")? as u32;
+        let page_heartbeat_ms = num("page-heartbeat-ms")? as u32;
         let render_height = num("render-height")? as u32;
         let (w, h) = (num("width")?, num("height")?);
         let fps_cap = num("fps-cap")?;
@@ -170,6 +172,7 @@ impl GameConfig {
             pointer_lock_spi,
             page_log,
             page_log_max,
+            page_heartbeat_ms,
             devtools: flag("devtools")?,
             dry_run: flag("dry-run")?,
             idle_sleep: std::time::Duration::from_secs_f64(num("idle-sleep-ms")?.max(0.0) / 1e3),

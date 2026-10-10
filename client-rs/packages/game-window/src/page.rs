@@ -30,6 +30,12 @@ const TEMPLATE: &str = r#"(() => {
     addEventListener('error', (e) => send('uncaught', `${e.message} @ ${e.filename}:${e.lineno}:${e.colno} ${e.error?.stack ?? ''}`.slice(0, cfg.pageLogMax)));
     addEventListener('unhandledrejection', (e) => send('rejection', fmt([e.reason])));
   }
+  if (cfg.pageHeartbeatMs > 0 && cfg.pageLog !== 'off') { // page liveness -> host log: readyState/visibility/rAF rate/boot stage (window.gaia = main.js done, __wgpu = presenter)
+    let raf = 0; const tick = () => { raf++; requestAnimationFrame(tick); }; requestAnimationFrame(tick);
+    setInterval(() => { const w = window.__wgpu, st = w?.stats ?? w?.st; const n = raf; raf = 0;
+      try { window.__TAURI_INTERNALS__.invoke('gaia_page_log', { level: 'heartbeat', text: `ready=${document.readyState} vis=${document.visibilityState} raf/s=${(n * 1000 / cfg.pageHeartbeatMs).toFixed(1)} gaia=${!!window.gaia} wgpu=${!!w} scene=${window.gaia?.scene?.children?.length ?? '-'} frames=${st?.frames ?? '-'} busySkips=${st?.busySkips ?? 0} heapMB=${performance.memory ? (performance.memory.usedJSHeapSize / 1048576).toFixed(0) : '-'}` }).catch(() => {}); } catch (e) {}
+    }, cfg.pageHeartbeatMs);
+  }
   const api = {
     version: 2,
     renderHeight: cfg.renderHeight, upscaler: cfg.upscaler, pageGpu: cfg.pageGpu,
@@ -47,6 +53,7 @@ pub fn init_script(cfg: &GameConfig, ws: Option<(u16, &str)>) -> String {
         "pageGpu": page_gpu_name(cfg.page_gpu),
         "pageLog": cfg.page_log,
         "pageLogMax": cfg.page_log_max,
+        "pageHeartbeatMs": cfg.page_heartbeat_ms,
         "ws": ws.map(|(port, token)| serde_json::json!({ "port": port, "token": token, "origin": cfg.url.origin().ascii_serialization() })),
     });
     TEMPLATE.replace("__CFG__", &json.to_string())

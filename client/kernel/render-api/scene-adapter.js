@@ -18,7 +18,7 @@ const now = () => (typeof performance !== 'undefined' ? performance.now() : Date
 // nt-pagemem (native only; both need backend.pendingBytes / backend.afterUpload, which only the native backend has — browser/wasm behaviour is unchanged):
 //   encodeCapBytes  = writer-side backpressure: no NEW big create (mesh / material textures) is encoded while backend.pendingBytes() (serialized, not host-acked) exceeds this; 0 = off. Default set by page-memory.js encodeCapMB.
 //   releaseSources  = global default for geometry.userData.nativeRelease (drop normal/uv arrays after the host acked the mesh; 'all' also position+index). See docs/NATIVE.md §page-memory.
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0 } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -40,6 +40,17 @@ if (!(key in tsl.samples)) { tsl.samples[key] = `${m.name || m.type || '?'} (${m
 // admit(bytes, kind): false = the pipe already holds more than encodeCapBytes un-acked -> the caller DEFERS the create (object / rebuild / re-upload retried next sync, nothing half-built, no state recorded).
 // Live pendingBytes() already contains what this sync encoded, so a sync overshoots the cap by at most ONE admitted object. bytes<=0 (everything already on the host) is always admitted.
 const defer = stats.defer = { objects: 0, rebuilds: 0, geometry: 0, materials: 0, skinned: 0, batched: 0, bytes: 0 };
+// ---- nt-tslbudget: per-sync TSL export BUDGET (exportBudgetMs>0, native default 8; 0 = unlimited = old behaviour). One TSL export (WGSLNodeBuilder build / rebind + texture reads + createShaderMaterial) is 10-100+ ms; a cell load exported 170 in ONE sync (10 s page stall).
+// Once this sync spent >= exportBudgetMs on exports (and did >= 1: progress guaranteed) every further NEW export is DEFERRED to a later sync, exactly like the encodeCap path: a not-yet-exported material's mesh is simply not created/sent yet (nothing half-built, retried next sync); an already-exported material whose sig changed keeps drawing its OLD package until its re-export fits (sig unchanged => retried).
+let expMs = 0, expN = 0, pendNow = new Set(), pendObjs = 0, pendLast = 0, pendObjsLast = 0;
+stats.exportDeferred = 0; stats.exportMsLast = 0; stats.exportNLast = 0; defer.exports = 0;
+const overBudget = () => exportBudgetMs > 0 && expN >= 1 && expMs >= exportBudgetMs;
+// would ensureMaterial(m) start a NEW TSL export now? (m = matKey result)
+const wantsNewExport = (m) => !!exportNodeMaterial && !!m?.isNodeMaterial && !mats.has(m) && customNodeMaterial(m);
+// true = DEFER (budget spent and m needs a first export): recorded in the pending queue census
+function deferNew(m) { if (!overBudget() || !wantsNewExport(m)) return false; stats.exportDeferred++; defer.exports++; pendNow.add(m); pendObjs++; return true; }
+// object-level: any of o's materials needs a first export while the budget is spent -> the whole object waits (no partial rec)
+function exportDefers(o) { if (!overBudget()) return false; const mm = Array.isArray(o.material) ? o.material : [o.material]; let d = false; for (const m of mm) if (m) { const k = matKey(m, o); if (wantsNewExport(k)) { pendNow.add(k); d = true; } } if (d) { stats.exportDeferred++; defer.exports++; pendObjs++; } return d; }
 const gated = () => encodeCapBytes > 0 && typeof backend.pendingBytes === 'function';
 function admit(bytes, kind) {
   if (bytes <= 0 || !gated() || backend.pendingBytes() <= encodeCapBytes) return true;
@@ -251,10 +262,12 @@ const sig0 = materialSig(m, { exportNodeMaterial });
 const sigSfx = (anyRecv ? '|rcv' : '') + (sig0.startsWith('wgsl:') ? lightGenSfx : ''); // r15b: a TSL package bakes the scene's light SET at export (LightsNode) -> light add/remove re-exports it (visibility/intensity ride the live uniforms)
 const sig = sig0 + sigSfx;          // cheap string, no params/texture work
 if (e && e.sig === sig) { e.epoch = epoch; if (e.degraded) stats.degraded.add(e.degraded); if (e.conv?.unsupported) for (const u of e.conv.unsupported) stats.unsupported.add(u); return e; } // idle frame: 0 texture work
+const isTsl = sig0.charCodeAt(0) === 119 /* 'wgsl:' */;
+if (e && isTsl && overBudget()) { stats.exportDeferred++; defer.exports++; pendNow.add(m); e.epoch = epoch; return e; } // nt-tslbudget: keep the old package (sig unchanged => retried next sync)
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
 if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
 sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
-{ const dt = now() - tmp; sub.materialToParams += dt; // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
+{ const dt = now() - tmp; sub.materialToParams += dt; if (isTsl) { expMs += dt; expN++; } // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
  const x = stats.exportWhy ??= { newMat: 0, versionBump: 0, sigChange: 0, ms: { newMat: 0, versionBump: 0, sigChange: 0 }, keys: new Map(), log: [] };
  const why = !e ? 'newMat' : (conv.kind === 'wgsl' && e.conv?.kind === 'wgsl' ? 'versionBump' : 'sigChange'); x[why]++; x.ms[why] += dt;
  // nt-frameleak statsMapMax (page-memory.js): x.keys = one entry per distinct exported WGSL hash; sources that never repeat (per-export ids) grew it forever, + a vertex+fragment concat/hash per export. Capped.
@@ -282,6 +295,10 @@ if (backend.drainUnsupported) for (const u of backend.drainUnsupported()) stats.
 return e;
 }
 function createMat(conv, m) {
+if (conv.kind !== 'wgsl' || exportBudgetMs <= 0) return createMat0(conv, m);
+const tc = now(); try { return createMat0(conv, m); } finally { expMs += now() - tc; } // nt-tslbudget: createShaderMaterial (wire encode + texture reads) is part of the export cost
+}
+function createMat0(conv, m) {
 if (conv.kind === 'wgsl') {
   if (backend.createShaderMaterial) {
     try { const id = backend.createShaderMaterial(conv.package); tsl.ok++; if (conv.package.fragment.includes('gaia_sun_shadow')) tsl.shadowReceivers = (tsl.shadowReceivers ?? 0) + 1; return id; }
@@ -472,7 +489,7 @@ const g = o.geometry, sk = o.skeleton, nb = sk?.bones?.length ?? 0;
 if (!g?.attributes?.position || !g.attributes.skinIndex || !g.attributes.skinWeight || !nb) { stats.unsupported.add('SkinnedMesh:no-skin-attributes'); return; }
 let r = skinRecs.get(o);
 const skStale = r && (r.geo !== g || r.ver !== attrVer(g) || r.nb !== nb || r.mref !== o.material);
-if ((!r || skStale) && !admit(g.attributes.position.count * 80 + (g.index ? g.index.count : g.attributes.position.count) * 4 + matCost(matKey(Array.isArray(o.material) ? o.material[0] : o.material, o), new Set()), 'skinned')) return; // nt-pagemem: 80 B/vertex (pos+nrm+uv+joints+weights); pipe over encodeCap -> keep the old skin, retry next sync
+if ((!r || skStale) && (deferNew(matKey(Array.isArray(o.material) ? o.material[0] : o.material, o)) || !admit(g.attributes.position.count * 80 + (g.index ? g.index.count : g.attributes.position.count) * 4 + matCost(matKey(Array.isArray(o.material) ? o.material[0] : o.material, o), new Set()), 'skinned'))) return; // nt-pagemem: 80 B/vertex (pos+nrm+uv+joints+weights); pipe over encodeCap -> keep the old skin, retry next sync
 if (skStale) { destroySkinned(r); r = null; }
 if (!r) {
 const n = g.attributes.position.count, a = (k, w) => { const at = g.attributes[k]; if (!at) return null; if (!at.isInterleavedBufferAttribute && at.itemSize === w && at.array instanceof Float32Array && at.array.length === n * w) return at.array; /* nt-pagemem: no per-component copy of an f32 attribute */ return Float32Array.from({ length: n * w }, (_, i) => at.getComponent(Math.floor(i / w), i % w)); };
@@ -539,6 +556,7 @@ function spriteMatrix(o, out) {
 function syncSprite(o, vis) {
  if (!o.material) return;
  let rec = spriteRecs.get(o);
+ if (deferNew(matKey(o.material, o))) return; // nt-tslbudget
  const me = ensureMaterial(o.material, o);
  if (!spriteMatrix(o, SPRITE_M)) return;
  const mat = Array.from(SPRITE_M), ro = o.renderOrder ?? 0, v = vis && o.material.visible !== false;
@@ -565,6 +583,7 @@ const PT_IDENT = typeof Float32Array !== 'undefined' ? Float32Array.of(1, 0, 0, 
 function syncPoints(o, vis) {
   const g = o.geometry, pos = g?.attributes?.position, m = Array.isArray(o.material) ? o.material[0] : o.material;
   if (!pos || !m || !frameCamera?.matrixWorld) return;
+  if (deferNew(matKey(m, o))) return; // nt-tslbudget
   const cam = frameCamera.matrixWorld.elements, proj = frameCamera.projectionMatrix?.elements ?? [], mw = o.matrixWorld.elements;
   const dr = g.drawRange ?? { start: 0, count: Infinity }, st = Math.max(0, dr.start ?? 0), n = Math.max(0, Math.min(pos.count - st, dr.count ?? Infinity));
   const sa = g.attributes.size, ca = m.vertexColors ? g.attributes.color : null, oa = g.attributes[INST_OPACITY];
@@ -623,6 +642,7 @@ function syncBatched(o, vis) {
   const mat = Array.isArray(o.material) ? o.material[0] : o.material;
   let r = batchRecs.get(o);
   if (r && (r.mref !== mat || r.geo !== o.geometry)) { destroyBatched(r); batchRecs.delete(o); r = null; }
+  if (!r && deferNew(matKey(mat))) return; // nt-tslbudget
   if (!r) { r = { users: null, mref: mat, geo: o.geometry, groups: new Map(), mv: -1, cv: -1, vbits: '', ninfo: -1, fbits: -1, world: new Float64Array(16).fill(NaN), mat }; batchRecs.set(o, r); r.me = ensureMaterial(mat); r.me.users.add(r); stats.created++; }
   ensureMaterial(mat);
   const info = o._instanceInfo, mtex = o._matricesTexture, ctex = o._colorsTexture;
@@ -671,7 +691,7 @@ if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only');
 seen.add(o);
 let rec = recs.get(o);
 if (!rec) {
-  if (admit(recCost(o), 'objects')) { rec = { parts: [], matrix: new Float64Array(16), fbits: 0, fro: 0, dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; rec.mref = o.material; rec.geoRef = o.geometry; }
+  if (!exportDefers(o) && admit(recCost(o), 'objects')) { rec = { parts: [], matrix: new Float64Array(16), fbits: 0, fro: 0, dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; rec.mref = o.material; rec.geoRef = o.geometry; }
   // else: deferred (pipe over encodeCap) — no rec recorded, nothing created; the next sync retries this object (nt-pagemem)
 }
 else updateMesh(o, rec, vis);
@@ -738,7 +758,7 @@ amb.envSig = sig; stats.updated++;
 }
 function updateMesh(o, rec, vis) {
 const gone = rec.geoRef !== o.geometry || rec.dirtyGeo || (rec.mref !== o.material && (Array.isArray(o.material) || Array.isArray(rec.mref)));
-if (gone) { if (!admit(recCost(o), 'rebuilds')) return; /* pipe over encodeCap: old parts keep drawing, retried next sync (nt-pagemem) */ destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; upd('rebuild'); return; }
+if (gone) { if (exportDefers(o) || !admit(recCost(o), 'rebuilds')) return; /* pipe over encodeCap: old parts keep drawing, retried next sync (nt-pagemem) */ destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; upd('rebuild'); return; }
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0, flagsChanged = fb !== rec.fbits || fro !== rec.fro, moved = !eqArr(rec.matrix, o.matrixWorld.elements);
 const f = flagsChanged || o.isInstancedMesh ? nodeFlags(o, vis) : null;
 const single = rec.parts.length === 1 && !Array.isArray(o.material);
@@ -752,7 +772,7 @@ if (!p.gp || (!geoSame(p.geo, p.start, p.count, p.gp.sig) && admit(geoBytes(p.ge
 let u = null;
 if (moved && !o.isInstancedMesh) (u ??= {}).mat4 = Array.from(o.matrixWorld.elements);
 if (flagsChanged) u = Object.assign(u ?? {}, f);
-if (swapped) { const mk2 = matKey(o.material, o), me = ensureMaterial(mk2, o); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = mk2; (u ??= {}).material = me.id; rec.mref = o.material; }
+if (swapped && !deferNew(matKey(o.material, o))) { const mk2 = matKey(o.material, o), me = ensureMaterial(mk2, o); me.users.add(rec); mats.get(p.mat)?.users.delete(rec); p.mat = mk2; (u ??= {}).material = me.id; rec.mref = o.material; }
 if (o.isInstancedMesh) {
 const ic = instVers(o);
 if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instC !== ic) { const pk = packInst(o, p.pk ??= {}, isPremult(p.mat)); backend.updateInstances(p.node, instanceMats(o, p.pk), o.count, o.matrixWorld.elements, pk.colors ?? null, pk.colorStride); if ((pk.uvs || p.hasUv) && backend.setInstanceUvs) { backend.setInstanceUvs(p.node, pk.uvs ?? null); p.hasUv = !!pk.uvs; } p.instV = o.instanceMatrix.version; p.instC = ic; p.instCount = o.count; upd('instances'); }
@@ -770,7 +790,7 @@ return {
 stats,
 // r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
 /** nt-frameleak census: every adapter-owned container (all must track the LIVE scene, not grow with frames). */
-census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length }; },
+census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length, exportDeferred: stats.exportDeferred, expPendMats: pendLast, expPendObjs: pendObjsLast, expMsLast: Math.round(stats.exportMsLast), expNLast: stats.exportNLast }; },
 matPkg(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e?.conv?.package ?? null; },
 matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
@@ -778,6 +798,7 @@ sync(scene, camera = null) {
 const t0 = now();
 skinMs = 0; skinCalls = 0;
 { const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
+expMs = 0; expN = 0; pendNow = new Set(); pendObjs = 0; // nt-tslbudget
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) { scene.updateMatrixWorld(true); camera?.updateMatrixWorld?.(); /* r18: sprites billboard against THIS frame's camera */ }
 const t1 = now();
@@ -796,6 +817,7 @@ for (const [o, r] of pointRecs) if (!seen.has(o)) { destroyPoints(r); pointRecs.
 for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); lights.delete(o); stats.removed++; }
 gc();
 const t3 = now();
+pendLast = pendNow.size; pendObjsLast = pendObjs; stats.exportMsLast = expMs; stats.exportNLast = expN; // nt-tslbudget: queue left over after this sync
 syncLiveUniforms();
 if (camera) {
 if (updateMatrices) camera.updateMatrixWorld?.();

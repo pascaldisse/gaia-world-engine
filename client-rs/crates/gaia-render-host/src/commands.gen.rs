@@ -3,10 +3,10 @@
 use crate::wire::{DecodeError, Reader};
 
 /// FNV-1a over the canonical op signatures: the JS proxy sends it in HELLO; a mismatch refuses the stream.
-pub const API_HASH: u32 = 0xfcbc19dd;
+pub const API_HASH: u32 = 0x97cbae0a;
 /// Wire opcode of the frame-commit command (JS `render()`).
-pub const OP_FRAME_COMMIT: u16 = 84;
-pub const OP_COUNT: u16 = 84;
+pub const OP_FRAME_COMMIT: u16 = 85;
+pub const OP_COUNT: u16 = 85;
 
 pub type CmdResult = Result<(), String>;
 
@@ -108,83 +108,87 @@ pub trait Commands {
     fn set_instance_block_flags(&mut self, id: u32, cast_shadow: bool, is_static: bool) -> CmdResult;
     /// op 48 · JS `setInstanceBlockShadowOnly`
     fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) -> CmdResult;
-    /// op 49 · JS `removeInstanceBlock`
+    /// op 49 · JS `setInstanceBlockDynamic`
+    fn set_instance_block_dynamic(&mut self, id: u32, mode: u32) -> CmdResult;
+    /// op 50 · JS `removeInstanceBlock`
     fn remove_instance_block(&mut self, id: u32) -> CmdResult;
-    /// op 50 · JS `setInstanceStatic`
+    /// op 51 · JS `setInstanceStatic`
     fn set_instance_static(&mut self, id: u32, is_static: bool) -> CmdResult;
-    /// op 51 · JS `setInstanceGroups`
+    /// op 52 · JS `setInstanceGroups`
     fn set_instance_groups(&mut self, id: u32, words: &[u32]) -> CmdResult;
-    /// op 52 · JS `setInstanceGroupParent`
+    /// op 53 · JS `setInstanceGroupParent`
     fn set_instance_group_parent(&mut self, id: u32, parent: u32) -> CmdResult;
-    /// op 53 · JS `setActiveGroups`
+    /// op 54 · JS `setActiveGroups`
     fn set_active_groups(&mut self, words: &[u32]) -> CmdResult;
-    /// op 54 · JS `clearActiveGroups`
+    /// op 55 · JS `clearActiveGroups`
     fn clear_active_groups(&mut self) -> CmdResult;
-    /// op 55 · JS `setInstanceShadowOnly`
+    /// op 56 · JS `setInstanceShadowOnly`
     fn set_instance_shadow_only(&mut self, id: u32, only: bool) -> CmdResult;
-    /// op 56 · JS `setInstanceCastShadow`
+    /// op 57 · JS `setInstanceCastShadow`
     fn set_instance_cast_shadow(&mut self, id: u32, cast: bool) -> CmdResult;
-    /// op 57 · JS `setShadowOptions`
+    /// op 58 · JS `setShadowOptions`
     fn set_shadow_options(&mut self, opts: &serde_json::Value) -> CmdResult;
-    /// op 58 · JS `setCamera`
+    /// op 59 · JS `setCamera`
     fn set_camera(&mut self, world: &[f32], yfov: f32, znear: f32, zfar: f32) -> CmdResult;
-    /// op 59 · JS `setSun`
+    /// op 60 · JS `setSun`
     fn set_sun(&mut self, direction: &[f32], color: &[f32], intensity: f32) -> CmdResult;
-    /// op 60 · JS `setHemisphereIrradiance`
+    /// op 61 · JS `setHemisphereIrradiance`
     fn set_hemisphere_irradiance(&mut self, sky: &[f32], ground: &[f32]) -> CmdResult;
-    /// op 61 · JS `setGiProbes`
+    /// op 62 · JS `setGiProbes`
     fn set_gi_probes(&mut self, irradiance: &[f32], depth: &[f32], params: &[f32]) -> CmdResult;
-    /// op 62 · JS `clearGiProbes`
+    /// op 63 · JS `clearGiProbes`
     fn clear_gi_probes(&mut self) -> CmdResult;
-    /// op 63 · JS `giComputeInit`
+    /// op 64 · JS `giComputeInit`
     fn gi_compute_init(&mut self, cfg_json: &str) -> CmdResult;
-    /// op 64 · JS `giComputeVoxels`
+    /// op 65 · JS `giComputeVoxels`
     fn gi_compute_voxels(&mut self, start: u32, words: &[u32]) -> CmdResult;
-    /// op 65 · JS `giComputeStep`
+    /// op 66 · JS `giComputeStep`
     fn gi_compute_step(&mut self, frame: &[f32], fresh: &[u32]) -> CmdResult;
-    /// op 66 · JS `giComputeDestroy`
+    /// op 67 · JS `giComputeDestroy`
     fn gi_compute_destroy(&mut self) -> CmdResult;
-    /// op 67 · JS `setFog`
+    /// op 68 · JS `setFog`
     fn set_fog(&mut self, mode: u32, color: &[f32], near: f32, far: f32, density: f32) -> CmdResult;
-    /// op 68 · JS `setEnvironmentSh`
+    /// op 69 · JS `setEnvironmentSh`
     fn set_environment_sh(&mut self, sh: &[f32], intensity: f32) -> CmdResult;
-    /// op 69 · JS `clearEnvironment`
+    /// op 70 · JS `clearEnvironment`
     fn clear_environment(&mut self) -> CmdResult;
-    /// op 70 · JS `setBackgroundCube`
+    /// op 71 · JS `setBackgroundCube`
     fn set_background_cube(&mut self, size: u32, faces: &[u8], srgb: bool, intensity: f32) -> CmdResult;
-    /// op 71 · JS `setBackgroundTexture`
+    /// op 72 · JS `setBackgroundTexture`
     fn set_background_texture(&mut self, width: u32, height: u32, rgba: &[u8], srgb: bool, equirect: bool, intensity: f32) -> CmdResult;
-    /// op 72 · JS `clearBackgroundTexture`
+    /// op 73 · JS `clearBackgroundTexture`
     fn clear_background_texture(&mut self) -> CmdResult;
-    /// op 73 · JS `setToneMapping`
+    /// op 74 · JS `setToneMapping`
     fn set_tone_mapping(&mut self, mode: u32) -> CmdResult;
-    /// op 74 · JS `setExposure`
+    /// op 75 · JS `setExposure`
     fn set_exposure(&mut self, e: f32) -> CmdResult;
-    /// op 75 · JS `setBloom`
+    /// op 76 · JS `setBloom`
     fn set_bloom(&mut self, strength: f32, radius: f32, threshold: f32, smooth_width: f32) -> CmdResult;
-    /// op 76 · JS `setGtao`
+    /// op 77 · JS `setGtao`
     fn set_gtao(&mut self, on: bool, radius: f32, thickness: f32, samples: f32, distance_exponent: f32, distance_fall_off: f32, scale: f32, resolution_scale: f32, intensity: f32, fade_start: f32, fade_end: f32) -> CmdResult;
-    /// op 77 · JS `setColorGrade`
+    /// op 78 · JS `setColorGrade`
     fn set_color_grade(&mut self, m: &[f32]) -> CmdResult;
-    /// op 78 · JS `setAutoExposure`
+    /// op 79 · JS `setAutoExposure`
     fn set_auto_exposure(&mut self, on: bool, mul: f32) -> CmdResult;
-    /// op 79 · JS `setBackgroundColor`
+    /// op 80 · JS `setBackgroundColor`
     fn set_background_color(&mut self, rgb: &[f32]) -> CmdResult;
-    /// op 80 · JS `setClearColor`
+    /// op 81 · JS `setClearColor`
     fn set_clear_color(&mut self, rgba: &[f32]) -> CmdResult;
-    /// op 81 · JS `setPointLights`
+    /// op 82 · JS `setPointLights`
     fn set_point_lights(&mut self, packed: &[f32]) -> CmdResult;
-    /// op 82 · JS `setExtraDirs`
+    /// op 83 · JS `setExtraDirs`
     fn set_extra_dirs(&mut self, packed: &[f32]) -> CmdResult;
-    /// op 83 · JS `setRenderHeight`
+    /// op 84 · JS `setRenderHeight`
     fn set_render_height(&mut self, h: u32) -> CmdResult;
-    /// op 84 · JS `render`
+    /// op 85 · JS `render`
     fn frame_commit(&mut self) -> CmdResult;
     // ---- queries (read once per frame commit into the report; JS getters serve the cached value) ----
     /// JS `compressedStats`
     fn compressed_stats(&mut self) -> serde_json::Value;
     /// JS `threeSkipped`
     fn three_skipped(&mut self) -> serde_json::Value;
+    /// JS `dynBlockStats`
+    fn dyn_block_stats(&mut self) -> serde_json::Value;
     /// JS `drawnInstanceCount`
     fn drawn_instance_count(&mut self) -> serde_json::Value;
     /// JS `instanceCount`
@@ -259,42 +263,43 @@ pub fn op_name(op: u16) -> &'static str {
         46 => "setInstanceBlockUvs",
         47 => "setInstanceBlockFlags",
         48 => "setInstanceBlockShadowOnly",
-        49 => "removeInstanceBlock",
-        50 => "setInstanceStatic",
-        51 => "setInstanceGroups",
-        52 => "setInstanceGroupParent",
-        53 => "setActiveGroups",
-        54 => "clearActiveGroups",
-        55 => "setInstanceShadowOnly",
-        56 => "setInstanceCastShadow",
-        57 => "setShadowOptions",
-        58 => "setCamera",
-        59 => "setSun",
-        60 => "setHemisphereIrradiance",
-        61 => "setGiProbes",
-        62 => "clearGiProbes",
-        63 => "giComputeInit",
-        64 => "giComputeVoxels",
-        65 => "giComputeStep",
-        66 => "giComputeDestroy",
-        67 => "setFog",
-        68 => "setEnvironmentSh",
-        69 => "clearEnvironment",
-        70 => "setBackgroundCube",
-        71 => "setBackgroundTexture",
-        72 => "clearBackgroundTexture",
-        73 => "setToneMapping",
-        74 => "setExposure",
-        75 => "setBloom",
-        76 => "setGtao",
-        77 => "setColorGrade",
-        78 => "setAutoExposure",
-        79 => "setBackgroundColor",
-        80 => "setClearColor",
-        81 => "setPointLights",
-        82 => "setExtraDirs",
-        83 => "setRenderHeight",
-        84 => "render",
+        49 => "setInstanceBlockDynamic",
+        50 => "removeInstanceBlock",
+        51 => "setInstanceStatic",
+        52 => "setInstanceGroups",
+        53 => "setInstanceGroupParent",
+        54 => "setActiveGroups",
+        55 => "clearActiveGroups",
+        56 => "setInstanceShadowOnly",
+        57 => "setInstanceCastShadow",
+        58 => "setShadowOptions",
+        59 => "setCamera",
+        60 => "setSun",
+        61 => "setHemisphereIrradiance",
+        62 => "setGiProbes",
+        63 => "clearGiProbes",
+        64 => "giComputeInit",
+        65 => "giComputeVoxels",
+        66 => "giComputeStep",
+        67 => "giComputeDestroy",
+        68 => "setFog",
+        69 => "setEnvironmentSh",
+        70 => "clearEnvironment",
+        71 => "setBackgroundCube",
+        72 => "setBackgroundTexture",
+        73 => "clearBackgroundTexture",
+        74 => "setToneMapping",
+        75 => "setExposure",
+        76 => "setBloom",
+        77 => "setGtao",
+        78 => "setColorGrade",
+        79 => "setAutoExposure",
+        80 => "setBackgroundColor",
+        81 => "setClearColor",
+        82 => "setPointLights",
+        83 => "setExtraDirs",
+        84 => "setRenderHeight",
+        85 => "render",
         _ => "?",
     }
 }
@@ -613,89 +618,94 @@ pub fn dispatch<C: Commands + ?Sized>(c: &mut C, op: u16, r: &mut Reader<'_>) ->
         }
         49 => {
             let id = r.u32()?;
-            Dispatched { id: 0, result: c.remove_instance_block(id) }
+            let mode = r.u32()?;
+            Dispatched { id: 0, result: c.set_instance_block_dynamic(id, mode) }
         }
         50 => {
+            let id = r.u32()?;
+            Dispatched { id: 0, result: c.remove_instance_block(id) }
+        }
+        51 => {
             let id = r.u32()?;
             let is_static = r.bool()?;
             Dispatched { id: 0, result: c.set_instance_static(id, is_static) }
         }
-        51 => {
+        52 => {
             let id = r.u32()?;
             let words = r.u32s()?;
             Dispatched { id: 0, result: c.set_instance_groups(id, &words) }
         }
-        52 => {
+        53 => {
             let id = r.u32()?;
             let parent = r.u32()?;
             Dispatched { id: 0, result: c.set_instance_group_parent(id, parent) }
         }
-        53 => {
+        54 => {
             let words = r.u32s()?;
             Dispatched { id: 0, result: c.set_active_groups(&words) }
         }
-        54 => {
+        55 => {
             Dispatched { id: 0, result: c.clear_active_groups() }
         }
-        55 => {
+        56 => {
             let id = r.u32()?;
             let only = r.bool()?;
             Dispatched { id: 0, result: c.set_instance_shadow_only(id, only) }
         }
-        56 => {
+        57 => {
             let id = r.u32()?;
             let cast = r.bool()?;
             Dispatched { id: 0, result: c.set_instance_cast_shadow(id, cast) }
         }
-        57 => {
+        58 => {
             let opts = r.json()?;
             Dispatched { id: 0, result: c.set_shadow_options(&opts) }
         }
-        58 => {
+        59 => {
             let world = r.f32s()?;
             let yfov = r.f32()?;
             let znear = r.f32()?;
             let zfar = r.f32()?;
             Dispatched { id: 0, result: c.set_camera(&world, yfov, znear, zfar) }
         }
-        59 => {
+        60 => {
             let direction = r.f32s()?;
             let color = r.f32s()?;
             let intensity = r.f32()?;
             Dispatched { id: 0, result: c.set_sun(&direction, &color, intensity) }
         }
-        60 => {
+        61 => {
             let sky = r.f32s()?;
             let ground = r.f32s()?;
             Dispatched { id: 0, result: c.set_hemisphere_irradiance(&sky, &ground) }
         }
-        61 => {
+        62 => {
             let irradiance = r.f32s()?;
             let depth = r.f32s()?;
             let params = r.f32s()?;
             Dispatched { id: 0, result: c.set_gi_probes(&irradiance, &depth, &params) }
         }
-        62 => {
+        63 => {
             Dispatched { id: 0, result: c.clear_gi_probes() }
         }
-        63 => {
+        64 => {
             let cfg_json = r.str()?;
             Dispatched { id: 0, result: c.gi_compute_init(cfg_json) }
         }
-        64 => {
+        65 => {
             let start = r.u32()?;
             let words = r.u32s()?;
             Dispatched { id: 0, result: c.gi_compute_voxels(start, &words) }
         }
-        65 => {
+        66 => {
             let frame = r.f32s()?;
             let fresh = r.u32s()?;
             Dispatched { id: 0, result: c.gi_compute_step(&frame, &fresh) }
         }
-        66 => {
+        67 => {
             Dispatched { id: 0, result: c.gi_compute_destroy() }
         }
-        67 => {
+        68 => {
             let mode = r.u32()?;
             let color = r.f32s()?;
             let near = r.f32()?;
@@ -703,22 +713,22 @@ pub fn dispatch<C: Commands + ?Sized>(c: &mut C, op: u16, r: &mut Reader<'_>) ->
             let density = r.f32()?;
             Dispatched { id: 0, result: c.set_fog(mode, &color, near, far, density) }
         }
-        68 => {
+        69 => {
             let sh = r.f32s()?;
             let intensity = r.f32()?;
             Dispatched { id: 0, result: c.set_environment_sh(&sh, intensity) }
         }
-        69 => {
+        70 => {
             Dispatched { id: 0, result: c.clear_environment() }
         }
-        70 => {
+        71 => {
             let size = r.u32()?;
             let faces = r.u8s()?;
             let srgb = r.bool()?;
             let intensity = r.f32()?;
             Dispatched { id: 0, result: c.set_background_cube(size, &faces, srgb, intensity) }
         }
-        71 => {
+        72 => {
             let width = r.u32()?;
             let height = r.u32()?;
             let rgba = r.u8s()?;
@@ -727,25 +737,25 @@ pub fn dispatch<C: Commands + ?Sized>(c: &mut C, op: u16, r: &mut Reader<'_>) ->
             let intensity = r.f32()?;
             Dispatched { id: 0, result: c.set_background_texture(width, height, &rgba, srgb, equirect, intensity) }
         }
-        72 => {
+        73 => {
             Dispatched { id: 0, result: c.clear_background_texture() }
         }
-        73 => {
+        74 => {
             let mode = r.u32()?;
             Dispatched { id: 0, result: c.set_tone_mapping(mode) }
         }
-        74 => {
+        75 => {
             let e = r.f32()?;
             Dispatched { id: 0, result: c.set_exposure(e) }
         }
-        75 => {
+        76 => {
             let strength = r.f32()?;
             let radius = r.f32()?;
             let threshold = r.f32()?;
             let smooth_width = r.f32()?;
             Dispatched { id: 0, result: c.set_bloom(strength, radius, threshold, smooth_width) }
         }
-        76 => {
+        77 => {
             let on = r.bool()?;
             let radius = r.f32()?;
             let thickness = r.f32()?;
@@ -759,36 +769,36 @@ pub fn dispatch<C: Commands + ?Sized>(c: &mut C, op: u16, r: &mut Reader<'_>) ->
             let fade_end = r.f32()?;
             Dispatched { id: 0, result: c.set_gtao(on, radius, thickness, samples, distance_exponent, distance_fall_off, scale, resolution_scale, intensity, fade_start, fade_end) }
         }
-        77 => {
+        78 => {
             let m = r.f32s()?;
             Dispatched { id: 0, result: c.set_color_grade(&m) }
         }
-        78 => {
+        79 => {
             let on = r.bool()?;
             let mul = r.f32()?;
             Dispatched { id: 0, result: c.set_auto_exposure(on, mul) }
         }
-        79 => {
+        80 => {
             let rgb = r.f32s()?;
             Dispatched { id: 0, result: c.set_background_color(&rgb) }
         }
-        80 => {
+        81 => {
             let rgba = r.f32s()?;
             Dispatched { id: 0, result: c.set_clear_color(&rgba) }
         }
-        81 => {
+        82 => {
             let packed = r.f32s()?;
             Dispatched { id: 0, result: c.set_point_lights(&packed) }
         }
-        82 => {
+        83 => {
             let packed = r.f32s()?;
             Dispatched { id: 0, result: c.set_extra_dirs(&packed) }
         }
-        83 => {
+        84 => {
             let h = r.u32()?;
             Dispatched { id: 0, result: c.set_render_height(h) }
         }
-        84 => {
+        85 => {
             Dispatched { id: 0, result: c.frame_commit() }
         }
         _ => return Err(DecodeError::UnknownOp(op)),
@@ -800,6 +810,7 @@ pub fn collect_queries<C: Commands + ?Sized>(c: &mut C) -> serde_json::Map<Strin
     let mut m = serde_json::Map::new();
     m.insert("compressedStats".into(), c.compressed_stats());
     m.insert("threeSkipped".into(), c.three_skipped());
+    m.insert("dynBlockStats".into(), c.dyn_block_stats());
     m.insert("drawnInstanceCount".into(), c.drawn_instance_count());
     m.insert("instanceCount".into(), c.instance_count());
     m.insert("lastGroupHidden".into(), c.last_group_hidden());

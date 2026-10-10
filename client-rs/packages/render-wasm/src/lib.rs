@@ -391,6 +391,16 @@ impl GaiaRender {
     pub fn set_instance_block_shadow_only(&mut self, id: u32, only: bool) {
         let _ = self.s.set_instance_block_shadow_only(id, only);
     }
+    /// lane nt-dyninst: explicit dynamic-path hint for a block (three `DynamicDrawUsage`): 0 = auto (update-streak promotion), 1 = dynamic, 2 = static.
+    #[wasm_bindgen(js_name = setInstanceBlockDynamic)]
+    pub fn set_instance_block_dynamic(&mut self, id: u32, mode: u32) {
+        let _ = self.s.set_instance_block_dynamic(id, mode);
+    }
+    /// lane nt-dyninst: [dynamic blocks, dynamic instances, bytes written last frame, dyn buffer allocs (cum), world-list rebuilds (cum), promotions (cum), demotions (cum)].
+    #[wasm_bindgen(js_name = dynBlockStats)]
+    pub fn dyn_block_stats(&self) -> Vec<u32> {
+        self.s.core.dyn_block_stats_vec()
+    }
     #[wasm_bindgen(js_name = removeInstanceBlock)]
     pub fn remove_instance_block(&mut self, id: u32) {
         let _ = self.s.remove_instance_block(id);

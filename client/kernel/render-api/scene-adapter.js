@@ -7,7 +7,7 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS, releaseTextureImage } from './material-map.js';
+import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS, releaseTextureImage, textureReads } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
 import { observeLights } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
@@ -18,7 +18,7 @@ const now = () => (typeof performance !== 'undefined' ? performance.now() : Date
 // nt-pagemem (native only; both need backend.pendingBytes / backend.afterUpload, which only the native backend has — browser/wasm behaviour is unchanged):
 //   encodeCapBytes  = writer-side backpressure: no NEW big create (mesh / material textures) is encoded while backend.pendingBytes() (serialized, not host-acked) exceeds this; 0 = off. Default set by page-memory.js encodeCapMB.
 //   releaseSources  = global default for geometry.userData.nativeRelease (drop normal/uv arrays after the host acked the mesh; 'all' also position+index). See docs/NATIVE.md §page-memory.
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0 } = {}) {
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false, exportBudgetMs = 0, exportProbe = null } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -43,6 +43,32 @@ const defer = stats.defer = { objects: 0, rebuilds: 0, geometry: 0, materials: 0
 // ---- nt-tslbudget: per-sync TSL export BUDGET (exportBudgetMs>0, native default 8; 0 = unlimited = old behaviour). One TSL export (WGSLNodeBuilder build / rebind + texture reads + createShaderMaterial) is 10-100+ ms; a cell load exported 170 in ONE sync (10 s page stall).
 // Once this sync spent >= exportBudgetMs on exports (and did >= 1: progress guaranteed) every further NEW export is DEFERRED to a later sync, exactly like the encodeCap path: a not-yet-exported material's mesh is simply not created/sent yet (nothing half-built, retried next sync); an already-exported material whose sig changed keeps drawing its OLD package until its re-export fits (sig unchanged => retried).
 let expMs = 0, expN = 0, pendNow = new Set(), pendObjs = 0, pendLast = 0, pendObjsLast = 0;
+// ---- nt-exportcost (docs/NATIVE.md §export-cost): per-sync phase timings of the TSL exports, published in the census. params = materialToParams (incl. exportNodeMaterial) · create = createMat (createShaderMaterial: wire encode + texture reads) · tex = pixel-read ms inside this sync (material-map textureReads; a subset of create) · pbr* = NON-TSL materialToParams passes
+// tsl* phase split (pre/setup/key/look/rebind/gen/build) comes from the exporter via exportProbe (tsl-export.js). ad_exports counts EVERY materialToParams pass (PBR + TSL), see census().
+const sy = { params: 0, create: 0, tex0: 0, pbrN: 0, pbrMs: 0, tslN: 0 }, syLast = { params: 0, create: 0, tex: 0, pbrN: 0, pbrMs: 0, tslN: 0, tsl: null }, syTot = { params: 0, create: 0, tex: 0, pbrMs: 0, tslN: 0, pbrN: 0 };
+const pbrWhy = {}; let pbrWhyLogged = 0; // why a NON-TSL / TSL material re-exported: first differing sig field -> count (census why_<field>)
+const SIGF = ['color', 'opacity', 'transparent', 'side', 'flat', 'rough', 'metal', 'emissive', 'emInt', 'alphaTest', 'visible', 'blending', 'blendSrc', 'blendDst', 'premult', 'toneMapped', 'wire', 'depthWrite', 'depthTest', 'colorWrite', 'clearcoat', 'ccRough', 'transmission', 'ior', 'thickness', 'sheen', 'iridescence', 'preset', 'fog', 'chr']; // order of materialSig's pbr: fields
+function sigDiff(a, b) {
+  const x = a.split('|'), y = b.split('|'), n = Math.max(x.length, y.length); let i = 0; while (i < n && x[i] === y[i]) i++;
+  let name;
+  if (a.charCodeAt(0) === 119) name = i === 0 ? 'tslVer' : (x[i] ?? y[i]) === 'rcv' || (y[i] ?? x[i]) === 'rcv' ? 'tslRcv' : 'tslLight';
+  else if (i < SIGF.length) name = SIGF[i];
+  else { const tk = (y[i] ?? x[i]) ?? ''; const sl = tk.split(':'); name = TEX_SLOTS.includes(sl[0]) ? sl[0] + ((x[i] ?? '').split(':')[1] === sl[1] ? '_ver' : '_tex') : 'sfx'; }
+  return { name, a: x[i], b: y[i] };
+}
+const r1 = (x) => Math.round(x * 10) / 10;
+function exportCostCensus() { // all numbers (the page:mem census line takes numeric keys only)
+  const t = syLast.tsl, o = { expParamsMs: r1(syLast.params), expCreateMs: r1(syLast.create), expTexMs: r1(syLast.tex), expPbrN: syLast.pbrN, expPbrMs: r1(syLast.pbrMs), expTslN: syLast.tslN,
+    expTotParamsMs: Math.round(syTot.params), expTotCreateMs: Math.round(syTot.create), expTotTexMs: Math.round(syTot.tex), expTotPbrMs: Math.round(syTot.pbrMs), expTotTsl: syTot.tslN, expTotPbr: syTot.pbrN };
+  if (t) { o.expPreMs = r1(t.preMs); o.expSetupMs = r1(t.setupMs); o.expKeyMs = r1(t.keyMs); o.expLookMs = r1(t.lookMs); o.expRebindMs = r1(t.rebindMs); o.expBuildMs = r1(t.genMs + t.buildMs); o.expHit = t.hits; o.expMiss = t.miss; }
+  else { o.expPreMs = o.expSetupMs = o.expKeyMs = o.expLookMs = o.expRebindMs = o.expBuildMs = 0; }
+  for (const k in pbrWhy) o['why_' + k] = pbrWhy[k];
+  return o;
+}
+function noteWhy(e, sig, isTsl) {
+  if (!e) return; const d = sigDiff(e.sig, sig); const k = Object.keys(pbrWhy).length >= 32 && !(d.name in pbrWhy) ? 'other' : d.name; pbrWhy[k] = (pbrWhy[k] ?? 0) + 1;
+  if (pbrWhyLogged < 12) { pbrWhyLogged++; console.log(`[export-why] ${isTsl ? 'tsl' : 'pbr'} ${k}: ${String(d.a).slice(0, 60)} -> ${String(d.b).slice(0, 60)}`); }
+}
 stats.exportDeferred = 0; stats.exportMsLast = 0; stats.exportNLast = 0; defer.exports = 0;
 const overBudget = () => exportBudgetMs > 0 && expN >= 1 && expMs >= exportBudgetMs;
 // would ensureMaterial(m) start a NEW TSL export now? (m = matKey result)
@@ -266,8 +292,8 @@ const isTsl = sig0.charCodeAt(0) === 119 /* 'wgsl:' */;
 if (e && isTsl && overBudget()) { stats.exportDeferred++; defer.exports++; pendNow.add(m); e.epoch = epoch; return e; } // nt-tslbudget: keep the old package (sig unchanged => retried next sync)
 const exportCtx = o ? (o.isInstancedMesh || o.isSkinnedMesh || o.isBatchedMesh || (anyRecv && !o.receiveShadow) ? { geometry: o.geometry } : { object: o }) : {};
 if (o) { exportCtx.receiveShadow = anyRecv || !!o.receiveShadow; exportCtx.castShadow = !!o.castShadow; }
-sub.exportCalls++; const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
-{ const dt = now() - tmp; sub.materialToParams += dt; if (isTsl) { expMs += dt; expN++; } // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
+sub.exportCalls++; if (!e || e.sig !== sig) noteWhy(e, sig, isTsl); const tmp = now(); const conv = materialToParams(m, { three, exportNodeMaterial, tslOptions: { ...tslOptions, ...exportCtx, scene: frameScene, camera: frameCamera ?? tslOptions.camera } });
+{ const dt = now() - tmp; sub.materialToParams += dt; sy.params += dt; if (isTsl) { expMs += dt; expN++; sy.tslN++; } else { sy.pbrN++; sy.pbrMs += dt; } // r10-2 counters: why did this export run? (newMat / versionBump = same material, version moved / sigChange) + structural key = hash of generated WGSL
  const x = stats.exportWhy ??= { newMat: 0, versionBump: 0, sigChange: 0, ms: { newMat: 0, versionBump: 0, sigChange: 0 }, keys: new Map(), log: [] };
  const why = !e ? 'newMat' : (conv.kind === 'wgsl' && e.conv?.kind === 'wgsl' ? 'versionBump' : 'sigChange'); x[why]++; x.ms[why] += dt;
  // nt-frameleak statsMapMax (page-memory.js): x.keys = one entry per distinct exported WGSL hash; sources that never repeat (per-export ids) grew it forever, + a vertex+fragment concat/hash per export. Capped.
@@ -295,8 +321,8 @@ if (backend.drainUnsupported) for (const u of backend.drainUnsupported()) stats.
 return e;
 }
 function createMat(conv, m) {
-if (conv.kind !== 'wgsl' || exportBudgetMs <= 0) return createMat0(conv, m);
-const tc = now(); try { return createMat0(conv, m); } finally { expMs += now() - tc; } // nt-tslbudget: createShaderMaterial (wire encode + texture reads) is part of the export cost
+if (conv.kind !== 'wgsl' || exportBudgetMs <= 0) { const tc = now(); try { return createMat0(conv, m); } finally { sy.create += now() - tc; } }
+const tc = now(); try { return createMat0(conv, m); } finally { const d = now() - tc; expMs += d; sy.create += d; } // nt-tslbudget: createShaderMaterial (wire encode + texture reads) is part of the export cost
 }
 function createMat0(conv, m) {
 if (conv.kind === 'wgsl') {
@@ -790,7 +816,7 @@ return {
 stats,
 // r10-shadow-5 diagnostics: material → { id, first export's object, package carries gaia_sun_shadow }
 /** nt-frameleak census: every adapter-owned container (all must track the LIVE scene, not grow with frames). */
-census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length, exportDeferred: stats.exportDeferred, expPendMats: pendLast, expPendObjs: pendObjsLast, expMsLast: Math.round(stats.exportMsLast), expNLast: stats.exportNLast }; },
+census() { let mu = 0, gp = 0; for (const e of mats.values()) mu += e.users.size; for (const e of geos.values()) gp += e.parts.size; const x = stats.exportWhy; return { recs: recs.size, geos: geos.size, geoParts: gp, mats: mats.size, matUsers: mu, lights: lights.size, skin: skinRecs.size, batch: batchRecs.size, sprites: spriteRecs.size, points: pointRecs.size, degr: stats.degraded.size, unsup: stats.unsupported.size, expKeys: x ? x.keys.size : 0, exports: x ? x.newMat + x.versionBump + x.sigChange : 0, created: stats.created, removed: stats.removed, tslRef: tsl.refused, tslMissAttr: Object.keys(tsl.missingAttr).length, exportDeferred: stats.exportDeferred, expPendMats: pendLast, expPendObjs: pendObjsLast, expMsLast: Math.round(stats.exportMsLast), expNLast: stats.exportNLast, ...exportCostCensus() }; },
 matPkg(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e?.conv?.package ?? null; },
 matInfo(m) { const e = mats.get(m) ?? mats.get(recvVariants.get(m)); return e ? { id: e.id, kind: e.conv?.kind, first: e.first, shadow: !!e.conv?.package?.fragment?.includes('gaia_sun_shadow'), fell: !!e.fellBack } : null; },
 // mirror `scene` (+ camera) into the backend. Call once per frame before backend.renderFrame().
@@ -799,6 +825,7 @@ const t0 = now();
 skinMs = 0; skinCalls = 0;
 { const ls = observeLights(scene).gen; /* r16-perf: grow-only light registry -> re-export only when a NEVER-SEEN light object appears; pool reassign/visibility/detach = uniforms only */ if (lightSetSig !== null && ls !== lightSetSig) { lightGen++; lightGenSfx = '|L' + lightGen; stats.lightSetChanges = (stats.lightSetChanges ?? 0) + 1; } lightSetSig = ls; }
 expMs = 0; expN = 0; pendNow = new Set(); pendObjs = 0; // nt-tslbudget
+sy.params = sy.create = sy.pbrN = sy.pbrMs = sy.tslN = 0; sy.tex0 = textureReads.ms; exportProbe?.begin(); // nt-exportcost
 epoch++; stats.frames++; stats.layerCulled = 0; stats.shadowOnly = 0; stats.shadowOnlyInst = 0; stats.shadowMask = shadowMask; frameScene = scene; frameCamera = camera;
 if (updateMatrices) { scene.updateMatrixWorld(true); camera?.updateMatrixWorld?.(); /* r18: sprites billboard against THIS frame's camera */ }
 const t1 = now();
@@ -818,6 +845,9 @@ for (const [o, r] of lights) if (!seen.has(o)) { backend.removeLight(r.id); ligh
 gc();
 const t3 = now();
 pendLast = pendNow.size; pendObjsLast = pendObjs; stats.exportMsLast = expMs; stats.exportNLast = expN; // nt-tslbudget: queue left over after this sync
+{ // nt-exportcost: close the sync's phase window (published by census(): ad_exp*Ms = LAST sync, ad_expTot* = cumulative)
+  const tex = textureReads.ms - sy.tex0; syLast.params = sy.params; syLast.create = sy.create; syLast.tex = tex; syLast.pbrN = sy.pbrN; syLast.pbrMs = sy.pbrMs; syLast.tslN = sy.tslN; syLast.tsl = sy.tslN ? exportProbe?.delta() ?? null : null;
+  syTot.params += sy.params; syTot.create += sy.create; syTot.tex += tex; syTot.pbrMs += sy.pbrMs; syTot.pbrN += sy.pbrN; syTot.tslN += sy.tslN; }
 syncLiveUniforms();
 if (camera) {
 if (updateMatrices) camera.updateMatrixWorld?.();

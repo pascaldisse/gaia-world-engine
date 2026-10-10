@@ -3,8 +3,19 @@
 //! wc = the WKWebView's WebContent process. NOT a child of game-window (WebKit XPC service, parent = launchd) -> `proc_listchildpids` finds nothing.
 //!     pid via private `-[WKWebView _webProcessIdentifier]` (WKWebViewPrivate.h), read on the main thread by a sampler thread every --page-mem-ms,
 //!     then `proc_pid_rusage(pid)` (same-uid processes are readable without privileges). Unavailable SPI/pid/rusage -> `wc_MB=n/a(<why>)`.
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+/// process launch clock: `t_ms()` is the common axis of [host:mem] and every forwarded [page:*] line
+static LAUNCH: OnceLock<Instant> = OnceLock::new();
+/// call first thing in main
+pub fn init_clock() {
+    let _ = LAUNCH.get_or_init(Instant::now);
+}
+/// ms since `init_clock()`
+pub fn t_ms() -> u128 {
+    LAUNCH.get_or_init(Instant::now).elapsed().as_millis()
+}
 /// sampler bounds (ms): the pid refresh runs at the page-mem interval, never faster than this
 const MIN_SAMPLE_MS: u64 = 250;
 /// 0 = unknown, -1 = SPI missing
@@ -83,3 +94,53 @@ pub fn start_sampler(webview: tauri::Webview, every_ms: u32) {
 }
 #[cfg(not(target_os = "macos"))]
 pub fn start_sampler(_webview: tauri::Webview, _every_ms: u32) {}
+
+/// `<MB>` or `n/a(<why>)` for one pid (phys_footprint).
+fn foot_mb(pid: i32) -> String {
+    match rusage(pid) {
+        Ok((foot, _)) => mb(foot),
+        Err(e) => format!("n/a({e})"),
+    }
+}
+/// `[host:mem] t_ms=<since launch> wc_MB=<WebContent phys_footprint> gw_MB=<game-window phys_footprint>` every `every_ms`.
+/// Independent of the page: own thread, pid refresh is a NON-blocking post to the main thread (`with_webview`), rusage reads are syscalls on
+/// the cached pid -> keeps printing while the page main thread (or WebContent) is stalled. Thread ends when the webview is gone.
+#[cfg(target_os = "macos")]
+pub fn start_host_sampler(webview: tauri::Webview, every_ms: u32) {
+    use objc2::{msg_send, runtime::{AnyObject, Bool}, sel};
+    std::thread::Builder::new()
+        .name("gaia-hostmem".into())
+        .spawn(move || {
+            let every = Duration::from_millis(every_ms.max(1) as u64);
+            let gw_pid = std::process::id() as i32;
+            let mut wc_pid_seen = 0;
+            loop {
+                let r = webview.with_webview(|pw| {
+                    let wv: *mut AnyObject = pw.inner().cast();
+                    if wv.is_null() {
+                        return;
+                    }
+                    let ok: Bool = unsafe { msg_send![wv, respondsToSelector: sel!(_webProcessIdentifier)] };
+                    WC_PID.store(if ok.as_bool() { unsafe { msg_send![wv, _webProcessIdentifier] } } else { -1 }, Ordering::Relaxed);
+                });
+                if r.is_err() {
+                    break;
+                }
+                let pid = WC_PID.load(Ordering::Relaxed);
+                let wc = match pid {
+                    0 => "n/a(pid not sampled yet)".to_string(),
+                    -1 => "n/a(WKWebView._webProcessIdentifier SPI missing)".to_string(),
+                    p => foot_mb(p),
+                };
+                if pid > 0 && pid != wc_pid_seen {
+                    eprintln!("[host:mem] t_ms={} wc_pid={pid} gw_pid={gw_pid}", t_ms());
+                    wc_pid_seen = pid;
+                }
+                eprintln!("[host:mem] t_ms={} wc_MB={wc} gw_MB={}", t_ms(), foot_mb(gw_pid));
+                std::thread::sleep(every);
+            }
+        })
+        .expect("spawn gaia-hostmem");
+}
+#[cfg(not(target_os = "macos"))]
+pub fn start_host_sampler(_webview: tauri::Webview, _every_ms: u32) {}

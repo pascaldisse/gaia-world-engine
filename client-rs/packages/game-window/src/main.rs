@@ -76,6 +76,7 @@ struct RenderThreadOwned(Presenter);
 unsafe impl Send for RenderThreadOwned {}
 
 fn main() {
+    memfoot::init_clock();
     let cfg = GameConfig::load().unwrap_or_else(|e| {
         eprintln!("game-window: {e}");
         std::process::exit(2);
@@ -144,6 +145,9 @@ let window = tauri::window::WindowBuilder::new(app, WINDOW_LABEL)
             }
             if cfg.page_mem_ms > 0 && cfg.page_log != "off" {
                 memfoot::start_sampler(webview.clone(), cfg.page_mem_ms);
+            }
+            if cfg.host_mem_ms > 0 {
+                memfoot::start_host_sampler(webview.clone(), cfg.host_mem_ms);
             }
             let _ = webview.set_focus(); // keyboard goes to the page from the first frame
 

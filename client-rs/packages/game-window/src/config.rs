@@ -24,6 +24,8 @@ const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("page-log-max", "GAIA_PAGE_LOG_MAX", "2000", "max chars per forwarded page console line"),
     ("page-heartbeat-ms", "GAIA_PAGE_HEARTBEAT_MS", "5000", "page liveness line [page:heartbeat] every N ms (0 = off; needs --page-log != off)"),
     ("page-mem-ms", "GAIA_PAGE_MEM_MS", "2000", "native-mode page memory accounting line [page:mem] every N ms: page-held bytes per category + host footprints (0 = off; needs --page-log != off; docs/NATIVE.md §page-mem-log)"),
+    ("host-mem-ms", "GAIA_HOST_MEM_MS", "500", "host-side INDEPENDENT sampler thread (not driven by the page): [host:mem] t_ms=.. wc_MB=.. gw_MB=.. every N ms (0 = off; docs/NATIVE.md §host-timeline)"),
+    ("apply-op-top", "GAIA_APPLY_OP_TOP", "3", "per-op-kind timing inside one Host::apply: the [apply] line names the top N kinds by ms (+count) as ops=.. (0 = off, no per-op timing; docs/NATIVE.md §host-timeline)"),
     ("ipc-ws", "GAIA_IPC_WS", "1", "1 = run the localhost WebSocket transport (127.0.0.1 only, per-launch token; page: ?nativeTransport=ws, the default) | 0 = Tauri invoke only"),
 ("ipc-port", "GAIA_IPC_PORT", "0", "WebSocket server port on 127.0.0.1 (0 = OS-assigned ephemeral)"),
 ("ipc-check-origin", "GAIA_IPC_CHECK_ORIGIN", "1", "1 = handshake must carry Origin == the game page origin | 0 = token only"),
@@ -71,6 +73,8 @@ pub struct GameConfig {
     pub page_log_max: u32,
     pub page_heartbeat_ms: u32,
     pub page_mem_ms: u32,
+    pub host_mem_ms: u32,
+    pub apply_op_top: usize,
     pub devtools: bool,
     pub idle_sleep: std::time::Duration,
     pub dry_run: bool,
@@ -161,6 +165,8 @@ impl GameConfig {
         let page_log_max = num("page-log-max")? as u32;
         let page_heartbeat_ms = num("page-heartbeat-ms")? as u32;
         let page_mem_ms = num("page-mem-ms")? as u32;
+        let host_mem_ms = num("host-mem-ms")? as u32;
+        let apply_op_top = num("apply-op-top")? as usize;
         let render_height = num("render-height")? as u32;
         let (w, h) = (num("width")?, num("height")?);
         let fps_cap = num("fps-cap")?;
@@ -182,6 +188,8 @@ impl GameConfig {
             page_log_max,
             page_heartbeat_ms,
             page_mem_ms,
+            host_mem_ms,
+            apply_op_top,
             devtools: flag("devtools")?,
             dry_run: flag("dry-run")?,
             idle_sleep: std::time::Duration::from_secs_f64(num("idle-sleep-ms")?.max(0.0) / 1e3),

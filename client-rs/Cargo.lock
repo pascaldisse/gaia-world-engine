@@ -2866,7 +2866,9 @@ name = "render-wasm"
 version = "0.1.0"
 dependencies = [
  "gaia-render",
+ "gaia-render-host",
  "js-sys",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use wire::{Framer, OP_CORRUPT, OP_FREE, OP_HELLO, Reader, StreamError};
 
+// native wgpu is Send; the web backend is not (wasm32 is single-threaded, nothing to assert there).
+#[cfg(not(target_arch = "wasm32"))]
 const _: fn() = || {
     fn is_send<T: Send>() {}
     is_send::<Host>(); // Host lives in a Mutex shared by the IPC thread and the frame loop

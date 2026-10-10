@@ -2,8 +2,9 @@
 //! 1. page-gpu=hidden: the page cannot see WebGPU → WKWebView never creates a WebGPU device for drawing
 //!    (three/webgpu falls back to its WebGL2 backend for scene-graph use; the native Host draws).
 //! 2. html/body background transparent so the Metal surface shows through; HUD/menus stay HTML.
-//! 3. `window.__GAIA_NATIVE__` (frozen): host stats only — `.info()` -> Promise<Info>, `.renderHeight/.upscaler/.pageGpu`.
-//!    The render command stream is NOT here: lane nt-ipc's GaiaRenderNative calls `invoke('gaia_render_apply', bytes)` itself.
+//! 3. `window.__GAIA_NATIVE__` (frozen): host stats `.info()` -> Promise<Info>, `.renderHeight/.upscaler/.pageGpu`, and `.ws` = {port, token}
+//!    (null when --ipc-ws 0 or the page origin is not the game origin) for the localhost WebSocket transport.
+//!    The render command stream itself is GaiaRenderNative's: WebSocket (default) or `invoke('gaia_render_apply', bytes)`.
 use crate::config::{GameConfig, PageGpu};
 
 const TEMPLATE: &str = r#"(() => {
@@ -37,13 +38,15 @@ const TEMPLATE: &str = r#"(() => {
   Object.defineProperty(window, '__GAIA_NATIVE__', { value: Object.freeze(api) });
 })();"#;
 
-pub fn init_script(cfg: &GameConfig) -> String {
+/// `ws` = (port, token) of the localhost WebSocket server, None when --ipc-ws 0.
+pub fn init_script(cfg: &GameConfig, ws: Option<(u16, &str)>) -> String {
     let json = serde_json::json!({
         "renderHeight": cfg.render_height,
         "upscaler": cfg.upscaler.name(),
         "pageGpu": page_gpu_name(cfg.page_gpu),
         "pageLog": cfg.page_log,
         "pageLogMax": cfg.page_log_max,
+        "ws": ws.map(|(port, token)| serde_json::json!({ "port": port, "token": token, "origin": cfg.url.origin().ascii_serialization() })),
     });
     TEMPLATE.replace("__CFG__", &json.to_string())
 }

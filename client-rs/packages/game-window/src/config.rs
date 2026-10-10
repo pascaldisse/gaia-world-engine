@@ -21,7 +21,15 @@ const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("dry-run", "GAIA_DRY_RUN", "0", "1 = print the resolved config (final URL etc.) and exit; opens no window"),
     ("page-log", "GAIA_PAGE_LOG", "warn", "page console forwarded to stderr as [page:<level>]: off | error | warn (error+warn+uncaught) | all"),
     ("page-log-max", "GAIA_PAGE_LOG_MAX", "2000", "max chars per forwarded page console line"),
-    ("query", "GAIA_GAME_QUERY", "", "extra raw query appended to the URL (e.g. nativeFlushMB=8)"),
+    ("ipc-ws", "GAIA_IPC_WS", "1", "1 = run the localhost WebSocket transport (127.0.0.1 only, per-launch token; page: ?nativeTransport=ws, the default) | 0 = Tauri invoke only"),
+("ipc-port", "GAIA_IPC_PORT", "0", "WebSocket server port on 127.0.0.1 (0 = OS-assigned ephemeral)"),
+("ipc-check-origin", "GAIA_IPC_CHECK_ORIGIN", "1", "1 = handshake must carry Origin == the game page origin | 0 = token only"),
+("ipc-max-message-mb", "GAIA_IPC_MAX_MESSAGE_MB", "256", "largest accepted WebSocket message (MiB); must be >= the page's ?nativeChunkMB (16)"),
+("ipc-queue", "GAIA_IPC_QUEUE", "4", "messages buffered between the WS receive thread and the apply thread (receive of N+1 overlaps apply of N)"),
+("ipc-read-buf-kb", "GAIA_IPC_READ_BUF_KB", "1024", "per-connection socket read buffer (KiB)"),
+("ipc-handshake-ms", "GAIA_IPC_HANDSHAKE_MS", "5000", "drop a connection that has not finished the WS handshake in this time"),
+("ipc-stats-ms", "GAIA_IPC_STATS_MS", "2000", "WS throughput line to stderr every N ms while traffic flows (0 = off)"),
+("query", "GAIA_GAME_QUERY", "", "extra raw query appended to the URL (e.g. nativeFlushMB=8)"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +69,14 @@ pub struct GameConfig {
     pub idle_sleep: std::time::Duration,
     pub dry_run: bool,
     pub stats_every: u64,
+pub ipc_ws: bool,
+pub ipc_port: u16,
+pub ipc_check_origin: bool,
+pub ipc_max_message: usize,
+pub ipc_queue: usize,
+pub ipc_read_buf: usize,
+pub ipc_handshake: std::time::Duration,
+pub ipc_stats_every: std::time::Duration,
 }
 
 pub fn usage() -> String {
@@ -158,6 +174,14 @@ impl GameConfig {
             dry_run: flag("dry-run")?,
             idle_sleep: std::time::Duration::from_secs_f64(num("idle-sleep-ms")?.max(0.0) / 1e3),
             stats_every: num("stats-every")? as u64,
+            ipc_ws: flag("ipc-ws")?,
+            ipc_port: u16::try_from(num("ipc-port")? as i64).map_err(|_| "--ipc-port must be 0..65535".to_string())?,
+            ipc_check_origin: flag("ipc-check-origin")?,
+            ipc_max_message: (num("ipc-max-message-mb")?.max(1.0) * 1048576.0) as usize,
+            ipc_queue: num("ipc-queue")?.max(1.0) as usize,
+            ipc_read_buf: (num("ipc-read-buf-kb")?.max(4.0) * 1024.0) as usize,
+            ipc_handshake: std::time::Duration::from_secs_f64(num("ipc-handshake-ms")?.max(1.0) / 1e3),
+            ipc_stats_every: std::time::Duration::from_secs_f64(num("ipc-stats-ms")?.max(0.0) / 1e3),
         })
     }
 }

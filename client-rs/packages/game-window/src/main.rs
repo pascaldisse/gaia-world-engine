@@ -3,8 +3,10 @@
 //!   child webview (transparent, FULL window, above the surface) ← the game page: HUD/menus, ALL input (keys, mouse, pointer lock)
 //!   page → Rust: `__GAIA_NATIVE__.send(bytes)` → Tauri raw-body invoke `gaia_native_apply` → queue → render thread → Host::apply
 //! Never launched by the lane that wrote it (UNVERIFIED at runtime) — see NOTES.md.
+mod apply;
 mod config;
 mod gpu;
+mod ipc_ws;
 mod page;
 #[cfg(target_os = "macos")]
 mod pointer;
@@ -40,18 +42,8 @@ async fn gaia_render_apply(
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("gaia_render_apply: raw body expected (Uint8Array), got JSON".into());
     };
-    let t0 = std::time::Instant::now();
-    let mut guard = host.lock().map_err(|_| "Host mutex poisoned".to_string())?;
-    let waited = t0.elapsed();
-    let report = guard.apply(bytes);
-    drop(guard);
-    let n = shared.apply_messages.load(Ordering::Relaxed);
-    if n < 8 || waited.as_millis() > 50 || t0.elapsed().as_millis() > 100 {
-        eprintln!("[apply] #{n} {} B lock_wait={:?} total={:?} report={}", bytes.len(), waited, t0.elapsed(), String::from_utf8_lossy(&report[..report.len().min(300)]));
-    }
-    shared.apply_messages.fetch_add(1, Ordering::Relaxed);
-    shared.apply_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-    Ok(tauri::ipc::Response::new(report))
+    let report = apply::apply_logged(&host, &shared, bytes, "invoke", Duration::ZERO)?;
+Ok(tauri::ipc::Response::new(report))
 }
 
 /// Page console -> host stderr (WKWebView has no CDP; without this a page that dies during load is silent).
@@ -113,7 +105,9 @@ fn main() {
                 .to_string(),
             )?;
 
-            let window = tauri::window::WindowBuilder::new(app, WINDOW_LABEL)
+            // port + token must exist before the webview (they go into its init script); accepting starts once the Host is managed
+let ipc = if cfg.ipc_ws { Some(ipc_ws::IpcWs::bind(&cfg)?) } else { None };
+let window = tauri::window::WindowBuilder::new(app, WINDOW_LABEL)
                 .title(cfg.title.clone())
                 .inner_size(cfg.window_size.0, cfg.window_size.1)
                 .resizable(true)
@@ -124,7 +118,7 @@ fn main() {
                 .transparent(true) // macOS: needs macos-private-api (enabled) — WKWebView drawsBackground=NO
                 .accept_first_mouse(true)
                 .devtools(cfg.devtools)
-                .initialization_script(page::init_script(&cfg));
+                .initialization_script(page::init_script(&cfg, ipc.as_ref().map(|i| (i.port, i.token.as_str()))));
             let webview = window.add_child(builder, PhysicalPosition::new(0.0, 0.0), size)?;
             let resize_target = webview.clone();
             window.on_window_event(move |event| {
@@ -141,7 +135,11 @@ fn main() {
 
             let presenter = RenderThreadOwned(Presenter::new(&window, &cfg, &shared).map_err(std::io::Error::other)?);
             shared.info.lock().unwrap().adapter = presenter.0.adapter_name.clone();
-            app.manage(presenter.0.host()); // State<Arc<Mutex<Host>>> for gaia_render_apply
+            let host = presenter.0.host();
+app.manage(host.clone()); // State<Arc<Mutex<Host>>> for gaia_render_apply
+if let Some(ipc) = ipc {
+ipc.serve(host, shared.clone())?;
+}
             eprintln!("[game-window] {} → {}  (render {}p, upscaler {}, page-gpu {:?})", cfg.title, cfg.url, cfg.render_height, cfg.upscaler.name(), cfg.page_gpu);
             let app_handle = app.handle().clone();
             let render_shared = shared.clone();

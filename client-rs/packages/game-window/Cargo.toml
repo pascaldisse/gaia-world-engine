@@ -14,7 +14,9 @@ gaia-render-host = { path = "../../crates/gaia-render-host" } # lane nt-ipc: Hos
 pollster = "0.4.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+getrandom = "0.3" # per-launch WS token
 tauri = { version = "2.11.5", features = ["macos-private-api", "unstable"] }
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] } # localhost WebSocket transport (ipc_ws.rs)
 wgpu = "30.0.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]

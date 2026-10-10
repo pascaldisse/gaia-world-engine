@@ -232,14 +232,16 @@ function builtinSemantics(THREE) {
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, preMs: 0, setupMs: 0, lookMs: 0, genMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0,
   // nt-tslbudget (wgpu-present sets these from native/page-memory.js tslLean/tslBound/tslMapMax; defaults = old behaviour for the browser path)
-  hashKey: false, bindIdx: false, lean: false, bound: 0, nodesWalked: 0, nodesMax: 0, nodeWalks: 0, slimmed: 0, collected: 0 };
+  hashKey: false, bindIdx: false, lean: false, bound: 0, nodesWalked: 0, nodesMax: 0, nodeWalks: 0, slimmed: 0, collected: 0,
+// nt-tslrecipe (wgpu-present sets `recipe` from native/page-memory.js tslRecipe; default off = browser path unchanged). recipes: rk -> { key, sig, ids, pos, ln, state:'learn'|'ok'|'bad' }
+recipe: false, recipes: new Map(), recipeHit: 0, recipeMiss: 0, recipeMismatch: 0, recipeBad: 0, recipeLearned: 0, recipeVerified: 0, recipeMs: 0 };
 // r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
 export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
 /** nt-frameleak census: structCache sizes (templates pin node graph + package -> material/mesh/textures). */
-export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size, ks: structCache.keySamples ? structCache.keySamples.size : 0, shOk: SHARED_OK.size, nodesAvg: structCache.nodeWalks ? Math.round(structCache.nodesWalked / structCache.nodeWalks) : 0, nodesMax: structCache.nodesMax, slim: structCache.slimmed, collected: structCache.collected, keyKB: tplKeyKB(), msPre: Math.round(structCache.preMs), msSetup: Math.round(structCache.setupMs), msKey: Math.round(structCache.keyMs), msLook: Math.round(structCache.lookMs), msRebind: Math.round(structCache.rebindMs), msGen: Math.round(structCache.genMs), msBuild: Math.round(structCache.buildMs) }; }
+export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size, ks: structCache.keySamples ? structCache.keySamples.size : 0, shOk: SHARED_OK.size, nodesAvg: structCache.nodeWalks ? Math.round(structCache.nodesWalked / structCache.nodeWalks) : 0, nodesMax: structCache.nodesMax, slim: structCache.slimmed, collected: structCache.collected, keyKB: tplKeyKB(), msPre: Math.round(structCache.preMs), msSetup: Math.round(structCache.setupMs), msKey: Math.round(structCache.keyMs), msLook: Math.round(structCache.lookMs), msRebind: Math.round(structCache.rebindMs), msGen: Math.round(structCache.genMs), msBuild: Math.round(structCache.buildMs), recipes: structCache.recipes.size, recipeHit: structCache.recipeHit, recipeMiss: structCache.recipeMiss, recipeMismatch: structCache.recipeMismatch, recipeBad: structCache.recipeBad, recipeLearned: structCache.recipeLearned, recipeVerified: structCache.recipeVerified, msRecipe: Math.round(structCache.recipeMs) }; }
 // nt-exportcost: per-sync phase timings (ms). The scene-adapter brackets each sync with begin()/delta() and publishes the delta in the census (ad_exp*Ms) -> a live run names the dominant phase.
 // pre = preParts (material flags + light scan) · setup = buildPackage start -> gate (builder ctor, observeLights, three's SETUP stage over the whole node graph) · key = structural walk · look = template lookup/retain · rebind = cache-hit rebind · gen = analyze+generate+package (MISS only) · build = rebind-failed full rebuild
-const PHASES = ['preMs', 'setupMs', 'keyMs', 'lookMs', 'rebindMs', 'genMs', 'buildMs'];
+const PHASES = ['preMs', 'setupMs', 'keyMs', 'lookMs', 'rebindMs', 'genMs', 'buildMs', 'recipeMs'];
 const probeMark = {};
 export const exportProbe = {
 begin() { for (const k of PHASES) probeMark[k] = structCache[k]; probeMark.h = structCache.hits; probeMark.m = structCache.misses; },
@@ -370,6 +372,107 @@ return this;
 };
 gatedCtors.set(Ctor, G); return G;
 }
+// ===== nt-tslrecipe (docs/NATIVE.md §tsl-recipe) =====
+// Opt-in DECLARED identity: material.userData.gaiaTslRecipe = string the CREATOR guarantees fixes the node-graph STRUCTURE (the engine knows no game semantics). A material whose recipe + context (light set, shadow flags, preParts) has a PROVEN template skips builder+SETUP entirely:
+// pre-setup walk of its OWN node slots (visit order deterministic) -> positional map template-walk-node -> this material's node -> existing rebind. Anything ambiguous = full path (never a guess).
+// Lifecycle per recipe key rk: M0 full build registers {state:'learn'} (+ its pre-walk) · M1 full (singleton 'prove') · M2 full+rebind = PROOF (every node rebind maps by position must be a pre-walk node or a light-owned node; end-to-end compare of the pre-walk-mapped rebind vs the position-mapped rebind) -> 'ok' · M3.. fast path. Failed proof = 'bad' (full path forever, census recipeBad + reason).
+const HOST_SEM = /^camera|^time$|^deltaTime$/; // host-supplied uniforms (buildPackage: semantic, key null - never in the package's live set): their per-build update nodes are benign to keep from the template
+const lnOf = (sc) => (sc ? lightsCache.get(sc)?.node?.uuid ?? '' : '');
+function recipeKeyOf(material, pre, opts) {
+  const o = opts.object, recv = o ? o.receiveShadow : opts.receiveShadow, cast = o ? o.castShadow : opts.castShadow; // buildPackage: a real object carries its own shadow flags, a stand-in the source's
+  let ls = ''; if (opts.scene) { try { ls = observeLights(opts.scene).all.map((l) => l.uuid).join(','); } catch { ls = '?'; } } // baked light set (LightsNode) - NOT in preParts (live light types only)
+  return hashParts([material.userData.gaiaTslRecipe, `${recv ? 1 : 0}${cast ? 1 : 0}${opts.coreShadow === false ? 0 : 1}`, ls, ...pre]);
+}
+// pre-setup walk of the material's own enumerable Node props (sorted keys). Same per-node signature as builderWalk (class/type/update types/texture format+colorSpace/primitive props incl. CONST values, slot values excluded) + back-refs by first-visit index.
+function preWalk(THREE, material) {
+  const parts = [], nodes = [], ids = new Map(), ObjProto = Object.prototype;
+  const visit = (n) => {
+    const seen = ids.get(n.uuid); if (seen !== undefined) { parts.push('#' + seen); return; }
+    ids.set(n.uuid, nodes.length); nodes.push(n);
+    const slot = isSlot(n), leaf = n.isUniformNode === true;
+    let s = `(${n.constructor?.name}:${n.type ?? ''}:${n.nodeType ?? ''}:${n.updateType ?? ''}${n.updateBeforeType ?? ''}${n.updateAfterType ?? ''}:`;
+    if (n.isTextureNode) { const t = n.value; s += `T${t?.constructor?.name}:${t?.format}:${t?.type}:${t?.colorSpace}:${+!!t?.isDepthTexture}:${+!!t?.isArrayTexture}:${+!!t?.isCubeTexture}:${t?.image?.depth ?? ''}`; }
+    else if (n.isBufferAttributeNode || n.isStorageBufferNode || n.isBufferNode) { const a = n.value; s += `B${a?.constructor?.name}:${a?.itemSize}:${a?.array?.constructor?.name}:${a?.count ?? ''}`; }
+    else if (n.isConstNode && n.value && typeof n.value === 'object') s += `C${JSON.stringify(toPlain(n.value))};`; // object-valued constants (Vector/Color) are baked into the WGSL; the generic prop loop below skips non-plain objects
+    let kp = null, kk = null, ki = null;
+    const names = Object.getOwnPropertyNames(n), en = typeof n === 'function' ? new Set(Object.keys(n)) : null;
+    for (let i = 0; i < names.length; i++) {
+      const k = names[i]; if (k.charCodeAt(0) === 95) continue;
+      const v = n[k], t = typeof v;
+      if (t === 'object') {
+        if (v === null) { if (!SKIP_PROPS.has(k) && !(slot && k === 'value')) s += `${k}=null;`; continue; }
+        if (leaf) continue;
+        if (Array.isArray(v)) { for (let j = 0; j < v.length; j++) { const c = v[j]; if (c && c.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(c); (ki ??= []).push(j); } } }
+        else if (v.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(v); (ki ??= []).push(undefined); }
+        else if (Object.getPrototypeOf(v) === ObjProto) { for (const sp in v) { if (sp.charCodeAt(0) === 95) continue; const c = v[sp]; if (c && c.isNode === true) { (kp ??= []).push(k); (kk ??= []).push(c); (ki ??= []).push(sp); } } }
+      } else if (en && !en.has(k)) continue;
+      else if (t === 'boolean' || t === 'string' || t === 'number') { if (!SKIP_PROPS.has(k) && !(slot && k === 'value')) s += `${k}=${v};`; }
+      else if (t === 'function') { if (!slot && !SKIP_PROPS.has(k)) s += `${k}=${fnHash(v)};`; }
+    }
+    parts.push(s);
+    if (!leaf && kp) for (let i = 0; i < kp.length; i++) { parts.push(`.${kp[i]}${ki[i] ?? ''}`); visit(kk[i]); }
+    parts.push(')');
+  };
+  for (const k of Object.keys(material).sort()) { const v = material[k]; if (v && v.isNode === true) { parts.push('@' + k); visit(v); } }
+  return { sig: hashParts(parts), nodes };
+}
+const recipeIds = (pw) => pw.nodes.map((n) => ({ uuid: n.uuid, ctor: n.constructor, type: n.type ?? null }));
+// template-walk uuid -> this material's pre-walk node, for every position whose uuid differs (rebind's `map`, built from the pre-walk instead of the post-setup walk)
+function recipeMap(rec, pw) {
+  const map = new Map();
+  for (let j = 0; j < rec.ids.length; j++) { const a = rec.ids[j], b = pw.nodes[j]; if (a.uuid === b.uuid) continue; if (a.ctor !== b.constructor || a.type !== (b.type ?? null)) return null; map.set(a.uuid, b); }
+  return map;
+}
+function registerRecipe(C, rk, pw, tplKey, opts) {
+  const pos = new Map(); pw.nodes.forEach((n, j) => pos.set(n.uuid, j));
+  C.recipes.delete(rk); C.recipes.set(rk, { key: tplKey, sig: pw.sig, ids: recipeIds(pw), pos, ln: lnOf(opts.scene), state: 'learn' });
+  const cap = Math.max(64, C.maxTemplates * 2); while (C.recipes.size > cap) C.recipes.delete(C.recipes.keys().next().value);
+}
+// PROOF on the first position-mapped hit (M2): see lifecycle above. `A` = the position-mapped rebind of THIS material (reference), `B` = the pre-walk-mapped rebind -> comparePackages(B, A). Both are fresh packages, discarded (comparePackages runs live.update).
+function learnRecipe(C, rec, tpl, w, pw, material, opts) {
+  const bad = (m) => { rec.state = 'bad'; C.recipeBad++; why('recipeBad', `${material.name || material.type}: ${m}`); };
+  try {
+    if (pw.sig !== rec.sig || pw.nodes.length !== rec.ids.length) { C.recipeMismatch++; why('recipeMismatch', `learn: ${material.name || material.type} pre-walk differs from the recipe's first material`); return; } // not provable by this material - keep learning
+    if (tpl.noRebind || !tpl.pkg || !tpl.texNode) return bad('template not rebindable');
+    const T = tpl.pkg, idx = new Map(); for (let i = 0; i < tpl.nodes.length; i++) idx.set(tpl.nodes[i].uuid, i);
+    const R = new Set(); // every node rebind() resolves through its position map
+    for (const mp of [tpl.texNode, tpl.uniNode, tpl.attrNode, tpl.bufNode]) if (mp) for (const n of mp.values()) R.add(n.uuid);
+    if (tpl.refOwner) for (const o of tpl.refOwner.values()) R.add(o.owner.uuid);
+    for (const n of T.tpl.updateNodes) R.add(n.uuid); for (const n of T.tpl.updateBeforeNodes) R.add(n.uuid);
+    for (const x of T.tpl.liveUniforms) if (x.node) R.add(x.node.uuid);
+    const A = rebind(tpl, w, material, opts); // reference
+    const lu = new Set(); // light-owned set of THIS build (AnalyticLightNode + its own uniforms): per-material LightsNode instances (material.setupLights) differ per build but follow the same light objects
+    for (const n of A.tpl.updateNodes) if (n.light?.isLight) { lu.add(n.uuid); for (const v of Object.values(n)) if (v?.isUniformNode) lu.add(v.uuid); }
+    for (const u of R) {
+      const i = idx.get(u); if (i === undefined) continue; // not in the walk: rebind falls to the template's own node (shared / builder-side) exactly as the position-mapped hit does
+      const b = w.nodes[i], j = rec.pos.get(u);
+      if (j === undefined) { if (b.uuid !== u && !lu.has(b.uuid) && !(b.isUniformNode && HOST_SEM.test(b.name || ''))) return bad(`rebound node #${i} ${b.constructor?.name}:${b.type ?? ''}:${b.nodeType ?? ''}:${b.scope ?? ''}:${b.name ?? ''} (after ${w.nodes.slice(Math.max(0, i - 3), i).map((x) => x.constructor?.name + ':' + (x.scope ?? x.name ?? '')).join('>')}) differs per build but is not in the pre-walk (setup-created / closure-captured)`); continue; }
+      if (pw.nodes[j].uuid !== b.uuid) return bad(`pre-walk #${j} != walk #${i} (${b.constructor?.name})`);
+    }
+    const map = recipeMap(rec, pw); if (!map) return bad('pre-walk class/type differs');
+    const B = rebind(tpl, null, material, opts, map);
+    const diff = comparePackages(B, A, tpl); if (diff) return bad('compare: ' + String(diff).slice(0, 240));
+    rec.state = 'ok'; C.recipeLearned++;
+  } catch (e) { bad('learn-error: ' + String(e?.message ?? e)); }
+}
+// fast path: returns the rebound package, or null (-> caller takes the full path). Never throws.
+function recipeFast(C, rk, rec, pw, material, opts, mode) {
+  const tpl = C.map.get(rec.key);
+  if (!tpl) { C.recipes.delete(rk); return null; }
+  if (tpl.noRebind || tpl.unproven?.size || tpl.unprovenBuf?.size || rec.ln !== lnOf(opts.scene)) return null;
+  if (pw.sig !== rec.sig || pw.nodes.length !== rec.ids.length) { C.recipeMismatch++; why('recipeMismatch', `${material.name || material.type}: pre-walk differs (declared recipe lies, or an input the recipe omits)`); return null; }
+  const map = recipeMap(rec, pw); if (!map) { C.recipeMismatch++; why('recipeMismatch', 'class/type'); return null; }
+  const t0 = nowMs(); let rb = null;
+  try { rb = rebind(tpl, null, material, opts, map); } catch (e) { C.rebindFail++; if (String(e?.message).startsWith('template node collected')) { C.map.delete(rec.key); C.recipes.delete(rk); } why('rebindFail', 'recipe: ' + String(e?.message ?? e)); }
+  C.rebindMs += nowMs() - t0;
+  if (!rb) return null;
+  retainTemplate(C, rec.key, tpl); if (tpl.kh) Object.defineProperty(rb, 'kh', { value: tpl.kh });
+  if (mode !== 'verify') { C.hits++; C.recipeHit++; return rb; }
+  const full = buildPackage(material, opts); C.verified++; C.recipeVerified++; // verify: the recipe hit is checked against a FULL build of the same material
+  const diff = comparePackages(rb, full, tpl);
+  if (diff) { C.recipeMismatch++; if (diff.startsWith('WGSL')) C.mismatch++; else if (diff.startsWith('VALUE')) C.valueMismatch++; else C.layoutMismatch++; rec.state = 'bad'; why('MISMATCH', `recipe ${material.name || material.type}: ${diff}`); return full; }
+  C.hits++; C.recipeHit++; return full;
+}
 const HIT = Symbol('tslCacheHit');
 export function exportNodeMaterial(material, opts = {}) {
 if (!material?.isNodeMaterial) throw new Error('exportNodeMaterial: material.isNodeMaterial required');
@@ -377,7 +480,15 @@ const mode = opts.cache ?? 'on';
 if (mode === 'off') return buildPackage(material, opts);
 const THREE = opts.THREE, C = structCache; let t0 = nowMs(), w = null, hit = null, decision = 'miss';
 let pre; try { pre = preParts(THREE, material, opts); } catch (e) { pre = null; w = { refuse: 'walk-error:' + (e?.message ?? e) }; }
-C.preMs += nowMs() - t0; let tb0 = 0, tGE = 0; // nt-exportcost phase timing: tb0 = buildPackage start, tGE = gate exit
+C.preMs += nowMs() - t0; let tb0 = 0, tGE = 0;
+// nt-tslrecipe: declared-recipe fast path (no builder, no SETUP) -- see recipeFast/learnRecipe. rk = recipe + context; pw = this material's pre-setup walk (taken BEFORE the build; the full build below registers/proves from it)
+let rk = null, rec = null, pw = null;
+if (C.recipe && pre && typeof material.userData?.gaiaTslRecipe === 'string' && material.userData.gaiaTslRecipe) {
+  const tr = nowMs();
+  try { rk = recipeKeyOf(material, pre, opts); rec = C.recipes.get(rk) ?? null; if (!rec || rec.state !== 'bad') pw = preWalk(THREE, material); } catch (e) { rk = null; pw = null; why('recipeError', String(e?.message ?? e)); }
+  if (pw && rec?.state === 'ok') { const fr = recipeFast(C, rk, rec, pw, material, opts, mode); if (fr) { C.recipeMs += nowMs() - tr; return fr; } }
+  C.recipeMs += nowMs() - tr; if (rk) C.recipeMiss++;
+} // nt-exportcost phase timing: tb0 = buildPackage start, tGE = gate exit
 const gate = (b) => { C.setupMs += nowMs() - tb0; try { gate1(b); } finally { tGE = nowMs(); } };
 const gate1 = (b) => {
 if (!pre) return; const t1 = nowMs();
@@ -397,6 +508,7 @@ const tpl = hit; t0 = nowMs(); let rb = null;
 try { rb = rebind(tpl, w, material, opts); } catch (e) { C.rebindFail++; if (String(e?.message).startsWith('template node collected')) C.map.delete(w.key); /* nt-tslbudget lean: a shared node the template needed was collected -> drop the template, the next full build re-registers it */ why('rebindFail', String(e?.message ?? e)); }
 C.rebindMs += nowMs() - t0;
 if (rb) {
+if (rec?.state === 'learn' && pw && rec.key === w.key) learnRecipe(C, rec, tpl, w, pw, material, opts); // nt-tslrecipe: PROOF on the first position-mapped hit
 if (mode !== 'verify') { C.hits++; if (tpl.kh) Object.defineProperty(rb, 'kh', { value: tpl.kh }); return rb; } // nt-exportcost: kh = template id (dedupe key part)
 const full = buildPackage(material, opts); C.verified++;
 const diff = comparePackages(rb, full, tpl);
@@ -412,7 +524,7 @@ if (C.keySamples) { const h = strHash(pkg.vertex + pkg.fragment); if (C.bound > 
 if (decision === 'prove') { const tpl = hit; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
 for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { if (C.bound > 0 && SHARED_OK.size >= C.bound) SHARED_OK.delete(SHARED_OK.values().next().value); SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
 if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } if (C.bound > 0 && C.wgslOf.size >= C.bound && !C.wgslOf.has(w.key)) C.wgslOf.delete(C.wgslOf.keys().next().value); C.wgslOf.set(w.key, k); }
-if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg, kh: keyId(w.key) }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } if (C.lean) slimTemplate(t, !!bad); retainTemplate(C, w.key, t); }
+if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg, kh: keyId(w.key) }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } if (C.lean) slimTemplate(t, !!bad); retainTemplate(C, w.key, t); if (rk && pw && !t.noRebind && !(rec && rec.state !== 'learn' && C.map.has(rec.key))) registerRecipe(C, rk, pw, w.key, opts); /* nt-tslrecipe: this build created the template -> its pre-walk is the recipe's reference (M0) */ }
 { const tt = C.map.get(w.key); if (tt?.kh && !tt.noRebind) Object.defineProperty(pkg, 'kh', { value: tt.kh }); }
 return pkg;
 }
@@ -460,9 +572,9 @@ const P = t.pkg, tp = P.tpl; // keep ONLY what rebind reads: WGSL + layout data 
 t.pkg = { vertex: P.vertex, fragment: P.fragment, bindGroups: P.bindGroups, attributes: P.attributes, varyings: P.varyings, bufferSources: P.bufferSources, tpl: { updateNodes: tp.updateNodes.map(st), updateBeforeNodes: tp.updateBeforeNodes.map(st), liveUniforms: tp.liveUniforms.map((x) => (x.node ? { key: x.key, node: st(x.node), get: null } : { key: x.key, node: x.node, get: x.get })) } };
 }
 const SHARED_OK = new Set(); // reserved: process-wide singleton uniform nodes proven shared
-function rebind(t, w, material, opts) {
-const { THREE } = opts, T = t.pkg, map = new Map();
-for (let i = 0; i < t.nodes.length; i++) { const a = t.nodes[i], b = w.nodes[i]; if (a.uuid !== b.uuid) { if (ctorOf(a) !== b.constructor || (a.type ?? null) !== (b.type ?? null)) throw new Error('slot type mismatch at ' + i); map.set(a.uuid, b); } }
+function rebind(t, w, material, opts, mapIn = null) {
+const { THREE } = opts, T = t.pkg, map = mapIn ?? new Map(); // nt-tslrecipe: mapIn = map built from the pre-setup walk (no post-setup walk exists)
+if (!mapIn) for (let i = 0; i < t.nodes.length; i++) { const a = t.nodes[i], b = w.nodes[i]; if (a.uuid !== b.uuid) { if (ctorOf(a) !== b.constructor || (a.type ?? null) !== (b.type ?? null)) throw new Error('slot type mismatch at ' + i); map.set(a.uuid, b); } }
 const m = (n) => { const x = map.get(n.uuid); if (x) return x; const o = t.refOwner?.get(n.uuid); if (o) { const ox = map.get(o.owner.uuid); if (ox) { if (ox[o.prop] == null) { if (o.prop === '_matrixUniform' && ox.isTextureNode && ox.value?.matrix) ox._matrixUniform = (THREE.TSL ?? THREE).uniform(ox.value.matrix); else throw new Error('owned node not materialised: ' + o.prop); } return ox[o.prop]; } } return real(n); };
 const r = opts.renderer ?? headlessRenderer(THREE);
 const obj = opts.object ?? new THREE.Mesh(opts.geometry ?? new THREE.BoxGeometry(1, 1, 1), material);

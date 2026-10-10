@@ -5,6 +5,7 @@
 // that a non-three backend feeds to create_shader_material (RENDER-API.md §6). No three import here: the caller
 // passes the (possibly engine-injected) THREE namespace (`three/webgpu`) → works for the ctx.three case too.
 import { observeLights } from './light-registry.js';
+import { leakGuards } from './native/page-memory.js';
 const STAGES = { 1: 'vertex', 2: 'fragment', 4: 'compute' };
 const stageOf = (v) => STAGES[v] ?? ([v & 1 ? 'vertex' : null, v & 2 ? 'fragment' : null].filter(Boolean).join('|') || 'none');
 
@@ -126,6 +127,8 @@ const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
 keys: liveUniforms.map((x) => x.key),
+// nt-exportcost dedupe: CURRENT plain value of every live uniform, positional (same order as keys). ok=false when a non-null raw value has no plain form (cannot be compared -> never deduped).
+snapshot() { const vals = new Array(liveUniforms.length); let ok = true; for (let i = 0; i < liveUniforms.length; i++) { const raw = liveUniforms[i].get(); const v = toPlain(raw); if (v === null && raw != null) ok = false; vals[i] = v; } return { vals, ok }; },
 get version() { return version; },
 update({ object = obj, camera = cam, scene = sc, time, frameToken } = {}) {
 // r10-4: share=on -> ONE NodeFrame per renderer; frame-scope work (time, renderId, camera/viewport/light RENDER|FRAME nodes) runs once per frameToken, not once per material. share=off -> legacy per-package frame (A/B flag: structCache.share / URL wgpuShare=0).
@@ -227,13 +230,21 @@ function builtinSemantics(THREE) {
 // Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
 // cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0,
+export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, preMs: 0, setupMs: 0, lookMs: 0, genMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0,
   // nt-tslbudget (wgpu-present sets these from native/page-memory.js tslLean/tslBound/tslMapMax; defaults = old behaviour for the browser path)
-  lean: false, bound: 0, nodesWalked: 0, nodesMax: 0, nodeWalks: 0, slimmed: 0, collected: 0 };
+  hashKey: false, bindIdx: false, lean: false, bound: 0, nodesWalked: 0, nodesMax: 0, nodeWalks: 0, slimmed: 0, collected: 0 };
 // r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
 export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
 /** nt-frameleak census: structCache sizes (templates pin node graph + package -> material/mesh/textures). */
-export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size, ks: structCache.keySamples ? structCache.keySamples.size : 0, shOk: SHARED_OK.size, nodesAvg: structCache.nodeWalks ? Math.round(structCache.nodesWalked / structCache.nodeWalks) : 0, nodesMax: structCache.nodesMax, slim: structCache.slimmed, collected: structCache.collected, keyKB: tplKeyKB() }; }
+export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size, ks: structCache.keySamples ? structCache.keySamples.size : 0, shOk: SHARED_OK.size, nodesAvg: structCache.nodeWalks ? Math.round(structCache.nodesWalked / structCache.nodeWalks) : 0, nodesMax: structCache.nodesMax, slim: structCache.slimmed, collected: structCache.collected, keyKB: tplKeyKB(), msPre: Math.round(structCache.preMs), msSetup: Math.round(structCache.setupMs), msKey: Math.round(structCache.keyMs), msLook: Math.round(structCache.lookMs), msRebind: Math.round(structCache.rebindMs), msGen: Math.round(structCache.genMs), msBuild: Math.round(structCache.buildMs) }; }
+// nt-exportcost: per-sync phase timings (ms). The scene-adapter brackets each sync with begin()/delta() and publishes the delta in the census (ad_exp*Ms) -> a live run names the dominant phase.
+// pre = preParts (material flags + light scan) · setup = buildPackage start -> gate (builder ctor, observeLights, three's SETUP stage over the whole node graph) · key = structural walk · look = template lookup/retain · rebind = cache-hit rebind · gen = analyze+generate+package (MISS only) · build = rebind-failed full rebuild
+const PHASES = ['preMs', 'setupMs', 'keyMs', 'lookMs', 'rebindMs', 'genMs', 'buildMs'];
+const probeMark = {};
+export const exportProbe = {
+begin() { for (const k of PHASES) probeMark[k] = structCache[k]; probeMark.h = structCache.hits; probeMark.m = structCache.misses; },
+delta() { const o = {}; for (const k of PHASES) o[k] = structCache[k] - (probeMark[k] ?? 0); o.hits = structCache.hits - (probeMark.h ?? 0); o.miss = structCache.misses - (probeMark.m ?? 0); return o; },
+};
 function tplKeyKB() { let n = 0; for (const k of structCache.map.keys()) n += k.length; return n >> 10; } // structural-key strings kept as Map keys (2 B/char in JSC if non-latin1, else 1)
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
 const fnIds = new WeakMap(); let fnN = 0;
@@ -251,7 +262,7 @@ const g = object?.geometry ?? geometry; const o = object;
 parts.push(`O:${o ? (o.isInstancedMesh ? 'I' : '') + (o.isSkinnedMesh ? 'S' : '') + (o.isBatchedMesh ? 'B' : '') + (o.isPoints ? 'P' : '') + (o.isLine ? 'L' : '') + (o.isSprite ? 'Q' : '') : ''}`);
 if (g?.attributes) for (const n of Object.keys(g.attributes).sort()) { const a = g.attributes[n]; parts.push(`a:${n}:${a.itemSize}:${a.isInstancedBufferAttribute ? 1 : 0}${a.normalized ? 'n' : ''}`); }
 parts.push(`ix:${g?.index ? 1 : 0}:mo:${g?.morphAttributes ? Object.keys(g.morphAttributes).length : 0}`);
-const L = []; scene?.traverse?.((x) => { if (x.isLight && (x.isDirectionalLight || x.isPointLight || x.isAmbientLight || x.isHemisphereLight)) L.push(x.type + (x.castShadow ? 's' : '')); }); parts.push('L:' + L.join(','));
+const L = []; if (scene && leakGuards.exportLightMemo) { for (const x of observeLights(scene).live) L.push(x.type + (x.castShadow ? 's' : '')); } /* nt-exportcost: same lights, same traverse order (observeLights' isShadingLight == the filter below), but the scene is scanned once per sync */ else scene?.traverse?.((x) => { if (x.isLight && (x.isDirectionalLight || x.isPointLight || x.isAmbientLight || x.isHemisphereLight)) L.push(x.type + (x.castShadow ? 's' : '')); }); parts.push('L:' + L.join(','));
 return parts;
 }
 // r10-6: a custom subclass's own numeric/string props are consumed by its setup*() -> their effect is already IN the post-setup graph (constants/slots); keying on the raw value would split every instance. Booleans (structure flags) stay.
@@ -304,9 +315,17 @@ const props = b.getNodeProperties(n); for (const k of Object.keys(props)) { cons
 parts.push(')');
 };
 for (const n of b.nodes) visit(n);
-const tj0 = Pf ? nowMs() : 0; const key = parts.join(''); if (Pf) { Pf.join += nowMs() - tj0; Pf.parts += parts.length; Pf.walks++; }
+const tj0 = Pf ? nowMs() : 0; const key = structCache.hashKey ? hashParts(parts) : parts.join(''); if (Pf) { Pf.join += nowMs() - tj0; Pf.parts += parts.length; Pf.walks++; }
 return { key, nodes, parts };
 }
+// nt-exportcost (structCache.hashKey / knob tslKeyHash): key = length + two independent 32-bit string hashes (FNV-1a, x33) streamed over the parts -> no ~1 MB join per export, no 1 MB Map key per template. 64-bit + length: collision odds ~2^-64 per template pair (tpl <= 64). Not valid with walkCheck (the reference walker joins).
+function hashParts(parts) {
+  let h1 = 2166136261, h2 = 5381, len = 0;
+  for (let i = 0; i < parts.length; i++) { const p = parts[i]; const n = p.length; len += n; for (let j = 0; j < n; j++) { const c = p.charCodeAt(j); h1 = Math.imul(h1 ^ c, 16777619); h2 = (Math.imul(h2, 33) + c) | 0; } }
+  return `H${len}:${(h1 >>> 0).toString(36)}:${(h2 >>> 0).toString(36)}`;
+}
+// compact id of a template key for dedupe (hashKey on: the key already is one)
+const keyId = (k) => (k.length <= 64 ? k : `${k.length}:${strHash(k)}`);
 // reference walker (r10-8, NodeUtils.getNodeChildren + primSig): kept ONLY so tests prove the fused builderWalk emits byte-identical keys/node order.
 export function builderWalkRef(THREE, b, pre) {
 const NU = THREE.NodeUtils; if (!NU?.getNodeChildren) return { refuse: 'no-NodeUtils.getNodeChildren' };
@@ -358,24 +377,27 @@ const mode = opts.cache ?? 'on';
 if (mode === 'off') return buildPackage(material, opts);
 const THREE = opts.THREE, C = structCache; let t0 = nowMs(), w = null, hit = null, decision = 'miss';
 let pre; try { pre = preParts(THREE, material, opts); } catch (e) { pre = null; w = { refuse: 'walk-error:' + (e?.message ?? e) }; }
-const gate = (b) => {
+C.preMs += nowMs() - t0; let tb0 = 0, tGE = 0; // nt-exportcost phase timing: tb0 = buildPackage start, tGE = gate exit
+const gate = (b) => { C.setupMs += nowMs() - tb0; try { gate1(b); } finally { tGE = nowMs(); } };
+const gate1 = (b) => {
 if (!pre) return; const t1 = nowMs();
 try { w = builderWalk(THREE, b, pre); } catch (e) { w = { refuse: 'walk-error:' + (e?.message ?? e) }; }
 C.keyMs += nowMs() - t1; if (w.nodes) { C.nodesWalked += w.nodes.length; C.nodeWalks++; if (w.nodes.length > C.nodesMax) C.nodesMax = w.nodes.length; }
 if (C.walkCheck && !w.refuse) { const t2 = nowMs(); const r = builderWalkRef(THREE, b, pre); C.refKeyMs += nowMs() - t2; C.walkChecked++; if (r.key !== w.key || r.nodes.length !== w.nodes.length || r.nodes.some((x, i) => x !== w.nodes[i])) { C.walkMismatch++; let d = 0; while (d < r.parts.length && r.parts[d] === w.parts[d]) d++; why('WALKMISMATCH', `${material.name || material.type} @${d}: ref ${r.parts[d]?.slice(0, 160)} <> fused ${w.parts[d]?.slice(0, 160)}`); } } // fused walker == reference walker (tests / ?wgpuTslWalkCheck=1)
 if (w.refuse) return;
-const tpl = C.map.get(w.key); if (!tpl || tpl.nodes.length !== w.nodes.length || tpl.noRebind) return;
-if (tpl.unproven?.size || tpl.unprovenBuf?.size) { decision = 'prove'; hit = tpl; return; }
-hit = tpl; retainTemplate(C, w.key, tpl); throw HIT;
+const tl0 = nowMs(); const tpl = C.map.get(w.key); if (!tpl || tpl.nodes.length !== w.nodes.length || tpl.noRebind) { C.lookMs += nowMs() - tl0; return; }
+if (tpl.unproven?.size || tpl.unprovenBuf?.size) { decision = 'prove'; hit = tpl; C.lookMs += nowMs() - tl0; return; }
+hit = tpl; retainTemplate(C, w.key, tpl); C.lookMs += nowMs() - tl0; throw HIT;
 };
-let pkg = null;
+let pkg = null; tb0 = nowMs();
 try { pkg = buildPackage(material, opts, gate); } catch (e) { if (e !== HIT) throw e; }
+if (pkg && tGE) C.genMs += nowMs() - tGE;
 if (!pkg) { // setup-stage hit: analyze+generate skipped
 const tpl = hit; t0 = nowMs(); let rb = null;
 try { rb = rebind(tpl, w, material, opts); } catch (e) { C.rebindFail++; if (String(e?.message).startsWith('template node collected')) C.map.delete(w.key); /* nt-tslbudget lean: a shared node the template needed was collected -> drop the template, the next full build re-registers it */ why('rebindFail', String(e?.message ?? e)); }
 C.rebindMs += nowMs() - t0;
 if (rb) {
-if (mode !== 'verify') { C.hits++; return rb; }
+if (mode !== 'verify') { C.hits++; if (tpl.kh) Object.defineProperty(rb, 'kh', { value: tpl.kh }); return rb; } // nt-exportcost: kh = template id (dedupe key part)
 const full = buildPackage(material, opts); C.verified++;
 const diff = comparePackages(rb, full, tpl);
 if (diff) { if (diff.startsWith('WGSL')) C.mismatch++; else if (diff.startsWith('VALUE')) C.valueMismatch++; else C.layoutMismatch++; why('MISMATCH', `${material.name || material.type}: ${diff}`); return full; }
@@ -390,7 +412,8 @@ if (C.keySamples) { const h = strHash(pkg.vertex + pkg.fragment); if (C.bound > 
 if (decision === 'prove') { const tpl = hit; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
 for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { if (C.bound > 0 && SHARED_OK.size >= C.bound) SHARED_OK.delete(SHARED_OK.values().next().value); SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
 if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } if (C.bound > 0 && C.wgslOf.size >= C.bound && !C.wgslOf.has(w.key)) C.wgslOf.delete(C.wgslOf.keys().next().value); C.wgslOf.set(w.key, k); }
-if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } if (C.lean) slimTemplate(t, !!bad); retainTemplate(C, w.key, t); }
+if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg, kh: keyId(w.key) }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } if (C.lean) slimTemplate(t, !!bad); retainTemplate(C, w.key, t); }
+{ const tt = C.map.get(w.key); if (tt?.kh && !tt.noRebind) Object.defineProperty(pkg, 'kh', { value: tt.kh }); }
 return pkg;
 }
 function strHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); }
@@ -398,8 +421,10 @@ function strHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h
 function templateBinds(t, material) {
 const { pkg, nodes } = t;
 t.slotOf = new Map(); for (const k of Object.keys(material)) if (material[k]?.isTexture) t.slotOf.set(material[k].uuid, k);
-t.slotMatrix = new Map(); t.slotTexNodes = new Set(); for (const n of pkg.tpl.updateNodes) if (n.isTextureNode && n.value?.uuid && t.slotOf.has(n.value.uuid) && !nodes.some((x) => x.uuid === n.uuid)) { t.slotTexNodes.add(n.uuid); if (n._matrixUniform) t.slotMatrix.set(n._matrixUniform.uuid, t.slotOf.get(n.value.uuid)); } const idx = new Map(nodes.map((n, i) => [n.uuid, i]));
-const lightKeys = new Set(); for (const n of pkg.tpl.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightKeys.add(v.uuid);
+const idx = new Map(nodes.map((n, i) => [n.uuid, i])), fast = structCache.bindIdx; // nt-exportcost bindIdx: Map lookups instead of nodes.some()/find()/scan per update node (O(updates x nodes))
+const inNodes = fast ? (u) => idx.has(u) : (u) => nodes.some((x) => x.uuid === u);
+t.slotMatrix = new Map(); t.slotTexNodes = new Set(); for (const n of pkg.tpl.updateNodes) if (n.isTextureNode && n.value?.uuid && t.slotOf.has(n.value.uuid) && !inNodes(n.uuid)) { t.slotTexNodes.add(n.uuid); if (n._matrixUniform) t.slotMatrix.set(n._matrixUniform.uuid, t.slotOf.get(n.value.uuid)); }
+let owners = null; const lightKeys = new Set(); for (const n of pkg.tpl.updateNodes) if (n.light?.isLight) for (const v of Object.values(n)) if (v?.isUniformNode) lightKeys.add(v.uuid);
 t.texNode = new Map(); for (const n of nodes) if (n.isTextureNode && n.value?.uuid) t.texNode.set(n.value.uuid, n);
 t.bufNode = new Map(); for (const n of nodes) if (n.value?.isBufferAttribute) t.bufNode.set(n.value, n);
 t.uniNode = new Map(); for (const { key, node } of pkg.tpl.liveUniforms) if (node) t.uniNode.set(key, node);
@@ -407,10 +432,12 @@ for (const g of pkg.bindGroups) for (const b of g.bindings) {
 if (b.textureUuid && !t.texNode.has(b.textureUuid) && !t.slotOf.has(b.textureUuid)) return `texture-unmapped:${b.name}`;
 if (b.kind === 'storage-buffer') { const a = pkg.bufferSources[`${g.group}.${b.binding}`]; if (!t.bufNode.has(a)) (t.unprovenBuf ??= new Map()).set(`${g.group}.${b.binding}`, a); /* builder-side buffer: shared iff a 2nd build binds the SAME BufferAttribute object (proven below) */ }
 }
-t.attrNode = new Map(); for (const k of Object.keys(pkg.attributeSources)) { const n = nodes.find((x) => `node:${x.uuid}` === k); if (!n) return `node-attribute-unmapped:${k}`; t.attrNode.set(k, n); }
-for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !t.slotMatrix.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
+t.attrNode = new Map(); for (const k of Object.keys(pkg.attributeSources)) { const n = fast ? (idx.has(k.slice(5)) ? nodes[idx.get(k.slice(5))] : undefined) : nodes.find((x) => `node:${x.uuid}` === k); if (!n) return `node-attribute-unmapped:${k}`; t.attrNode.set(k, n); }
+for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !t.slotMatrix.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; if (fast) { owners ??= ownerIndex(nodes); const o = owners.get(node.uuid); if (o) { ref = o.n; prop = o.p; } } else for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
 return null;
 }
+// uuid of a node's `node` / `_matrixUniform` child -> first (node, prop) in walk order (identical to the nested scan it replaces)
+function ownerIndex(nodes) { const m = new Map(); for (const n of nodes) for (const p of ['node', '_matrixUniform']) { const u = n[p]?.uuid; if (u && !m.has(u)) m.set(u, { n, p }); } return m; }
 // ---- nt-tslbudget: retention helpers ----
 // Closure-context hygiene: these arrows are created at MODULE level so a surviving package getter keeps only its 1-2 captured values alive (an arrow created inside rebind()/buildPackage() chained rebind's context: `t` (template: whole M0 node graph + package), `map`, `m` ... -> a rebound package pinned its template, so FIFO eviction freed nothing).
 const uGet = (u) => () => u.getValue?.();

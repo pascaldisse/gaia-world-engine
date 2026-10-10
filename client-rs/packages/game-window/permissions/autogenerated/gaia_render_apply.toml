@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-gaia-render-apply"
+description = "Enables the gaia_render_apply command without any pre-configured scope."
+commands.allow = ["gaia_render_apply"]
+
+[[permission]]
+identifier = "deny-gaia-render-apply"
+description = "Denies the gaia_render_apply command without any pre-configured scope."
+commands.deny = ["gaia_render_apply"]

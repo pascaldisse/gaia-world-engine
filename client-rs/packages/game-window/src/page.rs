@@ -2,11 +2,8 @@
 //! 1. page-gpu=hidden: the page cannot see WebGPU → WKWebView never creates a WebGPU device for drawing
 //!    (three/webgpu falls back to its WebGL2 backend for scene-graph use; the native Host draws).
 //! 2. html/body background transparent so the Metal surface shows through; HUD/menus stay HTML.
-//! 3. `window.__GAIA_NATIVE__` — the contract the page-side transport (lane nt-ipc JS) uses:
-//!      .send(Uint8Array) -> Promise   one command message, strictly in order, rejects if the host backlog is full
-//!      .info()           -> Promise   host stats (frame/fps/sizes/apply_errors/last_error/pointer_lock/...)
-//!      .pending          -> number    messages in flight (throttle on it)
-//!      .renderHeight/.upscaler/.pageGpu/.version  startup config (host is authoritative for the internal size)
+//! 3. `window.__GAIA_NATIVE__` (frozen): host stats only — `.info()` -> Promise<Info>, `.renderHeight/.upscaler/.pageGpu`.
+//!    The render command stream is NOT here: lane nt-ipc's GaiaRenderNative calls `invoke('gaia_render_apply', bytes)` itself.
 use crate::config::{GameConfig, PageGpu};
 
 const TEMPLATE: &str = r#"(() => {
@@ -24,18 +21,9 @@ const TEMPLATE: &str = r#"(() => {
   const clear = () => { const s = document.createElement('style'); s.textContent = 'html,body{background:transparent!important}'; (document.head || document.documentElement).appendChild(s); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', clear); else clear();
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
-  let tail = Promise.resolve(), pending = 0;
   const api = {
-    version: 1,
+    version: 2,
     renderHeight: cfg.renderHeight, upscaler: cfg.upscaler, pageGpu: cfg.pageGpu,
-    get pending() { return pending; },
-    send(bytes) {
-      const u8 = bytes instanceof Uint8Array ? bytes : ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes);
-      pending++;
-      const p = tail.then(() => invoke('gaia_native_apply', u8)).finally(() => { pending--; });
-      tail = p.catch(() => {});
-      return p;
-    },
     info() { return invoke('gaia_native_info'); },
   };
   Object.defineProperty(window, '__GAIA_NATIVE__', { value: Object.freeze(api) });

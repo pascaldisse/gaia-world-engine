@@ -3,5 +3,5 @@
   "identifier": "local",
   "description": "Bundled ui/ page only. The remote game origin gets its own capability at runtime (src/main.rs).",
   "windows": ["game-window"],
-  "permissions": ["allow-gaia-native-apply", "allow-gaia-native-info"]
+  "permissions": ["allow-gaia-render-apply", "allow-gaia-native-info"]
 }

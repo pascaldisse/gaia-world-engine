@@ -1018,12 +1018,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gaia-render-host"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "gaia-render",
+ "pollster",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
 name = "game-window"
 version = "0.1.0"
 dependencies = [
  "block2",
  "gaia-metalfx",
  "gaia-render",
+ "gaia-render-host",
  "objc2",
  "pollster",
  "serde",
@@ -2872,7 +2884,9 @@ name = "render-wasm"
 version = "0.1.0"
 dependencies = [
  "gaia-render",
+ "gaia-render-host",
  "js-sys",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

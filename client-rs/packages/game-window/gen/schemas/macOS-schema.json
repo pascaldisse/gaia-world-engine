@@ -177,28 +177,28 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Enables the gaia_native_apply command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-gaia-native-apply",
-          "markdownDescription": "Enables the gaia_native_apply command without any pre-configured scope."
-        },
-        {
           "description": "Enables the gaia_native_info command without any pre-configured scope.",
           "type": "string",
           "const": "allow-gaia-native-info",
           "markdownDescription": "Enables the gaia_native_info command without any pre-configured scope."
         },
         {
-          "description": "Denies the gaia_native_apply command without any pre-configured scope.",
+          "description": "Enables the gaia_render_apply command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-gaia-native-apply",
-          "markdownDescription": "Denies the gaia_native_apply command without any pre-configured scope."
+          "const": "allow-gaia-render-apply",
+          "markdownDescription": "Enables the gaia_render_apply command without any pre-configured scope."
         },
         {
           "description": "Denies the gaia_native_info command without any pre-configured scope.",
           "type": "string",
           "const": "deny-gaia-native-info",
           "markdownDescription": "Denies the gaia_native_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the gaia_render_apply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-gaia-render-apply",
+          "markdownDescription": "Denies the gaia_render_apply command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

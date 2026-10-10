@@ -2,24 +2,15 @@
 name = "game-window"
 version = "0.1.0"
 edition = "2024"
-description = "Native macOS host: JS game in a transparent Tauri webview over a wgpu/Metal surface drawn by gaia-render (internal height -> MetalFX -> surface)"
+description = "Native macOS host: JS game in a transparent Tauri webview over a wgpu/Metal surface drawn by gaia-render-host (internal height -> MetalFX -> surface)"
 license = "MIT"
-
-[features]
-# EXACTLY ONE host feature (compile_error otherwise). No silent fallback between them.
-#   host-ipc  = the real gaia_render_host::Host (lane nt-ipc). Needs the `gaia-render-host` dep line below UNCOMMENTED
-#               once client-rs/crates/gaia-render-host exists; build with --no-default-features --features host-ipc.
-#   stub-host = local stand-in (clears the target, counts command bytes, prints a loud STUB banner). Default until nt-ipc lands.
-default = ["stub-host"]
-host-ipc = []
-stub-host = []
 
 [build-dependencies]
 tauri-build = "2.6.3"
 
 [dependencies]
-gaia-render = { path = "../../crates/gaia-render" } # RenderCore::OPTIONAL_FEATURES (device features the host asks for)
-# gaia-render-host = { path = "../../crates/gaia-render-host" } # <- nt-ipc: uncomment with feature host-ipc
+gaia-render = { path = "../../crates/gaia-render" } # UpscaleSize / Upscaler for the MetalFX queue-mode path
+gaia-render-host = { path = "../../crates/gaia-render-host" } # lane nt-ipc: Host (command-stream decoder + RenderCore session)
 pollster = "0.4.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

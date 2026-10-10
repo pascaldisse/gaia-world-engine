@@ -5,46 +5,53 @@
 //! Never launched by the lane that wrote it (UNVERIFIED at runtime) — see NOTES.md.
 mod config;
 mod gpu;
-mod host;
-#[cfg(feature = "stub-host")]
-mod host_stub;
-#[cfg(feature = "host-ipc")]
-mod host_ipc;
 mod page;
 #[cfg(target_os = "macos")]
 mod pointer;
 mod shared;
 
 use config::GameConfig;
+use gaia_render_host::Host;
 use gpu::{FrameOutcome, Presenter};
 use shared::{Info, Shared};
 use std::{
-    sync::{Arc, atomic::Ordering},
+    sync::{Arc, Mutex, atomic::Ordering},
     thread,
     time::{Duration, Instant},
 };
 use tauri::{Manager, PhysicalPosition, WebviewUrl};
 
 /// == build.rs app manifest == capabilities/local.json. Remote capability below is generated from this list.
-const COMMANDS: &[&str] = &["gaia_native_apply", "gaia_native_info"];
+const COMMANDS: &[&str] = &["gaia_render_apply", "gaia_native_info"];
 const WINDOW_LABEL: &str = "game-window";
 const WEBVIEW_LABEL: &str = "game";
-/// Sleep when the surface gives no drawable (occluded / minimised / reconfigure): never spin.
-const IDLE_SLEEP: Duration = Duration::from_millis(16);
 
-/// Raw-body invoke: `invoke('gaia_native_apply', Uint8Array)`.
+/// Page -> native: one raw-body message of the GaiaRenderNative command stream; the response is the Host's JSON report
+/// (verbatim bytes). `async` ON PURPOSE: sync commands run on the MAIN thread, and `apply` does GPU uploads (an 80 MB
+/// scene) — async commands run on Tauri's worker pool. Order is kept by the JS side (exactly one message in flight).
 #[tauri::command]
-fn gaia_native_apply(request: tauri::ipc::Request<'_>, shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
-    match request.body() {
-        tauri::ipc::InvokeBody::Raw(bytes) => shared.push(bytes.clone()),
-        tauri::ipc::InvokeBody::Json(_) => Err("gaia_native_apply: body must be raw bytes (Uint8Array/ArrayBuffer), got JSON".into()),
-    }
+async fn gaia_render_apply(
+    app: tauri::AppHandle,
+    shared: tauri::State<'_, Arc<Shared>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<tauri::ipc::Response, String> {
+    // managed at the end of setup(), after the page may already be loading: a too-early message is an Err, not a panic
+    let host = app.try_state::<Arc<Mutex<Host>>>().ok_or("gaia_render_apply: host not ready yet (setup still running)")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("gaia_render_apply: raw body expected (Uint8Array), got JSON".into());
+    };
+    let report = host.lock().map_err(|_| "Host mutex poisoned".to_string())?.apply(bytes);
+    shared.apply_messages.fetch_add(1, Ordering::Relaxed);
+    shared.apply_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    Ok(tauri::ipc::Response::new(report))
 }
 
 #[tauri::command]
 fn gaia_native_info(shared: tauri::State<'_, Arc<Shared>>) -> Info {
     let mut info = shared.info.lock().unwrap().clone();
-    info.queued_bytes = shared.queued_bytes();
+    info.apply_messages = shared.apply_messages.load(Ordering::Relaxed);
+    info.apply_bytes = shared.apply_bytes.load(Ordering::Relaxed);
+    info.gpu_errors = shared.gpu_errors.load(Ordering::Relaxed);
     info
 }
 
@@ -59,22 +66,22 @@ fn main() {
         eprintln!("game-window: {e}");
         std::process::exit(2);
     });
-    let shared = Arc::new(Shared::new(
-        cfg.max_backlog_bytes,
-        Info {
-            host: host::HostAdapter::NAME,
-            upscaler: cfg.upscaler.name().into(),
-            render_height: cfg.render_height,
-            pointer_lock: if cfg.pointer_lock_spi { "pending".into() } else { "off (stock wry: WebKit denies requestPointerLock)".into() },
-            page_gpu: page::page_gpu_name(cfg.page_gpu),
-            ..Default::default()
-        },
-    ));
+    if cfg.dry_run {
+        println!("url={}\n{cfg:#?}", cfg.url);
+        return;
+    }
+    let shared = Arc::new(Shared::new(Info {
+        upscaler: cfg.upscaler.name().into(),
+        render_height: cfg.render_height,
+        pointer_lock: if cfg.pointer_lock_spi { "pending".into() } else { "off (stock wry: WebKit denies requestPointerLock)".into() },
+        page_gpu: page::page_gpu_name(cfg.page_gpu),
+        ..Default::default()
+    }));
     let run_shared = shared.clone();
     let setup_cfg = cfg.clone();
     tauri::Builder::default()
         .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![gaia_native_apply, gaia_native_info])
+        .invoke_handler(tauri::generate_handler![gaia_render_apply, gaia_native_info])
         .setup(move |app| {
             let cfg = setup_cfg;
             // Remote page (vite on http://127.0.0.1:port) may only call OUR commands, only from its own origin.
@@ -117,11 +124,9 @@ fn main() {
             }
             let _ = webview.set_focus(); // keyboard goes to the page from the first frame
 
-            let presenter = RenderThreadOwned(Presenter::new(&window, &cfg).map_err(std::io::Error::other)?);
-            {
-                let mut info = shared.info.lock().unwrap();
-                info.adapter = presenter.0.adapter_name.clone();
-            }
+            let presenter = RenderThreadOwned(Presenter::new(&window, &cfg, &shared).map_err(std::io::Error::other)?);
+            shared.info.lock().unwrap().adapter = presenter.0.adapter_name.clone();
+            app.manage(presenter.0.host()); // State<Arc<Mutex<Host>>> for gaia_render_apply
             eprintln!("[game-window] {} → {}  (render {}p, upscaler {}, page-gpu {:?})", cfg.title, cfg.url, cfg.render_height, cfg.upscaler.name(), cfg.page_gpu);
             let app_handle = app.handle().clone();
             let render_shared = shared.clone();
@@ -148,71 +153,58 @@ fn main() {
 fn render_loop(mut presenter: Presenter, window: &tauri::Window, cfg: &GameConfig, shared: &Shared) -> Result<(), String> {
     let cap = (cfg.fps_cap > 0.0).then(|| Duration::from_secs_f64(1.0 / cfg.fps_cap));
     let mut deadline = Instant::now();
-    let (mut frames, mut apply_errors, mut applied_msgs, mut applied_bytes) = (0u64, 0u64, 0u64, 0u64);
-    let mut last_error: Option<String> = None;
-    let (mut window_start, mut window_frames, mut window_cpu, mut since_print) = (Instant::now(), 0u64, 0.0f64, 0u64);
+    let (mut presented, mut since_print) = (0u64, 0u64);
+    let (mut window_start, mut window_frames, mut window_cpu) = (Instant::now(), 0u64, 0.0f64);
+    let mut last_idle: Option<&'static str> = None;
     while shared.running.load(Ordering::Acquire) {
         let t0 = Instant::now();
-        // 1. drain command bytes from the webview, in arrival order
-        for bytes in shared.drain() {
-            match presenter.host.apply(&bytes) {
-                Ok(()) => {
-                    applied_msgs += 1;
-                    applied_bytes += bytes.len() as u64;
-                }
-                Err(e) => {
-                    apply_errors += 1;
-                    if apply_errors <= 50 {
-                        eprintln!("[host] apply error #{apply_errors} ({} bytes): {e}", bytes.len());
-                    }
-                    last_error = Some(e);
-                }
-            }
-        }
-        // 2. draw + present (resize handled inside; Fifo present blocks = vsync pacing)
+        // drain + draw + present: IPC threads apply command bytes into the shared Host; Fifo present blocks = vsync pacing
         let size = window.inner_size().map_err(|e| e.to_string())?;
-        let outcome = presenter.frame((size.width, size.height))?;
-        let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
-        match outcome {
+        match presenter.frame((size.width, size.height))? {
             FrameOutcome::Presented => {
-                frames += 1;
+                presented += 1;
                 window_frames += 1;
-                window_cpu += cpu_ms;
+                window_cpu += t0.elapsed().as_secs_f64() * 1e3;
+                last_idle = None;
             }
-            FrameOutcome::Skipped(why) => {
-                if frames == 0 || frames % 600 == 0 {
-                    eprintln!("[gpu] frame skipped: {why}");
+            FrameOutcome::Idle(why) => {
+                if last_idle != Some(why) {
+                    eprintln!("[gpu] idle: {why}");
+                    last_idle = Some(why);
                 }
-                thread::sleep(IDLE_SLEEP);
+                thread::sleep(cfg.idle_sleep);
             }
         }
-        // 3. stats
         let elapsed = window_start.elapsed().as_secs_f64();
         if elapsed >= 1.0 {
             let fps = window_frames as f64 / elapsed;
             let mean_cpu = if window_frames > 0 { window_cpu / window_frames as f64 } else { 0.0 };
+            let internal = presenter.internal_size();
             {
                 let mut info = shared.info.lock().unwrap();
-                info.stage = format!("{:?}", presenter.stage());
+                info.stage = presenter.stage().into();
                 info.output = [presenter.output_size().0, presenter.output_size().1];
-                info.internal = [presenter.internal_size().0, presenter.internal_size().1];
+                info.internal = internal.map(|(w, h)| [w, h]);
+                info.session = presenter.session_exists();
                 info.scale_factor = window.scale_factor().unwrap_or(1.0);
-                info.frame = frames;
+                info.frames_presented = presented;
                 info.fps = fps;
                 info.cpu_ms = mean_cpu;
-                info.applied_messages = applied_msgs;
-                info.applied_bytes = applied_bytes;
-                info.apply_errors = apply_errors;
-                info.last_error = last_error.clone();
             }
             since_print += window_frames;
             if cfg.stats_every > 0 && since_print >= cfg.stats_every {
                 since_print = 0;
-                eprintln!("[stats] frame={frames} fps={fps:.1} cpu_ms={mean_cpu:.2} internal={:?} output={:?} stage={:?} msgs={applied_msgs} bytes={applied_bytes} apply_errors={apply_errors}", presenter.internal_size(), presenter.output_size(), presenter.stage());
+                eprintln!(
+                    "[stats] presented={presented} fps={fps:.1} cpu_ms={mean_cpu:.2} internal={internal:?} output={:?} msgs={} bytes={} gpu_errors={}",
+                    presenter.output_size(),
+                    shared.apply_messages.load(Ordering::Relaxed),
+                    shared.apply_bytes.load(Ordering::Relaxed),
+                    shared.gpu_errors.load(Ordering::Relaxed),
+                );
             }
             (window_start, window_frames, window_cpu) = (Instant::now(), 0, 0.0);
         }
-        // 4. optional extra cap on top of vsync
+        // optional extra cap on top of vsync
         if let Some(interval) = cap {
             deadline += interval;
             let now = Instant::now();

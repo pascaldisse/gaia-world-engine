@@ -4,7 +4,7 @@
 fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(&["gaia_native_apply", "gaia_native_info"])),
+            .app_manifest(tauri_build::AppManifest::new().commands(&["gaia_render_apply", "gaia_native_info"])),
     )
     .expect("tauri build");
 }

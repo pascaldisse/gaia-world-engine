@@ -5,8 +5,8 @@ use std::collections::HashMap;
 /// name (= --flag), env var, default, help
 const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("url", "GAIA_GAME_URL", "", "game page URL (vite) — REQUIRED, no default"),
-    ("render-height", "GAIA_RENDER_HEIGHT", "720", "internal render height (px); width follows window aspect"),
-    ("upscaler", "GAIA_UPSCALER", "metalfx-spatial", "metalfx-spatial | bilinear"),
+    ("render-height", "GAIA_RENDER_HEIGHT", "720", "internal render height (px); width follows window aspect. AUTHORITATIVE: forced into the URL as ?wgpuHeight= and set on the core at session start"),
+    ("upscaler", "GAIA_UPSCALER", "metalfx-spatial", "metalfx-spatial (core.render_frame, queue-mode) | bilinear (core default, Host::render straight into the surface)"),
     ("fps-cap", "GAIA_FPS_CAP", "0", "extra frame cap (0 = display vsync only)"),
     ("width", "GAIA_WINDOW_WIDTH", "1280", "window logical width"),
     ("height", "GAIA_WINDOW_HEIGHT", "720", "window logical height"),
@@ -15,9 +15,11 @@ const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("page-gpu", "GAIA_PAGE_GPU", "hidden", "hidden = page sees NO navigator.gpu / webgpu canvas (WKWebView never creates a WebGPU device) | visible = leave WebGPU to the page (transitional: three's own compute until lane nt-gi lands)"),
     ("pointer-lock", "GAIA_POINTER_LOCK", "spi", "spi = enable Element.requestPointerLock() in WKWebView via the private WKUIDelegate hook | off = stock wry (lock is DENIED by WebKit)"),
     ("devtools", "GAIA_DEVTOOLS", "0", "1 = enable the web inspector"),
-    ("max-backlog-bytes", "GAIA_MAX_BACKLOG_BYTES", "268435456", "undrained command bytes before gaia_native_apply rejects (page must back off)"),
+    ("idle-sleep-ms", "GAIA_IDLE_SLEEP_MS", "2", "render-thread sleep when there is nothing to draw (no committed frame / no drawable)"),
+    ("render-backend", "GAIA_RENDER_BACKEND", "native", "value forced into the page URL's ?renderBackend= (nt-ipc's GaiaRenderNative = native)"),
     ("stats-every", "GAIA_STATS_EVERY", "300", "print fps/cpu line every N frames (0 = off)"),
-    ("query", "GAIA_GAME_QUERY", "", "extra raw query appended to the URL (e.g. renderBackend=native)"),
+    ("dry-run", "GAIA_DRY_RUN", "0", "1 = print the resolved config (final URL etc.) and exit; opens no window"),
+    ("query", "GAIA_GAME_QUERY", "", "extra raw query appended to the URL (e.g. nativeFlushMB=8)"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,7 +54,8 @@ pub struct GameConfig {
     pub page_gpu: PageGpu,
     pub pointer_lock_spi: bool,
     pub devtools: bool,
-    pub max_backlog_bytes: usize,
+    pub idle_sleep: std::time::Duration,
+    pub dry_run: bool,
     pub stats_every: u64,
 }
 
@@ -104,6 +107,10 @@ impl GameConfig {
             };
             url.set_query(Some(&joined));
         }
+        // The host owns these two (page reads them in wgpu-present.js): backend = native transport, height = internal resolution.
+        let render_height_n = num("render-height")? as u32;
+        let backend = get("render-backend");
+        url.set_query(Some(&force_params(url.query().unwrap_or(""), &[("renderBackend", &backend), ("wgpuHeight", &render_height_n.to_string())])));
         let upscaler = match get("upscaler").as_str() {
             "metalfx-spatial" => UpscalerKind::MetalFxSpatial,
             "bilinear" => UpscalerKind::Bilinear,
@@ -139,7 +146,8 @@ impl GameConfig {
             page_gpu,
             pointer_lock_spi,
             devtools: flag("devtools")?,
-            max_backlog_bytes: num("max-backlog-bytes")? as usize,
+            dry_run: flag("dry-run")?,
+            idle_sleep: std::time::Duration::from_secs_f64(num("idle-sleep-ms")?.max(0.0) / 1e3),
             stats_every: num("stats-every")? as u64,
         })
     }
@@ -169,4 +177,15 @@ fn parse_cli(args: Vec<String>) -> Result<HashMap<String, String>, String> {
         out.insert(name, value);
     }
     Ok(out)
+}
+
+/// Replace-or-append `key=value` pairs in a RAW query string (no decode/re-encode of the other pairs).
+fn force_params(query: &str, forced: &[(&str, &str)]) -> String {
+    let mut parts: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && !forced.iter().any(|(k, _)| p.split('=').next() == Some(*k)))
+        .map(str::to_string)
+        .collect();
+    parts.extend(forced.iter().map(|(k, v)| format!("{k}={v}")));
+    parts.join("&")
 }

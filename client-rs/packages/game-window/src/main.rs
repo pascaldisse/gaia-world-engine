@@ -10,6 +10,8 @@ mod ipc_ws;
 mod page;
 #[cfg(target_os = "macos")]
 mod pointer;
+#[cfg(target_os = "macos")]
+mod occlusion;
 mod shared;
 
 use config::GameConfig;
@@ -130,6 +132,10 @@ let window = tauri::window::WindowBuilder::new(app, WINDOW_LABEL)
             #[cfg(target_os = "macos")]
             if cfg.pointer_lock_spi {
                 pointer::install(&webview, shared.clone()).map_err(std::io::Error::other)?;
+            }
+            #[cfg(target_os = "macos")]
+            if !cfg.occlusion_detection {
+                occlusion::disable(&webview).map_err(std::io::Error::other)?;
             }
             let _ = webview.set_focus(); // keyboard goes to the page from the first frame
 

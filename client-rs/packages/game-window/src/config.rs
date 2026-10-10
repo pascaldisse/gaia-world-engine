@@ -13,6 +13,7 @@ const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("title", "GAIA_WINDOW_TITLE", "GAIA", "window title"),
     ("fullscreen", "GAIA_FULLSCREEN", "0", "1 = start fullscreen"),
     ("page-gpu", "GAIA_PAGE_GPU", "hidden", "hidden = page sees NO navigator.gpu / webgpu canvas (WKWebView never creates a WebGPU device) | visible = leave WebGPU to the page (transitional: three's own compute until lane nt-gi lands)"),
+    ("occlusion-detection", "GAIA_OCCLUSION_DETECTION", "off", "off = page stays visible (rAF runs) when the window is covered (private WKWebView SPI) | on = stock WebKit: covered window -> visibilityState hidden -> rAF stops"),
     ("pointer-lock", "GAIA_POINTER_LOCK", "spi", "spi = enable Element.requestPointerLock() in WKWebView via the private WKUIDelegate hook | off = stock wry (lock is DENIED by WebKit)"),
     ("devtools", "GAIA_DEVTOOLS", "0", "1 = enable the web inspector"),
     ("idle-sleep-ms", "GAIA_IDLE_SLEEP_MS", "2", "render-thread sleep when there is nothing to draw (no committed frame / no drawable)"),
@@ -64,6 +65,7 @@ pub struct GameConfig {
     pub fullscreen: bool,
     pub page_gpu: PageGpu,
     pub pointer_lock_spi: bool,
+    pub occlusion_detection: bool,
     pub page_log: String,
     pub page_log_max: u32,
     pub page_heartbeat_ms: u32,
@@ -146,6 +148,7 @@ impl GameConfig {
             "visible" => PageGpu::Visible,
             other => return Err(format!("--page-gpu must be hidden|visible, got {other:?}")),
         };
+        let occlusion_detection = match get("occlusion-detection").as_str() { "on" => true, "off" => false, o => return Err(format!("--occlusion-detection must be on|off, got {o:?}")) };
         let pointer_lock_spi = match get("pointer-lock").as_str() {
             "spi" => true,
             "off" => false,
@@ -171,6 +174,7 @@ impl GameConfig {
             fullscreen: flag("fullscreen")?,
             page_gpu,
             pointer_lock_spi,
+            occlusion_detection,
             page_log,
             page_log_max,
             page_heartbeat_ms,

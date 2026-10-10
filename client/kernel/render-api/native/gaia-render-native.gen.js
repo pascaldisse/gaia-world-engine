@@ -92,7 +92,7 @@ export const OPS = Object.freeze({
 export const QUERIES = Object.freeze({
   compressedStats: { drain: false, type: "u32", dflt: [0,0,0,0,0,0] },
   threeSkipped: { drain: false, type: null, dflt: 0 },
-  dynBlockStats: { drain: false, type: "u32", dflt: [0,0,0,0,0,0,0] },
+  dynBlockStats: { drain: false, type: "u32", dflt: [0,0,0,0,0,0,0,0] },
   drawnInstanceCount: { drain: false, type: null, dflt: 0 },
   instanceCount: { drain: false, type: null, dflt: 0 },
   lastGroupHidden: { drain: false, type: null, dflt: 0 },

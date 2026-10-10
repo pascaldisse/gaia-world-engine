@@ -396,7 +396,7 @@ impl GaiaRender {
     pub fn set_instance_block_dynamic(&mut self, id: u32, mode: u32) {
         let _ = self.s.set_instance_block_dynamic(id, mode);
     }
-    /// lane nt-dyninst: [dynamic blocks, dynamic instances, bytes written last frame, dyn buffer allocs (cum), world-list rebuilds (cum), promotions (cum), demotions (cum)].
+    /// lane nt-dyninst: [dynamic blocks, dynamic instances, bytes written last frame, dyn buffer allocs (cum), world-list rebuilds (cum), promotions (cum), demotions (cum), world buffer allocs (cum)].
     #[wasm_bindgen(js_name = dynBlockStats)]
     pub fn dyn_block_stats(&self) -> Vec<u32> {
         self.s.core.dyn_block_stats_vec()

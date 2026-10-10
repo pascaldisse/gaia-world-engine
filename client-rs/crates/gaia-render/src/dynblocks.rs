@@ -55,6 +55,8 @@ pub struct DynBlockStats {
     pub buffer_allocs: u64,
     /// full world-list rebuilds (`rebuild_instances`)
     pub rebuilds: u64,
+    /// world instance buffers (re)created (capacity growth only; a rebuild itself is `queue.write_buffer`)
+    pub world_buffer_allocs: u64,
     pub promotions: u64,
     pub demotions: u64,
 }
@@ -103,11 +105,11 @@ impl RenderCore {
     pub fn dyn_block_stats(&self) -> &DynBlockStats {
         &self.dyn_stats
     }
-    /// Wire form of `DynBlockStats`: [dynamic blocks, dynamic instances, bytes written last frame, buffer allocs (cum), world rebuilds (cum), promotions (cum), demotions (cum)].
+    /// Wire form of `DynBlockStats`: [dynamic blocks, dynamic instances, bytes written last frame, buffer allocs (cum), world rebuilds (cum), promotions (cum), demotions (cum), world buffer allocs (cum)].
     pub fn dyn_block_stats_vec(&self) -> Vec<u32> {
         let s = &self.dyn_stats;
         let c = |v: u64| v.min(u32::MAX as u64) as u32;
-        vec![s.blocks, s.instances, c(s.bytes_written), c(s.buffer_allocs), c(s.rebuilds), c(s.promotions), c(s.demotions)]
+        vec![s.blocks, s.instances, c(s.bytes_written), c(s.buffer_allocs), c(s.rebuilds), c(s.promotions), c(s.demotions), c(s.world_buffer_allocs)]
     }
 
     /// Flip block `id` into/out of the dynamic path; one world-list rebuild (it leaves/joins the sorted list).

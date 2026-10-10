@@ -34,7 +34,7 @@
   "queryDefaults": {
     "compressedStats": [0, 0, 0, 0, 0, 0],
     "passStats": [],
-    "dynBlockStats": [0, 0, 0, 0, 0, 0, 0],
+    "dynBlockStats": [0, 0, 0, 0, 0, 0, 0, 0],
     "threeSkipped": 0,
     "drawnInstanceCount": 0,
     "instanceCount": 0,

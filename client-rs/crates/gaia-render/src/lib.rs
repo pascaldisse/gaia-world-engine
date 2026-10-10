@@ -606,7 +606,14 @@ struct GpuMesh {
     attrs: HashMap<String, (wgpu::Buffer, u32)>,
 }
 
+/// (texture-state epoch, base, lightmap, array, normal, roughness, metalness, emissive, ao): what a built-in material's bind group was built from.
+type MatKey = (u64, [Option<u32>; 8]);
 struct GpuMaterial {
+    /// nt-dyninst: persistent uniform buffer (COPY_DST) of a built-in material + the values last written / the texture-binding key the bind group was built for. A property-only `create_material` (same textures) rewrites the buffer in place (no buffer/bind-group alloc per update).
+    uniform: Option<wgpu::Buffer>,
+    last_u: Option<MaterialUniform>,
+    key: MatKey,
+    pending_u: Option<MaterialUniform>,
     /// None = external shader material (no built-in desc to rebuild from).
     desc: Option<MaterialDesc>,
     bind: wgpu::BindGroup,
@@ -723,6 +730,10 @@ pub struct RenderCore {
     dyn_stats: DynBlockStats,
     /// rendered frames so far (promotion streaks / idle demotion)
     frame_no: u64,
+    /// bumped whenever a texture is (re)created/removed (material bind-group staleness key)
+    tex_epoch: u64,
+    /// built-in materials whose uniform buffer awaits `queue.write_buffer` (flushed in encode_forward)
+    material_dirty: Vec<u32>,
     instances_dirty: bool,
     /// material id -> (lightmap texture id, overlay fac)
     material_lightmaps: HashMap<u32, (u32, f32)>,
@@ -969,6 +980,8 @@ impl RenderCore {
             dyn_scratch: Vec::new(),
             dyn_stats: DynBlockStats::default(),
             frame_no: 0,
+            tex_epoch: 0,
+            material_dirty: Vec::new(),
             instances_dirty: true,
             last_draw_calls: 0,
             last_pass_stats: [0; 12],
@@ -1318,6 +1331,7 @@ impl RenderCore {
         Ok(())
     }
     fn rebind_users_of(&mut self, device: &wgpu::Device, id: u32) {
+        self.tex_epoch += 1; // a texture (re)uploaded under `id`: every cached material bind group is suspect
         let ids: Vec<u32> = self.materials.iter().filter(|(k, m)| {
             m.desc.as_ref().is_some_and(|d| d.base_color_texture == Some(id))
                 || self.material_lightmaps.get(k).is_some_and(|l| l.0 == id)
@@ -1332,6 +1346,7 @@ impl RenderCore {
         let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
         let texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("texture array"), size: wgpu::Extent3d { width, height, depth_or_array_layers: layers }, mip_level_count: levels, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
         let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        self.tex_epoch += 1;
         self.array_textures.insert(id, ArrayTex { texture, view, width, height, layers, levels, srgb });
         for l in 0..layers { let o = (l * width * height * 4) as usize; self.update_texture_layer(device, queue, id, l, &rgba[o..o + (width * height * 4) as usize])?; }
         self.rebind_users_of(device, id);
@@ -1360,6 +1375,7 @@ impl RenderCore {
             queue.submit(Some(enc.finish()));
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
+        self.tex_epoch += 1;
         self.cube_textures.insert(id, CubeTex { texture, view, size, levels, srgb });
         Ok(())
     }
@@ -1385,6 +1401,7 @@ impl RenderCore {
         self.static_gen += 1;
     }
     pub fn remove_texture(&mut self, id: u32) {
+        self.tex_epoch += 1;
         self.textures.remove(&id);
         self.array_textures.remove(&id);
         self.cube_textures.remove(&id);
@@ -1421,10 +1438,30 @@ impl RenderCore {
             maps0: [arr.is_some() as u32 as f32, if mm.normal_scale == 0.0 { 1.0 } else { mm.normal_scale }, tv(mm.normal).is_some() as u32 as f32, tv(mm.roughness).is_some() as u32 as f32],
             maps1: [tv(mm.metalness).is_some() as u32 as f32, tv(mm.emissive).is_some() as u32 as f32, tv(mm.ao).is_some() as u32 as f32, mm.side as f32],
         };
+        let key: MatKey = (self.tex_epoch, [desc.base_color_texture, self.material_lightmaps.get(&id).map(|l| l.0), mm.array, mm.normal, mm.roughness, mm.metalness, mm.emissive, mm.ao]);
+        let cull_back = self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back);
+        if let Some(m) = self.materials.get_mut(&id) {
+            if m.pipeline.is_none() && m.uniform.is_some() && m.key == key {
+                // same textures -> same bind group; only the uniform values changed. The depth-only caster passes read base alpha / cutoff / flags / maps / side: bump the static shadow cache only if those moved.
+                let shadow_relevant = m.last_u.as_ref().is_none_or(|o| o.base_color[3] != u.base_color[3] || o.params[2] != u.params[2] || o.params[3] != u.params[3] || o.flags != u.flags || o.maps0 != u.maps0 || o.maps1 != u.maps1) || m.shadow_cull_back != cull_back;
+                let first = m.pending_u.is_none();
+                m.desc = Some(desc);
+                m.shadow_cull_back = cull_back;
+                m.last_u = Some(u);
+                m.pending_u = Some(u);
+                if first {
+                    self.material_dirty.push(id);
+                }
+                if shadow_relevant {
+                    self.static_gen += 1;
+                }
+                return;
+            }
+        }
         let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
             contents: bytemuck::bytes_of(&u),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material bind"),
@@ -1458,7 +1495,11 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
-                shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
+                uniform: Some(buf),
+                last_u: Some(u),
+                key,
+                pending_u: None,
+                shadow_cull_back: cull_back,
                 desc: Some(desc),
                 bind,
                 pipeline: None,
@@ -1579,6 +1620,10 @@ impl RenderCore {
         self.materials.insert(
             id,
             GpuMaterial {
+                uniform: None,
+                last_u: None,
+                key: (0, [None; 8]),
+                pending_u: None,
                 shadow_cull_back: self.material_flags.get(&id).is_some_and(|f| f.shadow_cull_back),
                 desc: None,
                 bind,
@@ -2121,7 +2166,7 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
         self.targets.as_ref().map(|t| t.internal)
     }
 
-    fn rebuild_instances(&mut self, device: &wgpu::Device) {
+    fn rebuild_instances(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         struct Ent { id: Option<u32>, mesh: u32, material: u32, transform: [f32; 16], color: [f32; 4], uv: [f32; 4], is_static: bool, cast_shadow: bool, shadow_only: bool }
         let mut all: Vec<Ent> = Vec::with_capacity(self.instances.len());
         for (id, i) in self.instances.iter() {
@@ -2158,16 +2203,10 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
                 _ => self.batches.push(Batch { mesh: inst.mesh, material: inst.material, range: n..n + 1, dyn_block: None }),
             }
         }
-        self.instance_colors = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance colours"),
-            contents: nonempty(bytemuck::cast_slice(&cols)),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
-        self.instance_uvs = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance uv windows"),
-            contents: nonempty(bytemuck::cast_slice(&uvw)),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
+        // persistent capacity-doubling buffers + queue.write_buffer: a world rebuild (moving instance) no longer allocates GPU buffers
+        let mut allocs = 0u64;
+        allocs += upload_persistent(device, queue, &mut self.instance_colors, "instance colours", bytemuck::cast_slice(&cols)) as u64;
+        allocs += upload_persistent(device, queue, &mut self.instance_uvs, "instance uv windows", bytemuck::cast_slice(&uvw)) as u64;
         self.instance_transforms = data.clone();
         // world-space AABBs for shadow caster culling (same order as `data`)
         let mut bounds: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
@@ -2198,11 +2237,8 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
             .filter(|c| max_diag <= 0.0 || c.lo.distance(c.hi) <= max_diag)
             .collect();
         self.casters = casters;
-        self.instance_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("instance transforms"),
-            contents: nonempty(bytemuck::cast_slice(&data)),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
+        allocs += upload_persistent(device, queue, &mut self.instance_buffer, "instance transforms", bytemuck::cast_slice(&data)) as u64;
+        self.dyn_stats.world_buffer_allocs += allocs;
         self.static_batch_len = self.batches.len();
         self.static_caster_len = self.casters.len();
         self.dyn_casters_dirty = true; // dynamic casters re-appended after the fresh static prefix
@@ -2370,9 +2406,16 @@ pub fn set_bloom(&mut self, b: Option<BloomParams>) -> Result<(), String> {
             let ones: Vec<f32> = vec![1.0; (need / 4) as usize];
             self.white_colors = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("white vertex colours"), contents: bytemuck::cast_slice(&ones), usage: wgpu::BufferUsages::VERTEX });
         }
+        for id in std::mem::take(&mut self.material_dirty) {
+            if let Some(m) = self.materials.get_mut(&id) {
+                if let (Some(u), Some(b)) = (m.pending_u.take(), &m.uniform) {
+                    queue.write_buffer(b, 0, bytemuck::bytes_of(&u));
+                }
+            }
+        }
         self.dyn_demote_idle();
         if self.instances_dirty {
-            self.rebuild_instances(device);
+            self.rebuild_instances(device, queue);
         }
         self.sync_dynamic_blocks(device, queue);
         self.refresh_skinned_casters();
@@ -2692,6 +2735,19 @@ p.encode(queue, encoder, &t.color_view, self.frame.ambient[3]);
     }
 }
 
+/// Fill a persistent VERTEX buffer slot with `bytes` (queue.write_buffer); (re)create it only when it is too small (power-of-two capacity). Returns true if a buffer was created.
+fn upload_persistent(device: &wgpu::Device, queue: &wgpu::Queue, slot: &mut Option<wgpu::Buffer>, label: &'static str, bytes: &[u8]) -> bool {
+    let need = (bytes.len() as u64).max(16);
+    let grow = slot.as_ref().is_none_or(|b| b.size() < need);
+    if grow {
+        let cap = need.next_power_of_two();
+        *slot = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: cap, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
+    }
+    if !bytes.is_empty() {
+        queue.write_buffer(slot.as_ref().expect("slot"), 0, bytes);
+    }
+    grow
+}
 fn nonempty(bytes: &[u8]) -> &[u8] {
     if bytes.is_empty() { &[0u8; 16] } else { bytes }
 }

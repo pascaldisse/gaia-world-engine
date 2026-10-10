@@ -1914,8 +1914,8 @@ impl RenderCore {
         if touches_static {
             self.static_gen += 1;
         }
-        // dynamic path: an unchanged re-assertion costs nothing (the adapter re-sends the flag set); static path keeps its old unconditional dirty
-        if changed || !b.dynm.active {
+        // an unchanged re-assertion (the adapter re-sends the flag set) changes nothing in the world list / casters: no dirty
+        if changed {
             self.block_touch(id, dynblocks::Touch::Flags);
         }
     }
@@ -1927,7 +1927,7 @@ impl RenderCore {
         if changed && b.is_static {
             self.static_gen += 1; // r18-perf: only a STATIC block's flag change alters the cached static layer
         }
-        if changed || !b.dynm.active {
+        if changed {
             self.block_touch(id, dynblocks::Touch::Flags);
         }
     }

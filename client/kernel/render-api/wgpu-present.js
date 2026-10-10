@@ -1,7 +1,7 @@
 // render-api/wgpu-present.js — run the WHOLE live scene through the wasm wgpu renderer (engine seam, ?renderBackend=wgpu).
 // three still builds/animates the scene graph (game code unchanged); this replaces only the draw: scene-adapter.sync → wgpu backend → overlay canvas.
 // ?renderBackend=native: same pipeline, but the draw goes to the NATIVE Rust/wgpu Metal renderer over Tauri IPC (native/gaia-render-native.js; wasm + overlay canvas unused).
-//   native params: &nativeTransport=invoke|protocol (default invoke) &nativeCommand=gaia_render_apply &nativeScheme=gaiarender &nativeChunkMB=16 (max IPC message) &nativeFlushMB=4 (stream bulk uploads mid-frame) &nativeInitialMB=1
+//   native params: &nativeTransport=ws|invoke|protocol (default ws = localhost WebSocket, host --ipc-ws) &nativeInflight=2 (ws: messages in flight) &nativeCommand=gaia_render_apply &nativeScheme=gaiarender &nativeChunkMB=16 (max IPC message) &nativeFlushMB=4 (stream bulk uploads mid-frame) &nativeInitialMB=1
 // Params: ?renderBackend=wgpu &wgpuPkg=<url of render_wasm.js (default /pkg/render_wasm.js)> &wgpuHeight=<internal render height> &wgpuShadows=0|1 &wgpuTsl=0|1 (r14: DEFAULT ON — NodeMaterials with custom nodes are translated to WGSL; =0 = PBR fallback for those) &wgpuStats=1 &wgpuGi=0|1 (probe GI atlases, default on when gi open mode is live) &wgpuGiEvery=30
 import { installGpuMirror } from './gpu-mirror.js';
 import { createWgpuBackend } from './wgpu-backend.js';

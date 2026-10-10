@@ -33,3 +33,10 @@ Fix (default `--pointer-lock spi`): `pointer.rs` adds that selector to wry's del
 - `Presenter` is `unsafe impl Send` (Metal objects) — created on the main thread, used by one thread.
 - Surface/webview ATS: URL must be http(s) on 127.0.0.1/localhost (IP literals are ATS-exempt; not tested).
 - App commands + remote origin: ACL path read from tauri-2.11.5 source (`webview/mod.rs` on_message), not exercised.
+
+## transport: localhost WebSocket (lane nt-fastipc) — UNVERIFIED AT RUNTIME (cargo build + --dry-run only)
+- MEASURED (Pascal, live): Tauri `invoke(cmd, Uint8Array)` = ~16 MB/s (13.6 MB msg: host apply 20-31 ms, page round trip 847 ms → WKWebView→wry ipc:// body transfer). Need ≥300 MB/s.
+- `ipc_ws.rs`: tungstenite 0.24 server on 127.0.0.1:`--ipc-port` (0 = ephemeral), 128-bit per-launch token (`?t=`), `Origin` == game origin (`--ipc-check-origin`), loopback peer only. Port+token+origin injected as `__GAIA_NATIVE__.ws` (null unless `location.origin` == game origin). Why WS: one ordered binary connection = the serial pipe; no CORS preflight (HTTP POST octet-stream cross-port needs OPTIONS + CORS headers); http page → ws://127.0.0.1 is not mixed content.
+- per connection: RX thread (BufReader `--ipc-read-buf-kb`) → sync_channel(`--ipc-queue`) → APPLY thread → `apply::apply_logged` (same Mutex<Host>, same counters, same `[apply]` log as the invoke command; line now has `via=ws#N|invoke queued=`) → report as a binary frame. Next message is received while the previous applies.
+- page: `?nativeTransport=ws` (default) | invoke | protocol; `?nativeInflight=2` (ws only; invoke/protocol are forced to 1: no ordering guarantee). ws unavailable (`--ipc-ws 0`) = loud error, no silent fallback.
+- host log: `[ipc-ws] listening 127.0.0.1:<port>` · `conn#N open` · `[apply] #n via=ws#N … queued=` · every `--ipc-stats-ms` `[ipc-ws] conn#N 2.0s: M msgs, recv X MB (Y MB/s wall), applied …, apply busy … ms (Z MB/s while applying)` · `handshake refused (403)` on bad token/origin. Page watch line: `ws msgs= sentMB= ackMBps= lastMBps= inflight=k/N …`.

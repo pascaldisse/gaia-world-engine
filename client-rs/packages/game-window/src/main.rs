@@ -53,11 +53,12 @@ Ok(tauri::ipc::Response::new(report))
 /// Forwarded by page.rs init script: console.error/warn/info/log + window error + unhandledrejection, `level` + text.
 #[tauri::command]
 fn gaia_page_log(level: String, text: String) {
+    let t = memfoot::t_ms(); // host receive time, same axis as [host:mem] (a stalled page delivers late -> t_ms is arrival, not emit)
     if level == "mem" { // page byte accounting (page-side mem-account.js) + host/WebContent footprints, one line
-        eprintln!("[page:mem] {text} {}", memfoot::host_suffix());
+        eprintln!("[page:mem] t_ms={t} {text} {}", memfoot::host_suffix());
         return;
     }
-    eprintln!("[page:{level}] {text}");
+    eprintln!("[page:{level}] t_ms={t} {text}");
 }
 
 #[tauri::command]

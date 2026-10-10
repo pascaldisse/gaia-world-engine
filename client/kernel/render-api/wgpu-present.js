@@ -41,6 +41,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   size();
   const renderHeight = Number(params.get('wgpuHeight') ?? Math.min(innerHeight, 720));
   const backend = await createWgpuBackend({ canvas, wasm, renderHeight, staticInstances: 'non-skinned', options: { shadows: { enabled: params.get('wgpuShadows') !== '0' }, hdrScene: params.get('wgpuPost') === '0' ? 0 : 1 } });
+  if (pm) { structCache.lean = !!pm.tslLean; structCache.bound = pm.tslBound ? (pm.tslMapMax > 0 ? pm.tslMapMax : Infinity) : 0; } // nt-tslbudget: template/closure/map retention fixes (native only; browser path = old behaviour)
   if (pm?.tslTemplateMax > 0) structCache.maxTemplates = pm.tslTemplateMax; // nt-frameleak: native default 64 (browser 128): each template pins node graph + package -> material/mesh/textures; &wgpuTslCacheMax below still wins
   { const mt = Number(params.get('wgpuTslCacheMax')); if (Number.isFinite(mt) && mt > 0) structCache.maxTemplates = mt; } // r10-7 template retention bound
   if (params.get('wgpuTslKeyDump') === '1') structCache.keySamples = new Map();

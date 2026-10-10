@@ -55,7 +55,7 @@ out.uniforms = bd.uniforms.map((u) => {
   const node = u.nodeUniform?.node, source = semantic ? { kind: 'host', semantic } : sourceOf(node, refs, lightUuids);
   // key = stable id the backend uses for set_three_uniforms (uniform node uuid; unique per package)
   const key = semantic ? null : (node?.uuid ?? `${g.index}.${i}.${u.name}`);
-  if (key) liveUniforms.push({ key, u, node, get: () => u.getValue?.() });
+  if (key) liveUniforms.push(structCache.lean ? { key, node, get: uGet(u) } : { key, u, node, get: () => u.getValue?.() }); // nt-tslbudget lean: module-level getter factory (the inline arrow's context chain pinned buildPackage's refs/lightUuids/semantics/bufferSources); `u` field was never read
   return { name: u.name, semantic, key, source, type: u.type, offset: u.offset, itemSize: u.itemSize, boundary: u.boundary, value: toPlain(u.getValue?.()) };
 });
 } else if (bd.texture) { out.textureUuid = bd.texture.uuid; out.colorSpace = bd.texture.colorSpace ?? null; }
@@ -89,7 +89,7 @@ const sharedFrames = new WeakMap();
 function shared(r, THREE, token, time) {
 let s = sharedFrames.get(r);
 if (!s) { const frame = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); frame.renderer = r; sharedFrames.set(r, (s = { frame, token: undefined, done: new Set(), T: THREE.NodeUpdateType })); }
-if (s.token !== token) { s.token = token; s.frame.update(); s.frame.renderId++; s.done.clear(); structCache.frames++; }
+if (s.token !== token) { s.token = token; s.frame.update(); s.frame.renderId++; if (structCache.bound) s.done = new WeakSet(); else if (s.done.clear) s.done.clear(); else s.done = new Set(); structCache.frames++; /* nt-tslbudget bound: WeakSet - the strong Set pinned every update node (-> material/mesh) of the last frame between frames */ }
 if (time != null) s.frame.time = time;
 return s;
 }
@@ -121,7 +121,7 @@ const node = cullLights(THREE, r.lighting.createNode(lights)); lightsCache.set(s
 // (a) live values, NON-enumerable: runs three's OWN node updates (NodeFrame over updateNodes - reference(), uniform
 // onFrame/onRender/onObjectUpdate, light nodes) and returns only uniforms whose packed value changed since the last call.
 function defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes, updateBeforeNodes, live: liveUniforms, initial = null, pre = [] }) {
-const own = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); own.renderer = r; const lightObjs = [...new Set(updateNodes.filter((n) => n.light?.isLight).map((n) => n.light))]; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
+const mkOwn = () => { const f = new (THREE.NodeFrame ?? THREE.TSL?.NodeFrame)(); f.renderer = r; return f; }; let own = structCache.lean ? null : mkOwn(); /* nt-tslbudget lean: the per-package frame (3 WeakMaps) only exists for share=off */ const lightObjs = [...new Set(updateNodes.filter((n) => n.light?.isLight).map((n) => n.light))]; const NUT = THREE.NodeUpdateType ?? { FRAME: 'frame', RENDER: 'render' };
 const last = new Map(liveUniforms.map(({ key, get }) => [key, initial && initial.has(key) ? initial.get(key) : toPlain(get())])); // initial = the package's own shipped values (rebound builder-singleton uniforms carry a stale value until the first update) // r10-2: plain snapshots compared component-wise (was JSON.stringify per uniform per frame per material)
 let version = 0;
 Object.defineProperty(pkg, 'live', { enumerable: false, value: {
@@ -130,7 +130,7 @@ get version() { return version; },
 update({ object = obj, camera = cam, scene = sc, time, frameToken } = {}) {
 // r10-4: share=on -> ONE NodeFrame per renderer; frame-scope work (time, renderId, camera/viewport/light RENDER|FRAME nodes) runs once per frameToken, not once per material. share=off -> legacy per-package frame (A/B flag: structCache.share / URL wgpuShare=0).
 const sh = structCache.share && frameToken != null ? shared(r, THREE, frameToken, time) : null;
-const frame = sh ? sh.frame : own;
+const frame = sh ? sh.frame : (own ??= mkOwn());
 if (!sh) { frame.update(); if (time != null) frame.time = time; frame.renderId++; }
 frame.object = object; frame.camera = camera; frame.scene = scene; frame.material = material;
 for (const f of pre) f();
@@ -146,7 +146,7 @@ for (const n of updateNodes) { if (done.has(n)) { structCache.updSkipped++; cont
 for (const n of updateBeforeNodes) frame.updateBeforeNode(n);
 for (const n of updateNodes) frame.updateNode(n);
 }
-} finally { for (const [l, i] of hid) l.intensity = i; }
+} finally { for (const [l, i] of hid) l.intensity = i; if (structCache.lean) { frame.object = frame.camera = frame.scene = frame.material = null; /* nt-tslbudget: the shared frame pinned the LAST updated mesh/scene/camera/material until the next update */ } }
 const changed = [];
 for (const { key, get } of liveUniforms) {
 const raw = get();
@@ -227,11 +227,14 @@ function builtinSemantics(THREE) {
 // Key can only be trusted, not proven, pre-build -> cache:'verify' builds every material anyway and compares (loud mismatch counters).
 // cache: 'on' (default) | 'off' (A/B flag, URL wgpuTslCache=0) | 'verify'. Anything the walk cannot map 1:1 = uncacheable (counted by reason, full build).
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0 };
+export const structCache = { share: true, frames: 0, updSkipped: 0, lightsBuilt: 0, lightsReused: 0, map: new Map(), hits: 0, misses: 0, uncacheable: 0, rebindFail: 0, mismatch: 0, layoutMismatch: 0, valueMismatch: 0, verified: 0, keyMs: 0, rebindMs: 0, buildMs: 0, reasons: {}, log: [], wgslOf: new Map(), maxTemplates: 128, evicted: 0, keySamples: null, keyProf: null, walkCheck: false, walkChecked: 0, walkMismatch: 0, refKeyMs: 0,
+  // nt-tslbudget (wgpu-present sets these from native/page-memory.js tslLean/tslBound/tslMapMax; defaults = old behaviour for the browser path)
+  lean: false, bound: 0, nodesWalked: 0, nodesMax: 0, nodeWalks: 0, slimmed: 0, collected: 0 };
 // r10-7: a template retains the whole node graph + package (nodes -> textures/geometry/closures). Keys that never repeat (per-mesh splits) piled up unbounded -> V8 OOM (~4 GB) at ~900 exports on Burnout. FIFO-bounded; a hit refreshes recency.
 export function retainTemplate(C, key, tpl) { C.map.delete(key); C.map.set(key, tpl); while (C.map.size > Math.max(1, C.maxTemplates)) { C.map.delete(C.map.keys().next().value); C.evicted++; } }
 /** nt-frameleak census: structCache sizes (templates pin node graph + package -> material/mesh/textures). */
-export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size }; }
+export function tslCensus() { return { tpl: structCache.map.size, tplMax: structCache.maxTemplates, evicted: structCache.evicted, hits: structCache.hits, miss: structCache.misses, unc: structCache.uncacheable, wgslOf: structCache.wgslOf.size, ks: structCache.keySamples ? structCache.keySamples.size : 0, shOk: SHARED_OK.size, nodesAvg: structCache.nodeWalks ? Math.round(structCache.nodesWalked / structCache.nodeWalks) : 0, nodesMax: structCache.nodesMax, slim: structCache.slimmed, collected: structCache.collected, keyKB: tplKeyKB() }; }
+function tplKeyKB() { let n = 0; for (const k of structCache.map.keys()) n += k.length; return n >> 10; } // structural-key strings kept as Map keys (2 B/char in JSC if non-latin1, else 1)
 const why = (k, detail) => { structCache.reasons[k] = (structCache.reasons[k] ?? 0) + 1; if (structCache.log.length < 40) structCache.log.push(detail ? `${k}: ${detail}` : k); };
 const fnIds = new WeakMap(); let fnN = 0;
 const fnId = (f) => { let i = fnIds.get(f); if (i === undefined) fnIds.set(f, (i = ++fnN)); return i; };
@@ -358,7 +361,7 @@ let pre; try { pre = preParts(THREE, material, opts); } catch (e) { pre = null; 
 const gate = (b) => {
 if (!pre) return; const t1 = nowMs();
 try { w = builderWalk(THREE, b, pre); } catch (e) { w = { refuse: 'walk-error:' + (e?.message ?? e) }; }
-C.keyMs += nowMs() - t1;
+C.keyMs += nowMs() - t1; if (w.nodes) { C.nodesWalked += w.nodes.length; C.nodeWalks++; if (w.nodes.length > C.nodesMax) C.nodesMax = w.nodes.length; }
 if (C.walkCheck && !w.refuse) { const t2 = nowMs(); const r = builderWalkRef(THREE, b, pre); C.refKeyMs += nowMs() - t2; C.walkChecked++; if (r.key !== w.key || r.nodes.length !== w.nodes.length || r.nodes.some((x, i) => x !== w.nodes[i])) { C.walkMismatch++; let d = 0; while (d < r.parts.length && r.parts[d] === w.parts[d]) d++; why('WALKMISMATCH', `${material.name || material.type} @${d}: ref ${r.parts[d]?.slice(0, 160)} <> fused ${w.parts[d]?.slice(0, 160)}`); } } // fused walker == reference walker (tests / ?wgpuTslWalkCheck=1)
 if (w.refuse) return;
 const tpl = C.map.get(w.key); if (!tpl || tpl.nodes.length !== w.nodes.length || tpl.noRebind) return;
@@ -369,7 +372,7 @@ let pkg = null;
 try { pkg = buildPackage(material, opts, gate); } catch (e) { if (e !== HIT) throw e; }
 if (!pkg) { // setup-stage hit: analyze+generate skipped
 const tpl = hit; t0 = nowMs(); let rb = null;
-try { rb = rebind(tpl, w, material, opts); } catch (e) { C.rebindFail++; why('rebindFail', String(e?.message ?? e)); }
+try { rb = rebind(tpl, w, material, opts); } catch (e) { C.rebindFail++; if (String(e?.message).startsWith('template node collected')) C.map.delete(w.key); /* nt-tslbudget lean: a shared node the template needed was collected -> drop the template, the next full build re-registers it */ why('rebindFail', String(e?.message ?? e)); }
 C.rebindMs += nowMs() - t0;
 if (rb) {
 if (mode !== 'verify') { C.hits++; return rb; }
@@ -383,11 +386,11 @@ t0 = nowMs(); pkg = buildPackage(material, opts); C.buildMs += nowMs() - t0; C.m
 if (w?.refuse) { C.uncacheable++; why('uncacheable:' + w.refuse.split(':')[0], w.refuse); return pkg; }
 C.misses++;
 if (!w) return pkg;
-if (C.keySamples) { const h = strHash(pkg.vertex + pkg.fragment); const e = C.keySamples.get(h) ?? { n: 0, s: [] }; C.keySamples.set(h, e); e.n++; if (e.s.length < 8) e.s.push({ name: material.name || material.type, parts: w.parts }); } // diagnostic (?wgpuTslKeyDump=1): per-WGSL-hash key parts, for diffing over-split terms
+if (C.keySamples) { const h = strHash(pkg.vertex + pkg.fragment); if (C.bound > 0 && C.keySamples.size >= C.bound && !C.keySamples.has(h)) C.keySamples.delete(C.keySamples.keys().next().value); const e = C.keySamples.get(h) ?? { n: 0, s: [] }; C.keySamples.set(h, e); e.n++; if (e.s.length < 8) e.s.push({ name: material.name || material.type, parts: w.parts }); } // diagnostic (?wgpuTslKeyDump=1): per-WGSL-hash key parts, for diffing over-split terms
 if (decision === 'prove') { const tpl = hit; const have = new Set(pkg.tpl.liveUniforms.map((x) => x.node?.uuid)); for (const [bk, a0] of [...(tpl.unprovenBuf ?? [])]) { if (pkg.bufferSources[bk] === a0) tpl.unprovenBuf.delete(bk); else { tpl.noRebind = true; why('noRebind:buffer-differs-per-material', bk); } }
-for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
-if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } C.wgslOf.set(w.key, k); }
-if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } retainTemplate(C, w.key, t); }
+for (const u of [...(tpl.unproven ?? [])]) { if (have.has(u)) { if (C.bound > 0 && SHARED_OK.size >= C.bound) SHARED_OK.delete(SHARED_OK.values().next().value); SHARED_OK.add(u); tpl.unproven.delete(u); } else { tpl.noRebind = true; why('noRebind:singleton-not-shared', u); } } return pkg; }
+if (mode === 'verify') { const k = pkg.vertex.length + ':' + pkg.fragment.length + ':' + strHash(pkg.vertex + pkg.fragment); const prev = C.wgslOf.get(w.key); if (prev && prev !== k) { C.mismatch++; why('MISMATCH', `struct key -> 2 WGSL (${material.name})`); } if (C.bound > 0 && C.wgslOf.size >= C.bound && !C.wgslOf.has(w.key)) C.wgslOf.delete(C.wgslOf.keys().next().value); C.wgslOf.set(w.key, k); }
+if (!C.map.has(w.key)) { const t = { nodes: w.nodes, pkg }; const bad = templateBinds(t, material); if (bad) { t.noRebind = true; why('noRebind:' + bad.split(':')[0], bad); } if (C.lean) slimTemplate(t, !!bad); retainTemplate(C, w.key, t); }
 return pkg;
 }
 function strHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); }
@@ -408,40 +411,61 @@ t.attrNode = new Map(); for (const k of Object.keys(pkg.attributeSources)) { con
 for (const { key, node } of pkg.tpl.liveUniforms) if (node && !idx.has(node.uuid) && !t.slotMatrix.has(node.uuid) && !lightKeys.has(node.uuid) && !SHARED_OK.has(node.uuid)) { let ref = null, prop = null; for (const n of nodes) { for (const p of ['node', '_matrixUniform']) if (n[p]?.uuid === node.uuid) { ref = n; prop = p; break; } if (ref) break; } if (ref) { t.refOwner ??= new Map(); t.refOwner.set(node.uuid, { owner: ref, prop }); } else if (pkg.tpl.updateNodes.some((n) => n.node?.uuid === node.uuid && !idx.has(n.uuid))) (t.unproven ??= new Set()).add(node.uuid); /* builder-side singleton (materialOpacity & co): shared iff a 2nd build resolves the same uuid -> proven below */ else return `uniform-unmapped:${key}`; }
 return null;
 }
+// ---- nt-tslbudget: retention helpers ----
+// Closure-context hygiene: these arrows are created at MODULE level so a surviving package getter keeps only its 1-2 captured values alive (an arrow created inside rebind()/buildPackage() chained rebind's context: `t` (template: whole M0 node graph + package), `map`, `m` ... -> a rebound package pinned its template, so FIFO eviction freed nothing).
+const uGet = (u) => () => u.getValue?.();
+const nGet = (n) => () => n.value;
+const matGet = (material, sl) => () => material[sl]?.matrix;
+const slotPre = (material, sl) => () => { const x = material[sl]; if (x?.matrixAutoUpdate) x.updateMatrix(); };
+// Template node stubs: rebind only needs a node's uuid/constructor/type (map new->old by position) + the node itself for the SHARED case (same uuid in both builds = a global singleton, alive anyway). Per-material nodes (M0's graph: textures, ReferenceNode.reference = material, geometry attributes) are held WEAKLY.
+const real = (n) => { if (n.__wk === undefined) return n; const x = n.__wk.deref(); if (x === undefined) { structCache.collected++; throw new Error('template node collected'); } return x; };
+const ctorOf = (a) => (a.__wk === undefined ? a.constructor : a.ctor);
+const sameNode = (n1, n0) => n1 === n0 || (n0.__wk !== undefined && n1 === n0.__wk.deref());
+function slimTemplate(t, noRebind) {
+if (typeof WeakRef !== 'function') return;
+const n0 = t.nodes.length; structCache.slimmed++;
+if (noRebind) { t.nodes = { length: n0 }; t.pkg = null; t.texNode = t.bufNode = t.uniNode = t.attrNode = t.refOwner = null; return; } // never rebinds: the graph is only a length check
+const sw = new Map(), st = (n) => { if (!n || n.__wk !== undefined) return n; let x = sw.get(n); if (!x) sw.set(n, (x = { uuid: n.uuid, ctor: n.constructor, type: n.type ?? null, __wk: new WeakRef(n) })); return x; };
+t.nodes = t.nodes.map(st);
+for (const mp of [t.texNode, t.uniNode, t.attrNode, t.bufNode]) if (mp) for (const [k, n] of mp) mp.set(k, st(n));
+if (t.refOwner) for (const [k, o] of t.refOwner) t.refOwner.set(k, { owner: st(o.owner), prop: o.prop });
+const P = t.pkg, tp = P.tpl; // keep ONLY what rebind reads: WGSL + layout data + storage-buffer map + update/uniform node lists. Dropped: live closure (-> real mesh/scene/camera/material/renderer/NodeFrame), textureSources, attributeSources, material meta
+t.pkg = { vertex: P.vertex, fragment: P.fragment, bindGroups: P.bindGroups, attributes: P.attributes, varyings: P.varyings, bufferSources: P.bufferSources, tpl: { updateNodes: tp.updateNodes.map(st), updateBeforeNodes: tp.updateBeforeNodes.map(st), liveUniforms: tp.liveUniforms.map((x) => (x.node ? { key: x.key, node: st(x.node), get: null } : { key: x.key, node: x.node, get: x.get })) } };
+}
 const SHARED_OK = new Set(); // reserved: process-wide singleton uniform nodes proven shared
 function rebind(t, w, material, opts) {
 const { THREE } = opts, T = t.pkg, map = new Map();
-for (let i = 0; i < t.nodes.length; i++) { const a = t.nodes[i], b = w.nodes[i]; if (a.uuid !== b.uuid) { if (a.constructor !== b.constructor || (a.type ?? null) !== (b.type ?? null)) throw new Error('slot type mismatch at ' + i); map.set(a.uuid, b); } }
-const m = (n) => { const x = map.get(n.uuid); if (x) return x; const o = t.refOwner?.get(n.uuid); if (o) { const ox = map.get(o.owner.uuid); if (ox) { if (ox[o.prop] == null) { if (o.prop === '_matrixUniform' && ox.isTextureNode && ox.value?.matrix) ox._matrixUniform = (THREE.TSL ?? THREE).uniform(ox.value.matrix); else throw new Error('owned node not materialised: ' + o.prop); } return ox[o.prop]; } } return n; };
+for (let i = 0; i < t.nodes.length; i++) { const a = t.nodes[i], b = w.nodes[i]; if (a.uuid !== b.uuid) { if (ctorOf(a) !== b.constructor || (a.type ?? null) !== (b.type ?? null)) throw new Error('slot type mismatch at ' + i); map.set(a.uuid, b); } }
+const m = (n) => { const x = map.get(n.uuid); if (x) return x; const o = t.refOwner?.get(n.uuid); if (o) { const ox = map.get(o.owner.uuid); if (ox) { if (ox[o.prop] == null) { if (o.prop === '_matrixUniform' && ox.isTextureNode && ox.value?.matrix) ox._matrixUniform = (THREE.TSL ?? THREE).uniform(ox.value.matrix); else throw new Error('owned node not materialised: ' + o.prop); } return ox[o.prop]; } } return real(n); };
 const r = opts.renderer ?? headlessRenderer(THREE);
 const obj = opts.object ?? new THREE.Mesh(opts.geometry ?? new THREE.BoxGeometry(1, 1, 1), material);
 obj.updateMatrixWorld?.();
 const cam = opts.camera ?? new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000), sc = opts.scene ?? new THREE.Scene();
 const textureSources = {}, bufferSources = {};
-const texUuid = (u) => { let tx; if (t.texNode.has(u)) { const n = t.texNode.get(u), n1 = map.get(n.uuid) ?? n; tx = n1.value; } else tx = material[t.slotOf.get(u)]; if (!tx?.isTexture) throw new Error('slot texture missing: ' + t.slotOf.get(u)); textureSources[tx.uuid] = tx; return tx.uuid; };
+const texUuid = (u) => { let tx; if (t.texNode.has(u)) { const n = t.texNode.get(u), n1 = map.get(n.uuid) ?? real(n); tx = n1.value; } else tx = material[t.slotOf.get(u)]; if (!tx?.isTexture) throw new Error('slot texture missing: ' + t.slotOf.get(u)); textureSources[tx.uuid] = tx; return tx.uuid; };
 const groups = T.bindGroups.map((g) => ({ group: g.group, name: g.name, bindings: g.bindings.map((b) => {
 const o = { ...b };
 if (b.uniforms) o.uniforms = b.uniforms.map((u) => {
 const n0 = t.uniNode.get(u.key); if (n0 && t.slotMatrix.has(n0.uuid)) return { ...u, value: toPlain(material[t.slotMatrix.get(n0.uuid)]?.matrix) };
 const n1 = n0 && m(n0);
-if (!n0 || n1 === n0) return { ...u };
+if (!n0 || sameNode(n1, n0)) return { ...u };
 const src = u.source?.kind === 'uniform' ? { ...u.source, uuid: n1.uuid, name: n1.name || null } : u.source;
-const ro = t.refOwner?.get(n0.uuid); const own = ro?.prop === '_matrixUniform' ? (map.get(ro.owner.uuid) ?? ro.owner) : null; // texture-matrix uniform: ship the NEW texture's matrix (its node holds the pre-update value)
+const ro = t.refOwner?.get(n0.uuid); const own = ro?.prop === '_matrixUniform' ? (map.get(ro.owner.uuid) ?? real(ro.owner)) : null; // texture-matrix uniform: ship the NEW texture's matrix (its node holds the pre-update value)
 return { ...u, key: n1.uuid, source: src, value: toPlain(own?.value?.matrix ?? n1.value) };
 });
 else if (b.textureUuid) o.textureUuid = texUuid(b.textureUuid);
-else if (b.kind === 'storage-buffer') { const a0 = T.bufferSources[`${g.group}.${b.binding}`]; const n0b = t.bufNode.get(a0); bufferSources[`${g.group}.${b.binding}`] = n0b ? (map.get(n0b.uuid) ?? n0b).value : a0; }
+else if (b.kind === 'storage-buffer') { const a0 = T.bufferSources[`${g.group}.${b.binding}`]; const n0b = t.bufNode.get(a0); bufferSources[`${g.group}.${b.binding}`] = n0b ? (map.get(n0b.uuid) ?? real(n0b)).value : a0; }
 return o;
 }) }));
-const attributeSources = {}, attrKey = new Map(); for (const [k, n0] of t.attrNode) { const n1 = map.get(n0.uuid) ?? n0; attrKey.set(k, `node:${n1.uuid}`); attributeSources[`node:${n1.uuid}`] = n1.attribute; }
+const attributeSources = {}, attrKey = new Map(); for (const [k, n0] of t.attrNode) { const n1 = map.get(n0.uuid) ?? real(n0); attrKey.set(k, `node:${n1.uuid}`); attributeSources[`node:${n1.uuid}`] = n1.attribute; }
 const pkg = { vertex: T.vertex, fragment: T.fragment, bindGroups: groups, attributes: T.attributes.map((a) => (attrKey.has(a.key) ? { ...a, key: attrKey.get(a.key) } : a)), varyings: T.varyings, vertexEntry: 'main', fragmentEntry: 'main',
 material: { name: material.name, type: material.type, transparent: !!material.transparent, side: material.side, depthWrite: material.depthWrite, depthTest: material.depthTest, colorWrite: material.colorWrite, blending: material.blending } };
 Object.defineProperty(pkg, 'textureSources', { value: textureSources, enumerable: false });
 Object.defineProperty(pkg, 'bufferSources', { value: bufferSources, enumerable: false });
 Object.defineProperty(pkg, 'attributeSources', { value: attributeSources, enumerable: false });
-const live = T.tpl.liveUniforms.map(({ key, node, get }) => { if (node && t.slotMatrix.has(node.uuid)) { const sl = t.slotMatrix.get(node.uuid); return { key, get: () => material[sl]?.matrix }; } const n1 = node && m(node); return !node || n1 === node ? { key, get } : { key: n1.uuid, get: () => n1.value }; });
+const live = T.tpl.liveUniforms.map(({ key, node, get }) => { if (node && t.slotMatrix.has(node.uuid)) { const sl = t.slotMatrix.get(node.uuid); return { key, get: structCache.lean ? matGet(material, sl) : () => material[sl]?.matrix }; } const n1 = node && m(node); return !node || sameNode(n1, node) ? { key, get: get ?? nGet(real(node)) } : { key: n1.uuid, get: structCache.lean ? nGet(n1) : () => n1.value }; });
 const upd = T.tpl.updateNodes.filter((n) => !t.slotTexNodes.has(n.uuid)).map(m), updB = T.tpl.updateBeforeNodes.map(m);
-const pre = [...new Set(t.slotMatrix.values())].map((sl) => () => { const x = material[sl]; if (x?.matrixAutoUpdate) x.updateMatrix(); });
+const pre = [...new Set(t.slotMatrix.values())].map((sl) => (structCache.lean ? slotPre(material, sl) : () => { const x = material[sl]; if (x?.matrixAutoUpdate) x.updateMatrix(); }));
 const initial = new Map(); for (const g of groups) for (const b of g.bindings) for (const u of b.uniforms ?? []) if (u.key) initial.set(u.key, u.value);
 defineLive(pkg, { THREE, r, material, obj, cam, sc, updateNodes: upd, updateBeforeNodes: updB, live, initial, pre });
 Object.defineProperty(pkg, 'tpl', { enumerable: false, value: { updateNodes: upd, updateBeforeNodes: updB, liveUniforms: live } });

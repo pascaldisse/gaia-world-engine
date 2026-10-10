@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/gaia-core", "crates/gaia-metalfx", "crates/gaia-render", "packages/render-window", "packages/render-wasm"]
+members = ["crates/gaia-core", "crates/gaia-metalfx", "crates/gaia-render", "crates/gaia-render-host", "packages/render-window", "packages/render-wasm"]
 resolver = "2"
 
 # size-tuned browser build: `cargo build --profile wasm-release -p render-wasm --target wasm32-unknown-unknown`

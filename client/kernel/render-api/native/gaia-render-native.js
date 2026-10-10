@@ -14,7 +14,7 @@
 //     renderGpuTimed / skinGpuMs resolve null (the host owns submit/present; no timestamp path over IPC yet).
 import { API_HASH, GaiaRenderNativeGen, OP_FRAME_COMMIT, QUERIES } from './gaia-render-native.gen.js';
 import { Writer } from './native-wire.js';
-import { createTransport, customProtocolSend, tauriInvokeSend } from './native-transport.js';
+import { createTransport, customProtocolSend, tauriInvokeSend, wsSend } from './native-transport.js';
 
 const OP_HELLO = 0, OP_FREE = 0xffff; // wire.rs
 const MiB = 1 << 20;
@@ -26,7 +26,7 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
   /**
    * @param canvas unused (the native host owns the surface); kept for signature parity with render-wasm.
    * @param options render-wasm create options (renderHeight, hdrScene, shadows, …) → HELLO json.
-   * @param cfg { send?: async(Uint8Array)=>report, transport?:'invoke'|'protocol', command, scheme, chunkMB, flushMB, initialMB }
+   * @param cfg { send?: async(Uint8Array)=>report, transport?:'ws'(default)|'invoke'|'protocol', inflight (ws only, default 2), command, scheme, chunkMB, flushMB, initialMB }
    */
   static async create(canvas, options = {}, cfg = {}) {
     const counters = new Map();
@@ -44,10 +44,22 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
         self.frames = rep.frame ?? self.frames;
       }
     };
-    const send = cfg.send ?? (cfg.transport === 'protocol' ? customProtocolSend({ scheme: cfg.scheme }) : tauriInvokeSend({ command: cfg.command }));
-    const transport = createTransport({ send, maxChunkBytes: (cfg.chunkMB ?? 16) * MiB, onReport, onError: (e) => console.error('[GaiaRenderNative] IPC send failed', e) });
+    const kind = cfg.transport ?? 'ws';
+    if (!cfg.send && !['ws', 'invoke', 'protocol'].includes(kind)) throw new Error(`GaiaRenderNative: unknown ?nativeTransport=${kind} (ws|invoke|protocol)`);
+    // ws = localhost WebSocket to the host's ipc_ws server (default; invoke measured ~16 MB/s in WKWebView). Rejects loudly when unavailable.
+    const send = cfg.send ?? (kind === 'ws' ? await wsSend({ inflight: cfg.inflight }) : kind === 'protocol' ? customProtocolSend({ scheme: cfg.scheme }) : tauriInvokeSend({ command: cfg.command }));
+    const transport = createTransport({ send, maxInflight: send.maxInflight, maxChunkBytes: (cfg.chunkMB ?? 16) * MiB, onReport, onError: (e) => console.error('[GaiaRenderNative] IPC send failed', e) });
     // transport watch (?nativeWatchMs, default 2000, 0 = off): logs queued bytes + in-flight age so a stalled pipe is visible in the host's page log
-    if ((cfg.watchMs ?? 2000) > 0) { let last = 0; setInterval(() => { const s = transport.stats, qb = transport.queuedBytes; if (qb || s.messages !== last) console.info(`[GaiaRenderNative] msgs=${s.messages} sentMB=${(s.bytes / MiB).toFixed(1)} queuedMB=${(qb / MiB).toFixed(1)} maxQueuedMB=${(s.maxQueued / MiB).toFixed(1)} lastMs=${s.lastMs.toFixed(0)} maxMs=${s.maxMs.toFixed(0)} inflightAgeMs=${transport.inflightAgeMs.toFixed(0)}`); last = s.messages; }, cfg.watchMs ?? 2000); }
+    if ((cfg.watchMs ?? 2000) > 0) {
+      // ackMBps = host-acknowledged bytes / wall time over the watch interval (true throughput); lastMBps = one message's round trip (understates when pipelined)
+      let last = 0, lastAcked = 0, lastT = performance.now();
+      const every = cfg.watchMs ?? 2000;
+      setInterval(() => {
+        const s = transport.stats, qb = transport.queuedBytes, now = performance.now();
+        if (qb || transport.inflightCount || s.messages !== last) console.info(`[GaiaRenderNative] ${kind} msgs=${s.messages} sentMB=${(s.bytes / MiB).toFixed(1)} ackMBps=${((s.ackedBytes - lastAcked) / MiB / Math.max((now - lastT) / 1e3, 1e-3)).toFixed(1)} lastMBps=${s.lastMBps.toFixed(1)} queuedMB=${(qb / MiB).toFixed(1)} maxQueuedMB=${(s.maxQueued / MiB).toFixed(1)} inflight=${transport.inflightCount}/${s.maxInflight} lastMs=${s.lastMs.toFixed(0)} maxMs=${s.maxMs.toFixed(0)} inflightAgeMs=${transport.inflightAgeMs.toFixed(0)}`);
+        last = s.messages; lastAcked = s.ackedBytes; lastT = now;
+      }, every);
+    }
     const w = new Writer({ initialBytes: (cfg.initialMB ?? 1) * MiB, flushBytes: (cfg.flushMB ?? 4) * MiB, onFlush: (c) => transport.push(c) });
     const rt = {
       w, busyMB: cfg.busyMB, busyMs: cfg.busyMs,
@@ -94,7 +106,8 @@ export class GaiaRenderNative extends GaiaRenderNativeGen {
 export function nativeModule(params = new URLSearchParams()) {
   const num = (k) => (params.has(k) && Number.isFinite(Number(params.get(k))) ? Number(params.get(k)) : undefined);
   const cfg = {
-    transport: params.get('nativeTransport') ?? 'invoke',
+    transport: params.get('nativeTransport') ?? undefined, // ws (default) | invoke | protocol
+    inflight: num('nativeInflight'), // ws only: messages in flight (default 2)
     command: params.get('nativeCommand') ?? undefined,
     scheme: params.get('nativeScheme') ?? undefined,
     chunkMB: num('nativeChunkMB'), watchMs: num('nativeWatchMs'), busyMB: num('nativeBusyMB'), busyMs: num('nativeBusyMs'), flushMB: num('nativeFlushMB'), initialMB: num('nativeInitialMB'),

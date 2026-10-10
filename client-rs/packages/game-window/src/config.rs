@@ -21,6 +21,7 @@ const OPTIONS: &[(&str, &str, &str, &str)] = &[
     ("dry-run", "GAIA_DRY_RUN", "0", "1 = print the resolved config (final URL etc.) and exit; opens no window"),
     ("page-log", "GAIA_PAGE_LOG", "warn", "page console forwarded to stderr as [page:<level>]: off | error | warn (error+warn+uncaught) | all"),
     ("page-log-max", "GAIA_PAGE_LOG_MAX", "2000", "max chars per forwarded page console line"),
+    ("page-heartbeat-ms", "GAIA_PAGE_HEARTBEAT_MS", "5000", "page liveness line [page:heartbeat] every N ms (0 = off; needs --page-log != off)"),
     ("ipc-ws", "GAIA_IPC_WS", "1", "1 = run the localhost WebSocket transport (127.0.0.1 only, per-launch token; page: ?nativeTransport=ws, the default) | 0 = Tauri invoke only"),
 ("ipc-port", "GAIA_IPC_PORT", "0", "WebSocket server port on 127.0.0.1 (0 = OS-assigned ephemeral)"),
 ("ipc-check-origin", "GAIA_IPC_CHECK_ORIGIN", "1", "1 = handshake must carry Origin == the game page origin | 0 = token only"),

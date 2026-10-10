@@ -1,5 +1,6 @@
 import { GAIA_PORT } from './kernel/port.js';
 import { createRenderer } from './kernel/renderer.js';
+import { threeGpuOff } from './kernel/render-api/native-mode.js';
 import { createStaticBatcher } from './kernel/static-batch.js';
 import { WorldStore } from './kernel/world.js';
 import { View } from './kernel/view.js';
@@ -42,7 +43,8 @@ const overlay = document.getElementById('overlay');
 const crosshairEl = document.getElementById('crosshair');
 const hintEl = document.getElementById('hint');
 
-const { renderer, scene, camera, hemi, sun, post, pixels } = await createRenderer();
+const noThreeGpu = threeGpuOff(); // native app: three holds NO GPU state (render-api/native-mode.js)
+const { renderer, scene, camera, hemi, sun, post, pixels } = await createRenderer({ gpu: !noThreeGpu });
 const store = new WorldStore();
 const audio = new AudioEngine(camera);
 const staticBatch = createStaticBatcher(scene); // engine option, default OFF (?staticBatch=1 / GAIA_RENDER_CONFIG.staticBatch)
@@ -918,7 +920,7 @@ const wgpuPresent = new URLSearchParams(location.search).get('renderBackend') ==
 if (wgpuPresent) window.__wgpu = wgpuPresent;
 
 let last = performance.now();
-renderer.setAnimationLoop(() => {
+const frameTick = () => {
   const now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -968,4 +970,6 @@ renderer.setAnimationLoop(() => {
   else renderer.render(scene, camera);
   if (pendingShot !== null) captureShot();
   if (pendingSnapshot) captureSnapshot();
-});
+};
+// three's own loop would init() its renderer (= request a GPU device); native mode drives frames with plain rAF
+if (noThreeGpu) { const raf = () => { requestAnimationFrame(raf); frameTick(); }; // next frame first, like three's Animation (a throw must not stop the loop) requestAnimationFrame(raf); } else renderer.setAnimationLoop(frameTick);

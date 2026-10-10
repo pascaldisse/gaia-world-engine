@@ -147,7 +147,8 @@ export function probeWorldPos(cascades, baseCellU, probeIdx) {
 
 // ------------------------------------------------------------------ S4: probe state
 /** probe in a solid voxel → first empty axis neighbour within `relocateMax` (priority k, then ±x,±y,±z) else disabled */
-export function resolveProbeTSL(vs, probePos, relocateMax, steps = 3) {
+export const RELOCATE_STEPS = 3; // resolveProbeTSL candidate rings (k * cellSize <= relocateMax); native gi_compute.wgsl receives it as config relocateSteps
+export function resolveProbeTSL(vs, probePos, relocateMax, steps = RELOCATE_STEPS) {
   const solidHere = isSolidTSL(readVoxelAtWorldTSL(vs, probePos));
   const dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   const cands = [];

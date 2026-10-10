@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { pass } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { lockThreeGpu } from './render-api/native-mode.js';
 
 // §IRON ADAPTIVE PIXEL RATIO. A procedural sky is fragment-bound: the nebula
 // quads can each cover the whole frame, so the SAME shot ran 12.9 fps at
@@ -75,9 +76,10 @@ export function createPixelGovernor(renderer, options = {}) {
   };
 }
 
-export async function createRenderer() {
+/** gpu:false = native mode (docs/NATIVE.md §three-gpu): the renderer is constructed but NEVER init()'d -> three requests no GPU device; GPU entry points are counted no-ops (lockThreeGpu). */
+export async function createRenderer({ gpu = true } = {}) {
   const renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: typeof location !== 'undefined' && new URLSearchParams(location.search).get('gpuTs') === '1' }); // ?gpuTs=1 = GPU timestamp queries (perf tooling; default off)
-  await renderer.init();
+  if (gpu) await renderer.init(); else lockThreeGpu(renderer);
   // pixel ratio is owned by the governor below (§IRON PIXEL_IRON)
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;

@@ -7,14 +7,17 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams, materialSig, customNodeMaterial } from './material-map.js';
+import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
 import { observeLights } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
 
 const MAT_EPS = 0;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720 } = {}) {
+// nt-pagemem (native only; both need backend.pendingBytes / backend.afterUpload, which only the native backend has — browser/wasm behaviour is unchanged):
+//   encodeCapBytes  = writer-side backpressure: no NEW big create (mesh / material textures) is encoded while backend.pendingBytes() (serialized, not host-acked) exceeds this; 0 = off. Default set by page-memory.js encodeCapMB.
+//   releaseSources  = global default for geometry.userData.nativeRelease (drop normal/uv arrays after the host acked the mesh; 'all' also position+index). See docs/NATIVE.md §page-memory.
+export function createSceneAdapter(backend, { exportNodeMaterial = null, three = null, updateMatrices = true, tslOptions = {}, nativeInstancing = true, recvVariants: useRecvVariants = false, dbgNoAlphaCast = false, dbgNoCast = false, pointsViewportHeight = 720, encodeCapBytes = 0, releaseSources = false } = {}) {
 // nativeInstancing=false (A/B probe): ignore backend.createInstanced/updateInstances → per-instance expansion (degraded path)
 const nativeInst = () => nativeInstancing && typeof backend.createInstanced === 'function' && typeof backend.updateInstances === 'function';
 const recs = new Map();        // Object3D → rec { parts:[{node,geoKey,mat,matSig}], matrix:Float64Array, flags, inst? }
@@ -32,6 +35,65 @@ function tslRefuse(m, stage, reason, pkg = null) {
   if (pkg && !(key in tsl.detail)) tsl.detail[key] = { bindings: pkg.bindGroups.map((g) => ({ g: g.group, b: g.bindings.map((b) => `${b.kind}:${b.name}:${b.stage}`) })), attrs: pkg.attributes.map((a) => `${a.name}:${a.type}:${a.source}${a.instanced ? ':inst' : ''}`), storageSrc: (pkg.fragment.match(/.*var<storage.*/g) ?? []).concat(pkg.vertex.match(/.*var<storage.*/g) ?? []).slice(0, 4) };
 if (!(key in tsl.samples)) { tsl.samples[key] = `${m.name || m.type || '?'} (${m.uuid.slice(0, 8)})`; console.warn(`[render-api] TSL material REFUSED → PBR fallback (${key}) first: ${tsl.samples[key]}`); }
 }
+// ---- nt-pagemem: writer-side backpressure + post-ack source release (native backend only; every function below is inert when the backend lacks pendingBytes/afterUpload) ----
+// admit(bytes, kind): false = the pipe already holds more than encodeCapBytes un-acked -> the caller DEFERS the create (object / rebuild / re-upload retried next sync, nothing half-built, no state recorded).
+// Live pendingBytes() already contains what this sync encoded, so a sync overshoots the cap by at most ONE admitted object. bytes<=0 (everything already on the host) is always admitted.
+const defer = stats.defer = { objects: 0, rebuilds: 0, geometry: 0, materials: 0, skinned: 0, batched: 0, bytes: 0 };
+const gated = () => encodeCapBytes > 0 && typeof backend.pendingBytes === 'function';
+function admit(bytes, kind) {
+  if (bytes <= 0 || !gated() || backend.pendingBytes() <= encodeCapBytes) return true;
+  defer[kind]++; defer.bytes += bytes; return false;
+}
+// bytes a createMesh of (g,start,count) puts on the wire: position/normal/uv f32 (normals/uv are always sent) + u32 indices
+function geoBytes(g, start, count) {
+  const pos = g.attributes?.position; if (!pos) return 0;
+  const n = pos.count, idx = g.index ? Math.max(0, Math.min(count, g.index.count - start)) : n;
+  return n * 32 + idx * 4;
+}
+// pre-flight, NO side effects: wire bytes constructing the mesh object `o` would cost = new geometry parts + textures of materials not yet created and not already on the host
+function recCost(o) {
+  const g = o.geometry; if (!g?.attributes?.position) return 0;
+  const mm = Array.isArray(o.material) ? o.material : [o.material];
+  const groups = Array.isArray(o.material) && g.groups?.length ? g.groups : [{ start: 0, count: Infinity, materialIndex: 0 }];
+  const dr = g.drawRange ?? { start: 0, count: Infinity };
+  let bytes = 0; const seen = new Set();
+  for (const grp of groups) {
+    const m = mm[grp.materialIndex ?? 0]; if (!m) continue;
+    const start = grp.start + (dr.start ?? 0) * 0, count = grp.count === Infinity ? (dr.count ?? Infinity) : grp.count;
+    if (!geos.get(g)?.parts.has(`${start}:${count}`)) bytes += geoBytes(g, start, count);
+    bytes += matCost(matKey(m, o), seen);
+  }
+  return bytes;
+}
+function matCost(m, seen) {
+  if (!m || mats.has(m)) return 0;
+  let bytes = 0;
+  for (const slot of TEX_SLOTS) { const est = textureEstimate(m[slot]); if (!est || seen.has(est.key) || backend.textureCached?.(est.key)) continue; seen.add(est.key); bytes += est.bytes; }
+  return bytes;
+}
+// wire bytes a material UPDATE (conv.textures of the new description) would add
+function convCost(conv) {
+  let bytes = 0;
+  for (const d of Object.values(conv.textures ?? conv.fallbackTextures ?? {})) if (d && !d.refused && d.key && !backend.textureCached?.(d.key)) bytes += d.bytes ?? 0;
+  return bytes;
+}
+// after-ack release of game-owned CPU geometry arrays (opt-in): geometry.userData.nativeRelease = true | 'all' | false (default: releaseSources ? true : false).
+//   true  -> normal + uv arrays (nothing CPU-side reads them: render-only, three never uploads in native mode)
+//   'all' -> also position + index (ONLY for geometry no CPU system reads: raycast/collision/bounds/Points/Batched/Skinned-rebuild all need positions)
+// A released geometry can never be re-uploaded (mesh gc'd then object re-added): geometryArrays() refuses LOUD (stats.unsupported), never a silent zero mesh.
+const relMode = (g) => (g.userData?.nativeRelease !== undefined ? g.userData.nativeRelease : releaseSources ? true : false);
+const relDone = new WeakSet(), relDropped = new WeakSet();
+const drop = (at) => { if (at && !at.isInterleavedBufferAttribute && at.array?.length) at.array = new at.array.constructor(0); };
+function scheduleRelease(g) {
+  const mode = relMode(g); if (!mode || !backend.afterUpload || relDone.has(g) || g.isInstancedBufferGeometry) return;
+  relDone.add(g);
+  backend.afterUpload(() => {
+    relDropped.add(g); drop(g.attributes.normal); drop(g.attributes.uv);
+    if (mode === 'all') { drop(g.attributes.position); drop(g.index); }
+    stats.released = (stats.released ?? 0) + 1;
+  });
+}
+
 // geometry/node attribute feed for a material's non-core vertex attributes (uv1, colour, custom, node buffers). Core attrs (position/normal/uv) ride the mesh.
 const CORE_ATTRS = new Set(['position', 'normal', 'uv']);
 function attrFloats(at, items) {
@@ -81,6 +143,7 @@ const eqArr = (a, b) => { for (let i = 0; i < 16; i++) if (a[i] !== b[i]) return
 function geometryArrays(g, start = 0, count = Infinity) {
 const pos = g.attributes?.position;
 if (!pos) return null;
+if (relDropped.has(g)) { stats.unsupported.add('geometry-arrays-released(nativeRelease):cannot re-upload'); return null; } // nt-pagemem: CPU arrays dropped after the host acked the mesh -> LOUD, never a silent empty/flat mesh
 const flat = (attr, n) => {
 if (!attr) return undefined;
 if (!attr.isInterleavedBufferAttribute && attr.itemSize === n && attr.array instanceof Float32Array) return attr.array;
@@ -203,6 +266,7 @@ e = { id, sig: conv.sig + sigSfx, conv, users: new Set(), epoch, degraded: conv.
 e.fellBack = !!conv.fellBack;
 mats.set(m, e); stats.created++;
 } else {
+if (!admit(convCost(conv), 'materials')) { e.epoch = epoch; return e; } // nt-pagemem: texture edit would push new bytes while the pipe is over encodeCap -> keep the old description (sig unchanged => retried next sync)
 if (conv.kind === 'pbr' && e.conv.kind === 'pbr' && backend.updateMaterial) { backend.updateMaterial(e.id, conv.params, conv.textures); }
 else { // swap handle on every user
 const old = e.id; e.id = createMat(conv, m); e.fellBack = !!conv.fellBack;
@@ -266,6 +330,7 @@ else { stats.degraded.add(nativeInst() ? 'instanced-custom-attrs:expanded-per-in
 } else part.node = backend.createInstance(gp.id, me.id, Array.from(o.matrixWorld.elements), flags);
 rec.parts.push(part); stats.created++;
 }
+scheduleRelease(g); // nt-pagemem: opt-in, after the host acked (no-op in the browser)
 return rec.parts.length > 0;
 }
 // nt-dyninst: live-range view [0,count*16) cached per (array,count) in `st` (the part's pk scratch) -> no per-frame view allocation while the count is steady
@@ -404,9 +469,11 @@ function syncSkinned(o, vis) {
 const g = o.geometry, sk = o.skeleton, nb = sk?.bones?.length ?? 0;
 if (!g?.attributes?.position || !g.attributes.skinIndex || !g.attributes.skinWeight || !nb) { stats.unsupported.add('SkinnedMesh:no-skin-attributes'); return; }
 let r = skinRecs.get(o);
-if (r && (r.geo !== g || r.ver !== attrVer(g) || r.nb !== nb || r.mref !== o.material)) { destroySkinned(r); r = null; }
+const skStale = r && (r.geo !== g || r.ver !== attrVer(g) || r.nb !== nb || r.mref !== o.material);
+if ((!r || skStale) && !admit(g.attributes.position.count * 80 + (g.index ? g.index.count : g.attributes.position.count) * 4 + matCost(matKey(Array.isArray(o.material) ? o.material[0] : o.material, o), new Set()), 'skinned')) return; // nt-pagemem: 80 B/vertex (pos+nrm+uv+joints+weights); pipe over encodeCap -> keep the old skin, retry next sync
+if (skStale) { destroySkinned(r); r = null; }
 if (!r) {
-const n = g.attributes.position.count, a = (k, w) => g.attributes[k] ? Float32Array.from({ length: n * w }, (_, i) => g.attributes[k].getComponent(Math.floor(i / w), i % w)) : null;
+const n = g.attributes.position.count, a = (k, w) => { const at = g.attributes[k]; if (!at) return null; if (!at.isInterleavedBufferAttribute && at.itemSize === w && at.array instanceof Float32Array && at.array.length === n * w) return at.array; /* nt-pagemem: no per-component copy of an f32 attribute */ return Float32Array.from({ length: n * w }, (_, i) => at.getComponent(Math.floor(i / w), i % w)); };
 const positions = a('position', 3), normals = a('normal', 3) ?? new Float32Array(n * 3), uvs = a('uv', 2) ?? new Float32Array(n * 2);
 const joints = Uint32Array.from(a('skinIndex', 4)), weights = a('skinWeight', 4);
 const indices = g.index ? Uint32Array.from(g.index.array) : Uint32Array.from({ length: n }, (_, i) => i);
@@ -539,6 +606,7 @@ function syncPoints(o, vis) {
 }
 function destroyPoints(rec) { backend.removeNode(rec.node); mats.get(rec.mat)?.users.delete(rec); stats.removed++; }
 const _bm = typeof Float32Array !== 'undefined' ? new Float32Array(16) : null;
+function batchGeoBytes(o, gi) { const gInfo = o._geometryInfo[gi]; return gInfo.vertexCount * 32 + (o.geometry.index ? gInfo.indexCount * 4 : 0); }
 function batchGeometry(o, gi) {
   const g = o.geometry, gInfo = o._geometryInfo[gi], pos = g.attributes.position, nrm = g.attributes.normal, uv = g.attributes.uv;
   const vs = gInfo.vertexStart, vc = gInfo.vertexCount;
@@ -566,17 +634,19 @@ function syncBatched(o, vis) {
     const by = new Map();
     for (let i = 0; i < info.length; i++) if (info[i].active && info[i].visible) { let l = by.get(info[i].geometryIndex); if (!l) by.set(info[i].geometryIndex, l = []); l.push(i); }
     const md = mtex.image.data, cd = ctex?.image.data;
+    let deferred = false;
     for (const [gi, ids] of by) {
       const mats = new Float32Array(ids.length * 16), cols = cd ? new Float32Array(ids.length * 4) : null;
       ids.forEach((id, k) => { mats.set(md.subarray(id * 16, id * 16 + 16), k * 16); if (cols) cols.set(cd.subarray(id * 4, id * 4 + 4), k * 4); });
       let gr = r.groups.get(gi);
+      if (!gr && !admit(batchGeoBytes(o, gi), 'batched')) { deferred = true; continue; } // nt-pagemem: pipe over encodeCap -> this group is created on a later sync (batch stays dirty)
       if (!gr) { const arrays = batchGeometry(o, gi); gr = { mesh: backend.createMesh(arrays), node: 0 }; r.groups.set(gi, gr); stats.uploadsGeometry++; }
       if (!gr.node) gr.node = backend.createInstanced(gr.mesh, r.me.id, mats, ids.length, { ...fl, matrix: Array.from(mw), ...(cols ? { colors: cols, colorStride: 4 } : {}) });
       else backend.updateInstances(gr.node, mats, ids.length, mw, cols, 4);
       gr.n = ids.length; upd('batched');
     }
     for (const [gi, gr] of r.groups) if (!by.has(gi) && gr.node) { backend.updateInstances(gr.node, new Float32Array(0), 0, mw, null, 4); gr.n = 0; upd('batched'); }
-    r.mv = mtex.version; r.cv = ctex?.version ?? -1; r.vbits = vb; r.ninfo = info.length; r.world.set(mw);
+    if (!deferred) { r.mv = mtex.version; r.cv = ctex?.version ?? -1; r.vbits = vb; r.ninfo = info.length; r.world.set(mw); } // deferred group(s) => stay dirty
   }
   if (fb !== r.fbits) { for (const gr of r.groups.values()) if (gr.node) backend.updateNode(gr.node, fl); r.fbits = fb; upd('batchedFlags'); }
 }
@@ -598,7 +668,10 @@ if (o.isSkinnedMesh && skinCapable()) { seen.add(o); syncSkinned(o, vis); for (c
 if (o.isSkinnedMesh) stats.unsupported.add('SkinnedMesh:static-bind-pose-only'); // backend lacks createSkin/updateSkin/createSkinnedMesh
 seen.add(o);
 let rec = recs.get(o);
-if (!rec) { rec = { parts: [], matrix: new Float64Array(16), fbits: 0, fro: 0, dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; rec.mref = o.material; rec.geoRef = o.geometry; }
+if (!rec) {
+  if (admit(recCost(o), 'objects')) { rec = { parts: [], matrix: new Float64Array(16), fbits: 0, fro: 0, dirtyGeo: false }; recs.set(o, rec); buildParts(o, rec, vis); rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; rec.mref = o.material; rec.geoRef = o.geometry; }
+  // else: deferred (pipe over encodeCap) — no rec recorded, nothing created; the next sync retries this object (nt-pagemem)
+}
 else updateMesh(o, rec, vis);
 }
 }
@@ -661,7 +734,7 @@ amb.envSig = sig; stats.updated++;
 }
 function updateMesh(o, rec, vis) {
 const gone = rec.geoRef !== o.geometry || rec.dirtyGeo || (rec.mref !== o.material && (Array.isArray(o.material) || Array.isArray(rec.mref)));
-if (gone) { destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; upd('rebuild'); return; }
+if (gone) { if (!admit(recCost(o), 'rebuilds')) return; /* pipe over encodeCap: old parts keep drawing, retried next sync (nt-pagemem) */ destroyParts(rec); rec.dirtyGeo = false; buildParts(o, rec, vis); rec.mref = o.material; rec.geoRef = o.geometry; rec.matrix.set(o.matrixWorld.elements); rec.fbits = flagBits(o, vis); rec.fro = o.renderOrder ?? 0; upd('rebuild'); return; }
 const fb = flagBits(o, vis), fro = o.renderOrder ?? 0, flagsChanged = fb !== rec.fbits || fro !== rec.fro, moved = !eqArr(rec.matrix, o.matrixWorld.elements);
 const f = flagsChanged || o.isInstancedMesh ? nodeFlags(o, vis) : null;
 const single = rec.parts.length === 1 && !Array.isArray(o.material);
@@ -671,7 +744,7 @@ if (p.expanded) { // instanced fallback
 const isg = instAttrSig(mats.get(p.mat)); if (moved || p.instV !== o.instanceMatrix.version || p.instCount !== o.count || p.instSig !== isg) { destroyExpanded(p); const gp = geos.get(p.geo).parts.get(p.geoKey), me = mats.get(p.mat); p.expanded = []; for (let i = 0; i < o.count; i++) p.expanded.push(backend.createInstance(gp.id, me.id, instanceWorld(o, i), { ...f, instAttrs: instAttrRow(me, i) })); p.instV = o.instanceMatrix.version; p.instCount = o.count; p.instSig = isg; upd('expandedRebuild'); }
 continue;
 }
-if (!p.gp || !geoSame(p.geo, p.start, p.count, p.gp.sig)) { const gp2 = ensureGeometry(rec, p.geo, p.start, p.count); if (gp2) p.gp = gp2; } // fast path: in-place version compare, no key string / Map lookups
+if (!p.gp || (!geoSame(p.geo, p.start, p.count, p.gp.sig) && admit(geoBytes(p.geo, p.start, p.count), 'geometry'))) { const gp2 = ensureGeometry(rec, p.geo, p.start, p.count); if (gp2) p.gp = gp2; } // fast path: in-place version compare, no key string / Map lookups
 let u = null;
 if (moved && !o.isInstancedMesh) (u ??= {}).mat4 = Array.from(o.matrixWorld.elements);
 if (flagsChanged) u = Object.assign(u ?? {}, f);

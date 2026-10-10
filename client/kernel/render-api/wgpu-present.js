@@ -11,9 +11,14 @@ import { createGiBridge } from './gi-bridge.js';
 import { createGiNative } from './gi-native.js';
 import { threeGpuOff } from './native-mode.js';
 import { createPostBridge } from './post-bridge.js';
+import { configureMaterialMap } from './material-map.js';
+import { pageMemConfig } from './native/page-memory.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
   const native = params.get('renderBackend') === 'native';
+  // nt-pagemem: native page-memory policy (defaults + &native* params: native/page-memory.js, docs/NATIVE.md §page-memory). null in the browser = old behaviour everywhere.
+  const pm = native ? pageMemConfig(params) : null;
+  if (pm) configureMaterialMap(pm);
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = native ? (await import('./native/gaia-render-native.js')).nativeModule(params) : await import(/* @vite-ignore */ pkg);
   // three has NO device in native mode (renderBackend=native, or wgpu + threeGpu=0): nothing can be written into it, so there is nothing to mirror.
@@ -34,7 +39,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   if (params.get('wgpuTslWalkCheck') === '1') structCache.walkCheck = true;
   if (params.get('wgpuTslKeyProf') === '1') structCache.keyProf = { prim: 0, kids: 0, props: 0, join: 0, nodes: 0, parts: 0, walks: 0 }; // r10-9 key-walk cost breakdown (opt-in)
   structCache.share = params.get('wgpuShare') !== '0'; // r10-4 A/B flag (also togglable live: __wgpu.tslCache.share)
-  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') === '0' ? null : exportNodeMaterial, tslOptions: { THREE, coreShadow: params.get('wgpuCoreShadow') !== '0', cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0', recvVariants: params.get('wgpuRecvVar') === '1', dbgNoAlphaCast: params.get('wgpuDbgNoAlphaCast') === '1', dbgNoCast: params.get('wgpuDbgNoCast') === '1' });
+  const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') === '0' ? null : exportNodeMaterial, tslOptions: { THREE, coreShadow: params.get('wgpuCoreShadow') !== '0', cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0', recvVariants: params.get('wgpuRecvVar') === '1', dbgNoAlphaCast: params.get('wgpuDbgNoAlphaCast') === '1', dbgNoCast: params.get('wgpuDbgNoCast') === '1', ...(pm ? { encodeCapBytes: pm.encodeCapBytes, releaseSources: pm.releaseSources } : null) });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
   // lane nt-gi: NATIVE GI (default when three has no GPU; &wgpuGiNative=1 to A/B it in a browser, =0 forces the readback bridge): gaia-render computes the atlases itself, the page ships
   // voxel bricks + frame params only (gi-native.js) -> NO three compute, NO readback, NO atlas mirror.

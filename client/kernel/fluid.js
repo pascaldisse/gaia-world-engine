@@ -552,7 +552,7 @@ export function register(ctx = {}) {
   const q = (() => { try { return new URLSearchParams(location.search); } catch { return null; } })();
   const wanted = (typeof window !== 'undefined' && window.__GAIA_FLUID__) || null;
   const probe = wanted?.enabled === true || q?.get('fluid') === '1';
-  const isWebGPU = renderer?.backend?.isWebGPUBackend === true;
+  const isWebGPU = renderer?.backend?.isWebGPUBackend === true && renderer?.userData?.threeGpuLocked !== true; // native mode (render-api/native-mode.js): three has no device -> PBF compute has nowhere to run (no native port yet, docs/NATIVE.md §three-gpu)
   let sim = null;
   let activeConfig = null;
 

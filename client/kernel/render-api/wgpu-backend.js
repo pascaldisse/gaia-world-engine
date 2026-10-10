@@ -188,14 +188,20 @@ const bytesOf = (a) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
 // r10-shadow-6: a storage attribute whose authoritative data lives on THREE's GPU (compute-written probe atlases) carries a CPU readback mirror; its upload version is
 // userData.gpuMirrorVersion (bumped by gi-bridge per readback) — NOT attr.version, which three itself would re-upload (clobbering partial compute updates).
 const verOf = (attr) => attr.userData?.gpuMirrorVersion ?? attr.version;
+// lane nt-gi: a probe-GI atlas attribute tagged userData.nativeStorage ('irradiance'|'depth') is NOT three data: its authoritative copy is the gaia-render GI compute's buffer
+// (reserved storage ids, RenderCore::gi_storage_ids). Bound by id, never uploaded, never destroyed by this refcount (native handle).
+let giIds = null;
+function nativeStorageId(name) { giIds ??= Array.from(gpu.giStorageIds()); const i = { irradiance: 0, depth: 1 }[name]; if (i === undefined) throw new Error(`unknown nativeStorage '${name}'`); return giIds[i]; }
 function acquireStorage(attr) {
+const ns = attr.userData?.nativeStorage;
+if (ns) { const c0 = storByAttr.get(attr); if (c0) { c0.refs++; storStats.hits++; return c0; } const h0 = { id: nativeStorageId(ns), refs: 1, version: verOf(attr), attr, native: true }; storByAttr.set(attr, h0); storStats.creates++; storStats.native = (storStats.native ?? 0) + 1; return h0; }
 const c = storByAttr.get(attr);
 if (c) { c.refs++; storStats.hits++; return c; }
 const h = { id: gpu.createStorageBuffer(bytesOf(attr.array)), refs: 1, version: verOf(attr), attr };
 storByAttr.set(attr, h); storStats.creates++;
 return h;
 }
-function releaseStorage(h) { if (--h.refs <= 0) { gpu.destroyStorageBuffer(h.id); storByAttr.delete(h.attr); } }
+function releaseStorage(h) { if (--h.refs <= 0) { if (!h.native) gpu.destroyStorageBuffer(h.id); storByAttr.delete(h.attr); } }
 function releaseTexture(h) {
 if (h.key) { const c = texByKey.get(h.key); if (c && --c.refs <= 0) { gpu.destroyTexture(c.id); texByKey.delete(h.key); } }
 else if (h.id) gpu.destroyTexture(h.id); // id 0 = refused compressed upload (nothing to free)
@@ -372,7 +378,7 @@ function applyShadowFlags(node) {
   const backend = {
     name: 'wgpu',
     apiVersion: RENDER_API_VERSION,
-    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'instance-opacity', 'instance-uv', 'points', 'blend-multiply', 'blend-premultiplied', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
+    capabilities: ['mesh-arrays', 'pbr', 'textures-rgba8', 'instances', 'instanced-blocks', 'instance-color', 'instance-opacity', 'instance-uv', 'points', 'blend-multiply', 'blend-premultiplied', 'nodes', 'sun', 'point-lights', 'shader-material-wgsl', 'skinning', 'sun-shadows', 'ambient-hemisphere', 'background-color', 'background-texture', 'fog', 'environment-diffuse-ibl', 'probe-gi', 'probe-gi-native', 'visibility-groups', 'webgpu', 'texture-array', 'texture-mips', 'texture-colorspace', 'material-maps', 'material-side', 'material-blend', 'vertex-layer-colour', 'shader-vertex-attributes', 'shader-texture-array', 'shader-storage-buffer', gpu.hasTimestamps() ? 'timestamp-query' : 'no-timestamp-query'],
     flagStats,
     gpu, // raw wasm handle (frame stats / renderTimed / createShaderMaterial live here, not in the neutral interface)
 
@@ -478,7 +484,7 @@ textureStats() { return { ...texStats, live: texByKey.size, storage: { ...storSt
       }
       const stor = matStorage.get(id);
       if (!stor) return n;
-      for (const s of stor) { const v = verOf(s.attr); if (s.h.version !== v) { gpu.updateStorageBuffer(s.h.id, bytesOf(s.attr.array)); s.h.version = v; n++; } }
+      for (const s of stor) { if (s.h.native) continue; const v = verOf(s.attr); if (s.h.version !== v) { gpu.updateStorageBuffer(s.h.id, bytesOf(s.attr.array)); s.h.version = v; n++; } }
       storStats.updates += n;
       return n;
     },
@@ -621,6 +627,13 @@ return;
     // r6 S3: probe-GI atlases (gi-bridge.js readback of three's GI compute). irradiance Float32Array 4/texel, depth 2/texel, params = packGiParams(). See gaia-render gi.rs.
     setGiProbes(irradiance, depth, params) { gpu.setGiProbes(irradiance, depth, params); },
     clearGiProbes() { gpu.clearGiProbes(); },
+        // lane nt-gi: NATIVE probe GI (gaia-render computes the atlases; the page ships voxel bricks + per-frame params, no readback). See gi-native.js.
+        giComputeInit(cfgJson) { giIds = null; gpu.giComputeInit(cfgJson); },
+        giComputeVoxels(start, words) { gpu.giComputeVoxels(start, words); },
+        giComputeStep(frame, fresh) { gpu.giComputeStep(frame, fresh); },
+        giComputeDestroy() { gpu.giComputeDestroy(); },
+        giComputeStats() { return gpu.giComputeStats(); },
+        giComputeError() { return gpu.giComputeError() ?? null; },
     // r6-scene: scene.background Texture/CubeTexture. {kind:'cube'|'equirect'|'screen', width, height, rgba (Uint8Array; cube = 6 faces), srgb, intensity}
     setBackgroundTexture({ kind, width, height, rgba, srgb = true, intensity = 1 }) {
       if (kind === 'cube') gpu.setBackgroundCube(width, rgba, srgb, intensity); else gpu.setBackgroundTexture(width, height, rgba, srgb, kind === 'equirect', intensity);

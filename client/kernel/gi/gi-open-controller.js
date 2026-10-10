@@ -10,6 +10,10 @@ import {
   createSkyUniforms, createAmbientUniforms, createBatchUniforms, setBatch, createOpenIrradianceKernel, createOpenDepthKernel, createOpenQueryNode,
 } from './gi-open-nodes.js';
 import { createRayParallelKernels } from './gi-open-raypar.js';
+import { OPEN_MARCH_STEPS, RELOCATE_STEPS } from './gi-open-nodes.js';
+import { FIB_PHI } from './gi-nodes.js';
+import { CELL_BIAS } from './voxel-window.js';
+import { packGiFrame } from '../render-api/gi-native.js';
 import { uniform, vec3, positionWorld, normalWorld } from 'three/tsl';
 
 export const OPEN_PARAM_DEFAULTS = {
@@ -26,8 +30,11 @@ export const OPEN_PARAM_DEFAULTS = {
 };
 
 export class GIOpen {
-  constructor({ renderer, scene, params, attachment }) {
-    this.renderer = renderer; this.scene = scene; this.attachment = attachment;
+  constructor({ renderer, scene, params, attachment, native = null }) {
+  this.renderer = renderer; this.scene = scene; this.attachment = attachment;
+  // native (lane nt-gi, render-api/gi-native.js sink): ALL GPU work (voxel window, probe trace/blend, atlases) runs in gaia-render; this class keeps only the CPU bookkeeping.
+  // No voxel storage / batch uniforms / TSL kernels are built, three computes nothing and its device is never touched. null = three GPU path (browser), unchanged.
+  this.native = native; this._nativeReady = false;
     const p = this.p = { ...params };
     const casc = { ...CASCADE_DEFAULTS, ...(p.cascades ?? {}) };
     this.cascades = buildCascades(casc);
@@ -37,9 +44,9 @@ export class GIOpen {
     this.atlases = createProbeAtlases({ probeCount: total, irradianceRes: p.irradianceRes, depthRes: p.depthRes });
     this._depthAttr = this.atlases.depth.value; // StorageInstancedBufferAttribute (CPU array = sentinel writer)
     this._depthAttr.array.fill(-1); // all probes start 'fresh' (sentinel) → first update takes new value, queries skip them
-    this.vs = createVoxelStorage(this.win);
-    this.baseCellU = createCascadeUniforms(this.cascades);
-    this.batch = createBatchUniforms();
+    this.vs = native ? null : createVoxelStorage(this.win);
+    this.baseCellU = createCascadeUniforms(this.cascades); // material-side query node reads these (exported TSL packages push them as uniforms): both modes
+    this.batch = native ? null : createBatchUniforms();
     this.skyScale = p.skyScale ?? 1; this._skyRaw = { ...(p.sky ?? OPEN_DEFAULTS.sky) };
     this.sky = createSkyUniforms(this._skyRaw); this._applySky();
     this.ambientMode = p.ambient === 'replace' ? 'replace' : 'add';
@@ -49,8 +56,16 @@ export class GIOpen {
     const maxDist = Math.min(p.voxelMaxDist ?? 48, p.maxMarchDist ?? 48);
     const common = { atlases: this.atlases, vs: this.vs, cascades: this.cascades, baseCellU: this.baseCellU, batch: this.batch, raysPerProbe: p.raysPerProbe, maxDist, hysteresis: p, relocateMax };
     const adaptive = p.adaptive ?? OPEN_DEFAULTS.adaptive;
+    this._maxDist = maxDist; this._relocateMax = relocateMax; this._adaptive = adaptive;
     this.rayParallel = p.rayParallel !== false; this.trace = null; this.rayBuf = null;
-    if (this.rayParallel) { const k = createRayParallelKernels({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.trace = k.trace; this.rayBuf = k.rayBuf; this.irr = k.irr; this.dep = k.dep; }
+    if (native) {
+    if (!this.rayParallel) throw new Error('GIOpen native: only the ray-parallel path exists natively (rayParallel:false = legacy per-texel TSL kernels, three-GPU only)');
+    this.irr = { bounceScale: { value: 1 }, validCount: { value: 0 } }; this.dep = { validCount: { value: 0 } }; // CPU twins of the TSL uniforms (API compat: setBounceScale)
+    // exported TSL material packages bind these atlas attributes as storage; the wgpu backend maps them onto the native atlas buffers (wgpu-backend.js acquireStorage), never uploading their CPU arrays
+    this.atlases.irradiance.value.userData = { ...this.atlases.irradiance.value.userData, nativeStorage: 'irradiance' };
+    this.atlases.depth.value.userData = { ...this.atlases.depth.value.userData, nativeStorage: 'depth' };
+    }
+    else if (this.rayParallel) { const k = createRayParallelKernels({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.trace = k.trace; this.rayBuf = k.rayBuf; this.irr = k.irr; this.dep = k.dep; }
     else { this.irr = createOpenIrradianceKernel({ ...common, sun: this.sun, sky: this.sky, adaptive, blendCells: this.blendCells }); this.dep = createOpenDepthKernel(common); }
     if (p.bounceScale != null) this.irr.bounceScale.value = p.bounceScale;
     this.queryNode = createOpenQueryNode({ atlases: this.atlases, cascades: this.cascades, baseCellU: this.baseCellU, worldPositionNode: positionWorld, normalNode: normalWorld, blendCells: this.blendCells, ambient: this.ambientMode, ambientU: this.ambientU });
@@ -98,8 +113,50 @@ export class GIOpen {
     if (n) this._depthAttr.needsUpdate = true; // ranges present → partial write only (never whole-buffer: would clobber GPU state)
     return n;
   }
+  /** native GPU config (gaia-render gi_compute.rs GcConfig): every tunable the TSL kernels were built with, taken from THIS instance — no defaults live on the Rust side */
+  nativeConfig() {
+  const p = this.p, w = this.win, cs = this.cascades, ad = this._adaptive;
+  for (const k of ['irradianceAlpha', 'depthAlpha']) if (!Number.isFinite(p[k])) throw new Error(`GIOpen native: params.${k} missing (GI_DEFAULTS carries it)`);
+  return {
+  cascades: cs.map((c) => ({ spacing: c.spacing, dims: [c.dims.x, c.dims.y, c.dims.z], baseIndex: c.baseIndex })),
+  irradianceRes: this.atlases.irradianceRes, depthRes: this.atlases.depthRes, raysPerProbe: p.raysPerProbe,
+  maxBatchProbes: planCascadeBatches(cs, cs.map(() => 0)).counts.reduce((a, b) => a + b, 0), // batch size per update is constant (planCascadeBatches)
+  voxel: { bricks: [w.bricks.x, w.bricks.y, w.bricks.z], brickSize: w.bs, cellSize: w.cellSize, cellBias: CELL_BIAS },
+  marchSteps: OPEN_MARCH_STEPS, relocateSteps: RELOCATE_STEPS, maxDist: this._maxDist, relocateMax: this._relocateMax, blendCells: this.blendCells,
+  irradianceAlpha: p.irradianceAlpha, depthAlpha: p.depthAlpha, fastAlpha: ad.fast, adaptThreshold: ad.threshold, fibPhi: FIB_PHI,
+  };
+  }
+  /** native update: same bookkeeping as the three path, results shipped to gaia-render (gi-native.js) instead of three storage writes + renderer.compute */
+  _updateNative(dt, cameraPos) {
+  this.syncAmbient();
+  this.win.setCenter(cameraPos);
+  const r = this.win.update();
+  const nat = this.native, data = this.win.data;
+  if (!this._nativeReady) { nat.init(this.nativeConfig(), data); this._nativeReady = true; } // first frame: whole window (already holds this frame's rebuilt bricks)
+  else for (const b of r.rebuilt) nat.voxels(b.start, data.subarray(b.start, b.start + b.count));
+  const fresh = [];
+  const first = this.baseCells === null;
+  const next = this.cascades.map((c, k) => {
+  if (first) return cascadeBaseCell(c, cameraPos);
+  const s = scrollCascade(c, this.baseCells[k], cameraPos);
+  for (const slot of s.freshSlots) fresh.push(c.baseIndex + slot); // global probe index; the core writes the depth sentinel (GIOpen._markFresh twin)
+  return s.baseCell;
+  });
+  this.baseCells = next; setCascadeBases(this.baseCellU, next);
+  const plan = planCascadeBatches(this.cascades, this.cursors); this.cursors = plan.cursors;
+  const total = plan.counts.reduce((a, b) => a + b, 0);
+  const frame = packGiFrame({
+  baseBrick: this.win.baseBrick, bounceScale: this.irr.bounceScale.value, sunDirection: this.sun.direction.value, sunColor: this.sun.color.value, sunIntensity: this.sun.intensity.value,
+  ambientReplace: this.ambientMode === 'replace', zenith: this.sky.zenith.value, horizon: this.sky.horizon.value, ground: this.sky.ground.value, starts: plan.starts, counts: plan.counts, baseCells: next,
+  });
+  nat.step(frame, Uint32Array.from(fresh));
+  const newlyAttached = this.attachment?.syncNewMeshes(this.scene, this.queryNode) ?? 0;
+  const st = this.stats; st.frames++; st.bricksRebuilt += r.rebuilt.length; st.bricksUploaded += r.rebuilt.length; st.freshProbes += fresh.length; st.dispatchedProbes += total;
+  return { dispatched: true, mode: 'open', native: true, bricksRebuilt: r.rebuilt.length, bricksPending: r.remaining, freshProbes: fresh.length, probesDispatched: total, newlyAttached };
+  }
   update(dt, cameraPos = [0, 0, 0]) {
-    this.syncAmbient();
+  if (this.native) return this._updateNative(dt, cameraPos);
+  this.syncAmbient();
     this.win.setCenter(cameraPos); setVoxelBase(this.vs, this.win);
     const r = this.win.update();
     const uploaded = flushVoxelUploads(this.vs, r.rebuilt);
@@ -121,5 +178,5 @@ export class GIOpen {
     const st = this.stats; st.frames++; st.bricksRebuilt += r.rebuilt.length; st.bricksUploaded += uploaded; st.freshProbes += nFresh; st.dispatchedProbes += total;
     return { dispatched: true, mode: 'open', bricksRebuilt: r.rebuilt.length, bricksPending: r.remaining, freshProbes: nFresh, probesDispatched: total, newlyAttached };
   }
-  dispose() { this.attachment?.detachAll(); }
+  dispose() { this.attachment?.detachAll(); this.native?.destroy(); }
 }

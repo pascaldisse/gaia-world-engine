@@ -52,6 +52,7 @@ export class GIController {
     this._voxelConfig = null; // {dims, voxelOriginArr, cellSize} — plain JS, CPU-side
     this._attachment = null; // GISceneAttachment, alive across an enabled span so disable can restore it
     this._open = null; // GIOpen when mode:'open'
+    this.native = null; // lane nt-gi: render-api/gi-native.js sink — open-mode GI computed by gaia-render, three computes nothing
   }
 
   // -------------------------------------------------------------- config
@@ -127,10 +128,12 @@ export class GIController {
 _configureOpen(p) {
 this._attachment?.detachAll();
 this._attachment = new GISceneAttachment();
-this._open = new GIOpen({ renderer: this.renderer, scene: this.scene, params: { ...OPEN_PARAM_DEFAULTS, ...p }, attachment: this._attachment });
+this._open = new GIOpen({ renderer: this.renderer, scene: this.scene, params: { ...OPEN_PARAM_DEFAULTS, ...p }, attachment: this._attachment, native: this.native });
 this.resources = { open: this._open, atlases: this._open.atlases, queryNode: this._open.queryNode, params: p };
 return true;
 }
+/** lane nt-gi: route open-mode GI to gaia-render (null = back to three compute). A live open-mode GI is rebuilt so its atlases/query node match the new target. */
+attachNative(sink) { this.native = sink ?? null; if (this.enabled && this.params.mode === 'open') this.configure(this.params); }
 /** open mode: register world geometry ({triangles,color?,textureMean?,albedo?}) — no-op (false) in rts mode */
 addMesh(id, mesh) { if (!this._open) return false; this._open.addMesh(id, mesh); return true; }
 removeMesh(id) { return this._open ? this._open.removeMesh(id) : false; }

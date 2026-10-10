@@ -6,12 +6,16 @@ import { createWgpuBackend } from './wgpu-backend.js';
 import { createSceneAdapter } from './scene-adapter.js';
 import { exportNodeMaterial, structCache } from './tsl-export.js';
 import { createGiBridge } from './gi-bridge.js';
+import { createGiNative } from './gi-native.js';
+import { threeGpuOff } from './native-mode.js';
 import { createPostBridge } from './post-bridge.js';
 
 export async function createWgpuPresenter({ renderer, scene, camera, THREE, getGi = null, getPost = () => null, getAutoExposure = () => null, params = new URLSearchParams(location.search) }) {
   const pkg = params.get('wgpuPkg') ?? '/pkg/render_wasm.js';
   const wasm = await import(/* @vite-ignore */ pkg);
-  installGpuMirror(renderer); // array pages the game writes straight into three's device stay readable for the wgpu core
+  // native mode (threeGpu=0): three has NO device, so nothing can be written into it and there is nothing to mirror. Pages must then live in DataArrayTexture.image.data (docs/NATIVE.md §three-gpu).
+  const noThreeGpu = threeGpuOff(); // throws if native flag without renderBackend=wgpu
+  if (!noThreeGpu) installGpuMirror(renderer); // array pages the game writes straight into three's device stay readable for the wgpu core
   const host = renderer.domElement;
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:1';
@@ -28,13 +32,19 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
   structCache.share = params.get('wgpuShare') !== '0'; // r10-4 A/B flag (also togglable live: __wgpu.tslCache.share)
   const adapter = createSceneAdapter(backend, { three: THREE, exportNodeMaterial: params.get('wgpuTsl') === '0' ? null : exportNodeMaterial, tslOptions: { THREE, coreShadow: params.get('wgpuCoreShadow') !== '0', cache: params.get('wgpuTslCache') === '0' ? 'off' : params.get('wgpuTslCache') === 'verify' ? 'verify' : 'on' }, nativeInstancing: params.get('wgpuInst') !== '0', recvVariants: params.get('wgpuRecvVar') === '1', dbgNoAlphaCast: params.get('wgpuDbgNoAlphaCast') === '1', dbgNoCast: params.get('wgpuDbgNoCast') === '1' });
   // r6: engine probe GI (?wgpuGi=0 off · &wgpuGiEvery=<frames between atlas readbacks, default 30>). three still runs the GI compute; the atlases are read back async.
-  const giBridge = getGi && params.get('wgpuGi') !== '0' ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
+  // lane nt-gi: NATIVE GI (default when three has no GPU; &wgpuGiNative=1 to A/B it in a browser, =0 forces the readback bridge): gaia-render computes the atlases itself, the page ships
+  // voxel bricks + frame params only (gi-native.js) -> NO three compute, NO readback, NO atlas mirror.
+  const giNativeFlag = params.get('wgpuGiNative');
+  if (noThreeGpu && giNativeFlag === '0') throw new Error('wgpuGiNative=0 (three compute + readback) is impossible with three\'s GPU off');
+  const giNative = getGi && params.get('wgpuGi') !== '0' && (noThreeGpu || giNativeFlag === '1') ? createGiNative({ backend }) : null;
+  if (giNative) getGi()?.attachNative?.(giNative);
+  const giBridge = getGi && params.get('wgpuGi') !== '0' && !giNative ? createGiBridge({ backend, renderer, getController: getGi, everyFrames: Number(params.get('wgpuGiEvery') ?? 30) }) : null;
   // r10: three's tone mapping / exposure / BloomNode values -> core post chain (&wgpuPost=0 = legacy per-fragment Reinhard)
   const postBridge = params.get('wgpuPost') === '0' ? null : createPostBridge({ backend, renderer, getPost, getAutoExposure, autoExposure: params.get('wgpuAE') !== '0', gtao: params.get('wgpuGtao') !== '0' });
   addEventListener('resize', size);
   const st = { frames: 0, adapterMs: 0, giMs: 0, syncMs: 0, submitMs: 0, gpu: [], lastSync: 0, lastSubmit: 0 };
   return {
-    backend, adapter, canvas, stats: st, giBridge, postBridge, tslCache: structCache,
+    backend, adapter, canvas, stats: st, giBridge, giNative, noThreeGpu, postBridge, tslCache: structCache,
     // one frame: world matrices → adapter diff/push → core render. Replaces renderer.render(scene, camera) / post.render().
     frame() {
       const a = performance.now();
@@ -42,6 +52,7 @@ export async function createWgpuPresenter({ renderer, scene, camera, THREE, getG
       adapter.sync(scene, camera);
       const g0 = performance.now();
       giBridge?.tick();
+      giNative?.poll();
       postBridge?.tick();
       const b = performance.now(); st.adapterMs += g0 - a; st.giMs += b - g0;
       backend.renderFrame();

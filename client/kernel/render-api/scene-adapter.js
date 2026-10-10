@@ -7,7 +7,7 @@
 // distinct material per frame) + texture.version · InstancedMesh: instanceMatrix.version + count · removal: epoch sweep.
 // Optional backend methods (interface.js OPTIONAL_METHODS): createInstanced/updateInstances, updateMesh, updateMaterial,
 // createShaderMaterial. Missing ones degrade loudly through `stats.degraded` (never silent): see below.
-import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS } from './material-map.js';
+import { materialToParams, materialSig, customNodeMaterial, textureEstimate, TEX_SLOTS, releaseTextureImage } from './material-map.js';
 import { IDENTITY_MAT4 } from './interface.js';
 import { observeLights } from './light-registry.js';
 import { readTexture, readCube, shIrradiance } from './env-image.js';
@@ -699,6 +699,7 @@ if (tex) { // r6-scene: Texture (2D screen-aligned | equirect) / CubeTexture →
 try {
 if (tex.isCubeTexture) { const c = readCube(tex); backend.setBackgroundTexture({ kind: 'cube', width: c.size, height: c.size, rgba: c.faces, srgb: c.srgb, intensity: bi }); if (c.hdrClamped) stats.degraded.add('background:hdr-clamped-to-ldr'); }
 else { const t = readTexture(tex); backend.setBackgroundTexture({ kind: tex.mapping === 303 || tex.mapping === 304 ? 'equirect' : 'screen', width: t.w, height: t.h, rgba: t.rgba8, srgb: t.srgb, intensity: bi }); if (t.hdrClamped) stats.degraded.add('background:hdr-clamped-to-ldr'); }
+if (tex.userData?.nativeRelease === true && backend.afterUpload) backend.afterUpload(() => releaseTextureImage(tex)); // nt-imgdecode OPT-IN: decoded sky image freed once the host acked it; a later sig change (backgroundIntensity) can no longer re-read it -> 'background:...' unsupported (loud)
 } catch (e) { stats.unsupported.add(`background:${String(e.message ?? e).slice(0, 80)}`); sig = 'x'; }
 } else if (sig !== 'x') { backend.setBackground(rgb); }
 amb.bgSig = sig; stats.updated++;
@@ -727,6 +728,7 @@ const eq = !env.isCubeTexture && (env.mapping === 303 || env.mapping === 304);
 if (!env.isCubeTexture && !eq) throw new Error(`mapping ${env.mapping} (needs cube or equirect; PMREM/render-target textures are unreadable)`);
 const src = env.isCubeTexture ? readCube(env) : readTexture(env);
 backend.setEnvironment({ sh: shIrradiance(src, { equirect: eq }), intensity: ei });
+if (env.userData?.nativeRelease === true) releaseTextureImage(env); // nt-imgdecode OPT-IN: only the SH9 (27 floats) goes to the host; the decoded environment image is dead weight (a changed environmentIntensity can no longer re-read it)
 stats.degraded.add('environment:diffuse-only(no specular IBL)');
 } catch (e) { stats.unsupported.add(`environment:${String(e.message ?? e).slice(0, 100)}`); backend.setEnvironment(null); }
 }

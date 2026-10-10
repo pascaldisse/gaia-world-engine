@@ -4,6 +4,8 @@
 //   shIrradiance(src)     → Float32Array(27): SH9 of the radiance, cosine-convolved (A0=π, A1=2π/3, A2=π/4) and /π → forward.wgsl sh_irradiance(n) = E(n)/π
 // Image sources: typed-array data (DataTexture: Uint8/Uint8Clamped/Float32/HalfFloat Uint16, RGBA) or decodable images (ImageBitmap/HTMLImage/canvas via OffscreenCanvas).
 // Row order: 2D DataTexture rows are GL-order (row 0 = v 0 = bottom) unless flipY → reversed to top-first; decoded images / cube faces are used as-is.
+// nt-imgdecode: native page-memory policy (material-map.configureMaterialMap <- native/page-memory.js shrinkEnvCanvas). Browser default = off (canvas left to GC, old behaviour).
+export const envConfig = { shrinkCanvas: false };
 const s2l = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 const l2s = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
 const isSrgb = (t) => t.colorSpace === 'srgb';
@@ -21,7 +23,9 @@ function rawPixels(img) { // → { w, h, data (RGBA typed array), isData }
   const c = Canvas ? new Canvas(w, h) : (typeof document !== 'undefined' ? Object.assign(document.createElement('canvas'), { width: w, height: h }) : null);
   if (!c) throw new Error('env-image: no canvas to decode image (node): supply DataTexture-like {data,width,height}');
   const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
-  return { w, h, data: g.getImageData(0, 0, w, h).data, isData: false };
+  const data = g.getImageData(0, 0, w, h).data; // ImageData owns its own bytes: the canvas backing store (w*h*4, WebKit malloc, kept until GC) can go now
+  if (envConfig.shrinkCanvas) { try { c.width = 1; c.height = 1; } catch { /* detached */ } }
+  return { w, h, data, isData: false };
 }
 // → { w, h, rgba8 (top-first), srgb, linear? }
 function toRGBA8(tex, img, reverseData) {

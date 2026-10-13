@@ -13,8 +13,8 @@ const ent = {};
 // --- environment: daylight, no fog (2 km view), neutral hemisphere
 ent.skate_env = {
   environment: {
-    background: '#4a5a70',
-    fog: { color: '#4a5a70', near: 6000, far: 20000 },
+    background: '#b9cde6',
+    fog: { color: '#b9cde6', near: 9000, far: 90000 },
     exposure: 1,
     hemisphere: { sky: '#cfe0f5', ground: '#4a4742', intensity: 0.9 },
     sun: { color: '#fff4e0', intensity: 2.2, position: [900, 1200, 300] },
@@ -26,6 +26,10 @@ ent.skate_env = {
 // --- the two maps, static, native coords (glb files = assets/city.glb, assets/mpr.glb → symlinks, gitignored)
 ent.map_city = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/assets/city.glb', solid: false } } };
 ent.map_mpr = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/assets/mpr.glb', solid: false } } };
+// --- step 2: vistas (unpruned mountains/ocean/ships, own glbs) + sky dome (tx_bam_pano_1300 upper-hemisphere pano, unlit, r=22 km). needs camera far >= 30000 -> `?far=60000`
+ent.map_city_vista = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/assets/city_vista.glb', solid: false } } };
+ent.map_mpr_vista = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/assets/mpr_vista.glb', solid: false } } };
+ent.skydome = { transform: { position: [400, 0, 1000] }, mesh: { gltf: { src: '/assets/skydome.glb', solid: false } } };
 // --- ground grid, 100 m, y=150 (below both maps), thicker every 500 m
 const GY = 150, X0 = -700, X1 = 1900, Z0 = -1500, Z1 = 2900, T = 0.8;
 const lines = [], thick = [];

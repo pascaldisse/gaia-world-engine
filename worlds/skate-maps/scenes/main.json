@@ -1,11 +1,11 @@
 {
  "skate_env": {
   "environment": {
-   "background": "#4a5a70",
+   "background": "#b9cde6",
    "fog": {
-    "color": "#4a5a70",
-    "near": 6000,
-    "far": 20000
+    "color": "#b9cde6",
+    "near": 9000,
+    "far": 90000
    },
    "exposure": 1,
    "hemisphere": {
@@ -67,6 +67,51 @@
   "mesh": {
    "gltf": {
     "src": "/assets/mpr.glb",
+    "solid": false
+   }
+  }
+ },
+ "map_city_vista": {
+  "transform": {
+   "position": [
+    0,
+    0,
+    0
+   ]
+  },
+  "mesh": {
+   "gltf": {
+    "src": "/assets/city_vista.glb",
+    "solid": false
+   }
+  }
+ },
+ "map_mpr_vista": {
+  "transform": {
+   "position": [
+    0,
+    0,
+    0
+   ]
+  },
+  "mesh": {
+   "gltf": {
+    "src": "/assets/mpr_vista.glb",
+    "solid": false
+   }
+  }
+ },
+ "skydome": {
+  "transform": {
+   "position": [
+    400,
+    0,
+    1000
+   ]
+  },
+  "mesh": {
+   "gltf": {
+    "src": "/assets/skydome.glb",
     "solid": false
    }
   }

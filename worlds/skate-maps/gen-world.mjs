@@ -66,6 +66,12 @@ ent.label_mpr = { transform: { position: [round(mprC[0]), 520, round(mprC[2])] }
 fs.mkdirSync(path.join(here, 'scenes'), { recursive: true });
 fs.writeFileSync(path.join(here, 'scenes/main.json'), JSON.stringify(ent, null, 1));
 // --- game.json: levels = the toggle. overview = native coords; snap = mpr (+label) moved by `snap`. ?level=<id>
+// native level: NO map offset (map_mpr/label_mpr stay at scene coords). vistas swapped to v3 glbs (flat-shaded, mountain #6f7a6a / ground #8a8f86), fog start 12 km so 3 km peaks read
+const nativeOps = [
+{ op: 'set', id: 'map_city_vista', component: 'mesh', value: { gltf: { src: '/assets/city_vista_v3.glb', solid: false } } },
+{ op: 'set', id: 'map_mpr_vista', component: 'mesh', value: { gltf: { src: '/assets/mpr_vista_v3.glb', solid: false } } },
+{ op: 'set', id: 'skate_env', component: 'environment', value: { ...ent.skate_env.environment, fog: { color: '#b9cde6', near: 12000, far: 60000 } } },
+];
 const setPos = (id, p) => ({ op: 'set', id, component: 'transform', value: { position: p } });
 const game = {
   title: 'SKATE MAPS',
@@ -74,7 +80,8 @@ const game = {
   levels: [
     { id: 'overview', name: 'native coords (1.2 km apart on z)', spawn: { position: [1700, 1300, 600], yaw: 1.5708 }, reset: true, ops: [] },
     { id: 'snap', name: `snap mpr next to city (+${snap.join(', ')})`, spawn: { position: [1800, 1900, 1300], yaw: 1.5708 }, reset: true, ops: [setPos('map_mpr', snap), setPos('label_mpr', [round(mprC[0] + snap[0]), 520, round(mprC[2] + snap[2])])] },
-  ],
+  { id: 'native', name: 'native: city + mpr + real mountains, NO offset (?level=native => far 60000)', spawn: { position: [500, 1500, 3200], yaw: 3.1416 }, reset: true, ops: nativeOps },
+],
 };
 fs.writeFileSync(path.join(here, 'game.json'), JSON.stringify(game, null, 1));
 fs.writeFileSync(path.join(here, 'world.json'), JSON.stringify({ scenes: { main: { always: true } } }, null, 1));

@@ -10,8 +10,8 @@
 //   {cmd:'reset'}                                           key R
 //   {cmd:'behaviour', name:'bodyBalance'|'catchFall'|'staggerFall'|'shot'|'protectHead'}   keys 1..5
 //
-// COORDS: server is Houdini = right-handed, Y-up, metres, -Z forward → identical to
-// three.js/GWE. Conversion applied = IDENTITY (pos copied, quat copied as xyzw).
+// COORDS: real gaia-motion rt server is MuJoCo = right-handed, Z-up, metres (xpos = body ORIGIN, quat xyzw).
+// three.js/GWE is Y-up → the Ragdoll group is rotated -90° about X (pos+quat convert together). ?motionUp=y = identity (mock / Y-up server).
 // ?motionQuat=wxyz flips the quaternion component order if a server sends w-first;
 // ?motionAt=x,y,z adds a world offset to the whole Ragdoll group.
 //
@@ -58,10 +58,11 @@ export function motionUrl(p = params()) {
   return /^wss?:\/\//.test(v) ? v : DEFAULT_URL;
 }
 
-export function createMotionRt({ THREE, scene, url, wxyz = false, at = [0, 0, 0], document: doc = globalThis.document, WebSocketImpl = globalThis.WebSocket }) {
+export function createMotionRt({ THREE, scene, url, wxyz = false, zUp = true, at = [0, 0, 0], document: doc = globalThis.document, WebSocketImpl = globalThis.WebSocket }) {
   const group = new THREE.Group();
   group.name = 'Ragdoll';
   group.position.set(...at);
+group.rotation.x = zUp ? -Math.PI / 2 : 0; // MuJoCo world is Z-up: (x,y,z)->three (x,z,-y); quats ride the same group rotation
   scene.add(group);
 
   const meshes = new Map();
@@ -189,6 +190,6 @@ export function register(ctx = {}) {
   const url = motionUrl(p);
   if (!url || !ctx.scene || !ctx.three) return {};
   const at = (p.get('motionAt') ?? '0,0,0').split(',').map(Number);
-  const rt = createMotionRt({ THREE: ctx.three, scene: ctx.scene, url, wxyz: p.get('motionQuat') === 'wxyz', at: at.length === 3 && at.every(Number.isFinite) ? at : [0, 0, 0] });
+  const rt = createMotionRt({ THREE: ctx.three, scene: ctx.scene, url, wxyz: p.get('motionQuat') === 'wxyz', zUp: p.get('motionUp') !== 'y', at: at.length === 3 && at.every(Number.isFinite) ? at : [0, 0, 0] });
   return { name: 'motionRt', api: rt, update: rt.update };
 }

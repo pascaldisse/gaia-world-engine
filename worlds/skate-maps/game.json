@@ -1,0 +1,70 @@
+{
+ "title": "SKATE MAPS",
+ "subtitle": "San Vansterdam + S.U.M.R. Camp — native vs snapped",
+ "menu": {
+  "camera": {
+   "position": [
+    1700,
+    1300,
+    600
+   ],
+   "yaw": 1.5708,
+   "pitch": -0.55
+  }
+ },
+ "levels": [
+  {
+   "id": "overview",
+   "name": "native coords (1.2 km apart on z)",
+   "spawn": {
+    "position": [
+     1700,
+     1300,
+     600
+    ],
+    "yaw": 1.5708
+   },
+   "reset": true,
+   "ops": []
+  },
+  {
+   "id": "snap",
+   "name": "snap mpr next to city (+1207.484, 14.439, 1658.287)",
+   "spawn": {
+    "position": [
+     1800,
+     1900,
+     1300
+    ],
+    "yaw": 1.5708
+   },
+   "reset": true,
+   "ops": [
+    {
+     "op": "set",
+     "id": "map_mpr",
+     "component": "transform",
+     "value": {
+      "position": [
+       1207.484,
+       14.439,
+       1658.287
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "label_mpr",
+     "component": "transform",
+     "value": {
+      "position": [
+       1348.43,
+       520,
+       1202.61
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -36,3 +36,6 @@ node_modules
 # humanoid-kit live-verify temp world (symlinks EE assets from another repo — never commit)
 proof/humanoid-kit/world/
 proof/humanoid-kit/logs/
+
+# skate-maps: big decimated glbs are symlinks into ~/Games/reskate/maps - never commit
+worlds/skate-maps/assets/

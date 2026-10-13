@@ -1,0 +1,10 @@
+{
+  "features": {
+    "primitives": true
+  },
+  "scenes": {
+    "main": {
+      "always": true
+    }
+  }
+}

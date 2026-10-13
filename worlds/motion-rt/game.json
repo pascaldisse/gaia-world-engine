@@ -1,0 +1,31 @@
+{
+  "title": "MOTION-RT",
+  "subtitle": "live ragdoll from gaia-motion rt server \u2014 open with ?motion=1",
+  "menu": {
+    "camera": {
+      "position": [
+        0,
+        1.2,
+        4.2
+      ],
+      "yaw": 0,
+      "pitch": 0
+    }
+  },
+  "levels": [
+    {
+      "id": "stage",
+      "name": "stage",
+      "spawn": {
+        "position": [
+          0,
+          1.5,
+          4.2
+        ],
+        "yaw": 0
+      },
+      "reset": false,
+      "ops": []
+    }
+  ]
+}

@@ -54,10 +54,12 @@
 // buffers, so a world that never asks pays nothing.
 import * as fluidExtension from './fluid.js';
 import * as skyEnvExtension from './skyenv.js';
+import * as motionRtExtension from './motion-rt.js';
 
 // Both are capabilities gated by world data: no component in the store ⇒ no
 // texture, no buffer, no change to what a world without them looks like.
-export const DEFAULT_EXTENSIONS = [fluidExtension, skyEnvExtension];
+// motion-rt is URL-gated (?motion=): without it register() returns {} — no socket, no meshes.
+export const DEFAULT_EXTENSIONS = [fluidExtension, skyEnvExtension, motionRtExtension];
 export const DEFAULT_GATE = null;
 
 // Relative defaults resolve against THIS module (client/kernel/), while a host

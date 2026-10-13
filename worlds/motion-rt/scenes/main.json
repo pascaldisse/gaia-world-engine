@@ -1,0 +1,100 @@
+{
+  "mr_sky": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ]
+    },
+    "skyEnvironment": {
+      "enabled": true,
+      "intensity": 1.1,
+      "zenith": "#1b3a68",
+      "horizon": "#a8ccff",
+      "ground": "#2b2f3a",
+      "sun": {
+        "enabled": true,
+        "color": "#ffe6b8",
+        "elevation": 0.55,
+        "azimuth": 0.12,
+        "size": 0.05
+      }
+    }
+  },
+  "mr_key": {
+    "transform": {
+      "position": [
+        3,
+        5,
+        4
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#ffe3c0",
+      "intensity": 45,
+      "distance": 40,
+      "offset": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "mr_fill": {
+    "transform": {
+      "position": [
+        -4,
+        3,
+        3
+      ]
+    },
+    "light": {
+      "type": "point",
+      "color": "#9fd0ff",
+      "intensity": 20,
+      "distance": 40,
+      "offset": [
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "mr_floor": {
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        -1.5708,
+        0,
+        0
+      ]
+    },
+    "mesh": {
+      "parts": [
+        {
+          "shape": "plane",
+          "width": 30,
+          "height": 30,
+          "size": [
+            30,
+            30
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "color": "#3a3f4c",
+          "roughness": 0.9,
+          "metalness": 0.05
+        }
+      ]
+    }
+  }
+}

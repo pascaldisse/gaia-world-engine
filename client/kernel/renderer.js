@@ -92,9 +92,9 @@ export async function createRenderer({ gpu = true } = {}) {
 
   // far 4000: the world axis runs ~2.5km — backdrop silhouettes (the tree,
   // the void glow) must survive the projection, not just the fog
-  // ?far=N overrides; ?level=native defaults far=60000 (skate-maps native level)
+  // ?far=N overrides; skate-maps levels (native/snap/overview/mountains/snapmtn) default far=60000
   const qs = new URLSearchParams(location.search);
-  const farQ = Number(qs.get('far')) || (qs.get('level') === 'native' ? 60000 : 0);
+  const farQ = Number(qs.get('far')) || (['native', 'snap', 'overview', 'mountains', 'snapmtn'].includes(qs.get('level')) ? 60000 : 0);
   // ?far=N overrides (skate-maps: 10 km vista mountains + 22 km sky dome need ~60000)
   const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, farQ > 10000 ? 3 : 0.1, farQ || 4000);
 

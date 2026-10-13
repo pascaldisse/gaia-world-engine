@@ -30,6 +30,10 @@ ent.map_mpr = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/asset
 ent.map_city_vista = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/assets/city_vista.glb', solid: false } } };
 ent.map_mpr_vista = { transform: { position: [0, 0, 0] }, mesh: { gltf: { src: '/assets/mpr_vista.glb', solid: false } } };
 ent.skydome = { transform: { position: [400, 0, 1000] }, mesh: { gltf: { src: '/assets/skydome.glb', solid: false } } };
+// --- step 4: real UNSIMPLIFIED backdrop terrain (LOD0, normals+UV0, satellite albedo bam_terrainmesh_01_c / mpr_terrainvista_01_c). parked at y=-200000 in the scene; levels `mountains`/`snapmtn` bring them in (and park the old grey vistas)
+const PARK = [0, -200000, 0];
+ent.map_city_mountains = { transform: { position: PARK }, mesh: { gltf: { src: '/assets/city_mountains_clean.glb', solid: false } } };
+ent.map_mpr_mountain = { transform: { position: PARK }, mesh: { gltf: { src: '/assets/mpr_mountain_tint.glb', solid: false } } };
 // --- ground grid, 100 m, y=150 (below both maps), thicker every 500 m
 const GY = 150, X0 = -700, X1 = 1900, Z0 = -1500, Z1 = 2900, T = 0.8;
 const lines = [], thick = [];
@@ -73,6 +77,11 @@ const nativeOps = [
 { op: 'set', id: 'skate_env', component: 'environment', value: { ...ent.skate_env.environment, fog: { color: '#b9cde6', near: 12000, far: 60000 } } },
 ];
 const setPos = (id, p) => ({ op: 'set', id, component: 'transform', value: { position: p } });
+const mtnOps = [
+  setPos('map_city_mountains', [0, 0, 0]), setPos('map_mpr_mountain', [0, 0, 0]), setPos('map_city_vista', PARK), setPos('map_mpr_vista', PARK),
+  ...(process.env.SNAPLESS === '0' ? [] : []),
+  { op: 'set', id: 'skate_env', component: 'environment', value: { ...ent.skate_env.environment, fog: { color: '#b9cde6', near: 25000, far: 60000 } } },
+];
 const game = {
   title: 'SKATE MAPS',
   subtitle: 'San Vansterdam + S.U.M.R. Camp — native vs snapped',
@@ -80,6 +89,8 @@ const game = {
   levels: [
     { id: 'overview', name: 'native coords (1.2 km apart on z)', spawn: { position: [1700, 1300, 600], yaw: 1.5708 }, reset: true, ops: [] },
     { id: 'snap', name: `snap mpr next to city (+${snap.join(', ')})`, spawn: { position: [1800, 1900, 1300], yaw: 1.5708 }, reset: true, ops: [setPos('map_mpr', snap), setPos('label_mpr', [round(mprC[0] + snap[0]), 520, round(mprC[2] + snap[2])])] },
+  { id: 'mountains', name: 'REAL backdrop mountains (textured LOD0) + sky, native coords, city (mpr core parked: its stray giant shards black-out the sky), street-level spawn', spawn: { position: [200, 197, 1010], yaw: 0.629, pitch: 0.22 }, reset: true, ops: [...mtnOps, setPos('map_mpr', PARK), setPos('label_mpr', PARK)] },
+  { id: 'snapmtn', name: 'snap mpr beside city + REAL backdrop mountains (mpr mountain moves with mpr)', spawn: { position: [4500, 6000, 6500], yaw: 0.588, pitch: -0.43 }, reset: true, ops: [...mtnOps, setPos('map_mpr', snap), setPos('label_mpr', [round(mprC[0] + snap[0]), 520, round(mprC[2] + snap[2])]), setPos('map_mpr_mountain', snap)] },
   { id: 'native', name: 'native: city + mpr + real mountains, NO offset (?level=native => far 60000)', spawn: { position: [500, 1500, 3200], yaw: 3.1416 }, reset: true, ops: nativeOps },
 ],
 };

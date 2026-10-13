@@ -116,6 +116,36 @@
    }
   }
  },
+ "map_city_mountains": {
+  "transform": {
+   "position": [
+    0,
+    -200000,
+    0
+   ]
+  },
+  "mesh": {
+   "gltf": {
+    "src": "/assets/city_mountains_clean.glb",
+    "solid": false
+   }
+  }
+ },
+ "map_mpr_mountain": {
+  "transform": {
+   "position": [
+    0,
+    -200000,
+    0
+   ]
+  },
+  "mesh": {
+   "gltf": {
+    "src": "/assets/mpr_mountain_tint.glb",
+    "solid": false
+   }
+  }
+ },
  "grid": {
   "transform": {
    "position": [

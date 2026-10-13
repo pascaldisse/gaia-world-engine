@@ -67,6 +67,268 @@
    ]
   },
   {
+   "id": "mountains",
+   "name": "REAL backdrop mountains (textured LOD0) + sky, native coords, city (mpr core parked: its stray giant shards black-out the sky), street-level spawn",
+   "spawn": {
+    "position": [
+     200,
+     197,
+     1010
+    ],
+    "yaw": 0.629,
+    "pitch": 0.22
+   },
+   "reset": true,
+   "ops": [
+    {
+     "op": "set",
+     "id": "map_city_mountains",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       0,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr_mountain",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       0,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_city_vista",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       -200000,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr_vista",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       -200000,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "skate_env",
+     "component": "environment",
+     "value": {
+      "background": "#b9cde6",
+      "fog": {
+       "color": "#b9cde6",
+       "near": 25000,
+       "far": 60000
+      },
+      "exposure": 1,
+      "hemisphere": {
+       "sky": "#cfe0f5",
+       "ground": "#4a4742",
+       "intensity": 0.9
+      },
+      "sun": {
+       "color": "#fff4e0",
+       "intensity": 2.2,
+       "position": [
+        900,
+        1200,
+        300
+       ]
+      },
+      "ambient": {
+       "color": "#c8d0dc",
+       "intensity": 0.1
+      },
+      "bloom": {
+       "strength": 0,
+       "radius": 0.4,
+       "threshold": 1
+      }
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       -200000,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "label_mpr",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       -200000,
+       0
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "snapmtn",
+   "name": "snap mpr beside city + REAL backdrop mountains (mpr mountain moves with mpr)",
+   "spawn": {
+    "position": [
+     4500,
+     6000,
+     6500
+    ],
+    "yaw": 0.588,
+    "pitch": -0.43
+   },
+   "reset": true,
+   "ops": [
+    {
+     "op": "set",
+     "id": "map_city_mountains",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       0,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr_mountain",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       0,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_city_vista",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       -200000,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr_vista",
+     "component": "transform",
+     "value": {
+      "position": [
+       0,
+       -200000,
+       0
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "skate_env",
+     "component": "environment",
+     "value": {
+      "background": "#b9cde6",
+      "fog": {
+       "color": "#b9cde6",
+       "near": 25000,
+       "far": 60000
+      },
+      "exposure": 1,
+      "hemisphere": {
+       "sky": "#cfe0f5",
+       "ground": "#4a4742",
+       "intensity": 0.9
+      },
+      "sun": {
+       "color": "#fff4e0",
+       "intensity": 2.2,
+       "position": [
+        900,
+        1200,
+        300
+       ]
+      },
+      "ambient": {
+       "color": "#c8d0dc",
+       "intensity": 0.1
+      },
+      "bloom": {
+       "strength": 0,
+       "radius": 0.4,
+       "threshold": 1
+      }
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr",
+     "component": "transform",
+     "value": {
+      "position": [
+       1207.484,
+       14.439,
+       1658.287
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "label_mpr",
+     "component": "transform",
+     "value": {
+      "position": [
+       1348.43,
+       520,
+       1202.61
+      ]
+     }
+    },
+    {
+     "op": "set",
+     "id": "map_mpr_mountain",
+     "component": "transform",
+     "value": {
+      "position": [
+       1207.484,
+       14.439,
+       1658.287
+      ]
+     }
+    }
+   ]
+  },
+  {
    "id": "native",
    "name": "native: city + mpr + real mountains, NO offset (?level=native => far 60000)",
    "spawn": {

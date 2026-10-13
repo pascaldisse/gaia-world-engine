@@ -92,8 +92,11 @@ export async function createRenderer({ gpu = true } = {}) {
 
   // far 4000: the world axis runs ~2.5km — backdrop silhouettes (the tree,
   // the void glow) must survive the projection, not just the fog
+  // ?far=N overrides; ?level=native defaults far=60000 (skate-maps native level)
+  const qs = new URLSearchParams(location.search);
+  const farQ = Number(qs.get('far')) || (qs.get('level') === 'native' ? 60000 : 0);
   // ?far=N overrides (skate-maps: 10 km vista mountains + 22 km sky dome need ~60000)
-  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, Number(new URLSearchParams(location.search).get('far')) > 10000 ? 3 : 0.1, Number(new URLSearchParams(location.search).get('far')) || 4000);
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, farQ > 10000 ? 3 : 0.1, farQ || 4000);
 
   // environment lighting is kernel-owned in v0; moves into world data later
   const hemi = new THREE.HemisphereLight('#8fb3ff', '#2c241a', 0.6);

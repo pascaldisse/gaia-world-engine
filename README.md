@@ -4,6 +4,8 @@ An AI-native 3D game engine where the world is a live database and every
 change — by you, by a tool, by an AI — appears instantly while you walk
 around inside it. Half game, half engine.
 
+The engine is the project; the games are what it remembers how to be.
+
 ![The hub world: a crystal glade at night, fireflies drifting between the standing stones](docs/hub-world.png)
 
 ## What it is
